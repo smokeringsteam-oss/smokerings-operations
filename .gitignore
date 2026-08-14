@@ -3,3 +3,7 @@ dist
 dist-ssr
 *.local
 .reddit-chrome-profile
+.env
+server/uploads
+server/logs
+*.log

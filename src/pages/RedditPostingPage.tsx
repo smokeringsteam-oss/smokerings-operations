@@ -12,6 +12,21 @@ const defaultGroups = [
   { id: 'boredinbangalore', label: 'r/BoredInBangalore' },
 ];
 
+// Display-only mirror of the flair automatically selected per subreddit
+// during posting. The automation itself is driven by the authoritative map
+// in server/redditFlairs.js — keep this in sync with that file, it does not
+// feed the posting request itself.
+const FLAIR_BY_SUBREDDIT: Record<string, string | null> = {
+  bangalorefoodies: 'Pop-up',
+  bangaloremarketplace: 'Selling',
+  bengaluru: 'Foods & stuff | ಆಹಾರ-ತಿಂಡಿ',
+  bangalore: 'Suggestions',
+  indiranagar: null,
+  bangloremarketplace: null,
+  bangaloresocial: null,
+  test: 'Test',
+};
+
 type UploadedImage = {
   id: string;
   name: string;
@@ -26,21 +41,21 @@ type Group = {
 };
 
 type DraftData = {
+  postTitle: string;
   postText: string;
   groups: Group[];
   selectedGroups: string[];
   images: UploadedImage[];
-  profilePath: string;
 };
 
 const RedditPostingPage: React.FC = () => {
   const [step, setStep] = useState(1);
+  const [postTitle, setPostTitle] = useState('');
   const [postText, setPostText] = useState('');
   const [images, setImages] = useState<UploadedImage[]>([]);
   const [groups, setGroups] = useState<Group[]>(defaultGroups);
   const [selectedGroups, setSelectedGroups] = useState<string[]>(['smokeringsbbq']);
   const [newGroupLabel, setNewGroupLabel] = useState('');
-  const [profilePath, setProfilePath] = useState('');
   const [status, setStatus] = useState('');
   const [isPosting, setIsPosting] = useState(false);
 
@@ -52,11 +67,11 @@ const RedditPostingPage: React.FC = () => {
 
     try {
       const parsed: DraftData = JSON.parse(stored);
+      setPostTitle(parsed.postTitle || '');
       setPostText(parsed.postText || '');
       setGroups(parsed.groups?.length ? parsed.groups : defaultGroups);
       setSelectedGroups(parsed.selectedGroups || ['smokeringsbbq']);
-      setImages(parsed.images || []);
-      setProfilePath(parsed.profilePath || '');
+      setImages((parsed.images || []).map((img) => ({ ...img, file: null })));
     } catch {
       window.localStorage.removeItem(LOCAL_STORAGE_KEY);
     }
@@ -64,14 +79,14 @@ const RedditPostingPage: React.FC = () => {
 
   useEffect(() => {
     const draft: DraftData = {
+      postTitle,
       postText,
       groups,
       selectedGroups,
       images: images.map(({ id, name, type, preview }) => ({ id, name, type, preview })),
-      profilePath,
     };
     window.localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(draft));
-  }, [postText, groups, selectedGroups, images, profilePath]);
+  }, [postTitle, postText, groups, selectedGroups, images]);
 
   const selectedLabels = useMemo(
     () => groups.filter((group) => selectedGroups.includes(group.id)).map((group) => group.label),
@@ -110,9 +125,6 @@ const RedditPostingPage: React.FC = () => {
     );
 
     setImages((current) => [...current, ...newImages]);
-    if (step === 1 && images.length === 0) {
-      setStep(2);
-    }
   };
 
   const handleRemoveImage = (imageId: string) => {
@@ -121,6 +133,7 @@ const RedditPostingPage: React.FC = () => {
 
   const handleClearDraft = () => {
     window.localStorage.removeItem(LOCAL_STORAGE_KEY);
+    setPostTitle('');
     setPostText('');
     setSelectedGroups(['smokeringsbbq']);
     setImages([]);
@@ -157,16 +170,20 @@ const RedditPostingPage: React.FC = () => {
 
         const validImages = images.filter((img) => img.file);
         if (images.length > 0 && validImages.length === 0) {
-          setStatus('Images are present as previews but not attached to the post. Re-upload the images before posting.');
+          setStatus(
+            'Saved image previews were restored from draft, but the browser cannot rehydrate actual File objects from local storage. Please re-upload the images before posting.',
+          );
           setIsPosting(false);
           return;
         }
 
+        const title = postTitle.trim() ||
+          postText.split('\n').map((line) => line.trim()).find((line) => line) ||
+          'Reddit post from automation';
         const form = new FormData();
-        form.append('title', postText.slice(0, 300));
+        form.append('title', title.slice(0, 300));
         form.append('text', postText);
         form.append('subreddits', JSON.stringify(normalized));
-        form.append('profilePath', profilePath);
 
         validImages.forEach((img) => {
           form.append('images', img.file!, img.name);
@@ -198,12 +215,6 @@ const RedditPostingPage: React.FC = () => {
       </div>
 
       <div className="wizard-shell">
-        <div className="wizard-actions-top">
-          <button type="button" className="secondary-button" onClick={handleClearDraft}>
-            Clear saved draft
-          </button>
-        </div>
-
         <div className="wizard-steps">
           <div className={`wizard-step ${step === 1 ? 'active' : ''}`}>1. Content</div>
           <div className={`wizard-step ${step === 2 ? 'active' : ''}`}>2. Groups</div>
@@ -213,22 +224,22 @@ const RedditPostingPage: React.FC = () => {
         <div className="wizard-card">
           {step === 1 && (
             <div>
-              <h2>Step 1: Add text and images</h2>
+              <h2>Step 1: Add title, body, and images</h2>
               <label>
-                Post text
-                <textarea
-                  value={postText}
-                  onChange={(event) => setPostText(event.target.value)}
-                  placeholder="Write your Reddit post text here..."
+                Post title
+                <input
+                  type="text"
+                  value={postTitle}
+                  onChange={(event) => setPostTitle(event.target.value)}
+                  placeholder="Enter your Reddit post title here"
                 />
               </label>
               <label>
-                Chrome profile path
-                <input
-                  type="text"
-                  value={profilePath}
-                  onChange={(event) => setProfilePath(event.target.value)}
-                  placeholder="C:\\Users\\<you>\\AppData\\Local\\Google\\Chrome\\User Data\\Default"
+                Post body
+                <textarea
+                  value={postText}
+                  onChange={(event) => setPostText(event.target.value)}
+                  placeholder="Write your Reddit post body here..."
                 />
               </label>
               <label>
@@ -284,7 +295,9 @@ const RedditPostingPage: React.FC = () => {
                 </button>
               </div>
               <div className="group-list">
-                {groups.map((group) => (
+                {groups.map((group) => {
+                  const flair = FLAIR_BY_SUBREDDIT[group.id];
+                  return (
                   <div key={group.id} className="group-item-row">
                     <label className="group-item">
                       <input
@@ -293,6 +306,7 @@ const RedditPostingPage: React.FC = () => {
                         onChange={() => handleToggleGroup(group.id)}
                       />
                       {group.label}
+                      {flair && <span className="flair-badge"> · flair: {flair}</span>}
                     </label>
                     <button
                       type="button"
@@ -305,7 +319,8 @@ const RedditPostingPage: React.FC = () => {
                       Delete
                     </button>
                   </div>
-                ))}
+                  );
+                })}
               </div>
               <p className="group-summary">
                 Selected groups: {selectedLabels.length ? selectedLabels.join(', ') : 'None selected'}
@@ -321,15 +336,31 @@ const RedditPostingPage: React.FC = () => {
               </p>
               <div className="review-block">
                 <h3>Review</h3>
-                <p>
-                  <strong>Text:</strong> {postText || 'No text entered yet.'}
-                </p>
+                <div>
+                  <strong>Title:</strong>
+                  {postTitle ? (
+                    <div className="review-text review-title">{postTitle}</div>
+                  ) : (
+                    <div className="review-text review-title">(auto-generated from body)</div>
+                  )}
+                </div>
+                <div>
+                  <strong>Body:</strong>
+                  {postText ? (
+                    <div className="review-text">{postText}</div>
+                  ) : (
+                    <p>No body entered yet.</p>
+                  )}
+                </div>
                 <div>
                   <strong>Images:</strong>
                   {images.length > 0 ? (
                     <ul className="review-images-list">
                       {images.map((image) => (
-                        <li key={image.id}>{image.name}</li>
+                        <li key={image.id}>
+                          {image.name}
+                          {!image.file && <em> (preview only; re-upload before posting)</em>}
+                        </li>
                       ))}
                     </ul>
                   ) : (
@@ -339,6 +370,18 @@ const RedditPostingPage: React.FC = () => {
                 <p>
                   <strong>Groups:</strong> {selectedLabels.length ? selectedLabels.join(', ') : 'None selected'}
                 </p>
+                <div>
+                  <strong>Flair (auto-selected during posting):</strong>
+                  <ul className="review-images-list">
+                    {groups
+                      .filter((group) => selectedGroups.includes(group.id))
+                      .map((group) => (
+                        <li key={group.id}>
+                          {group.label}: {FLAIR_BY_SUBREDDIT[group.id] || 'none'}
+                        </li>
+                      ))}
+                  </ul>
+                </div>
               </div>
               <button
                 className="primary-button"
@@ -351,6 +394,12 @@ const RedditPostingPage: React.FC = () => {
               {status && <p className="status-message">{status}</p>}
             </div>
           )}
+
+          <div className="wizard-actions-bottom">
+            <button type="button" className="secondary-button" onClick={handleClearDraft}>
+              Clear saved draft
+            </button>
+          </div>
         </div>
 
         <div className="wizard-actions">
