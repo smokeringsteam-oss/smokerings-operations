@@ -1,13 +1,12 @@
-// Shared schedule + persistence for the mandatory Mon–Fri cadence.
+// Shared schedule + persistence for the mandatory weekly cadence (all 7 days).
 // The task LIST (which tasks exist, default time/assignee) is read live from
-// daily_view.csv in the knowledge-base repo via fetchRecurringSchedule() — edit that
-// sheet and reload Daily View to see the change. DEFAULT_RECURRING_SCHEDULE below is
-// only a fallback for when the server/CSV isn't reachable.
-// The per-week completion/edits (done, assignee overrides, time overrides) stay in
-// localStorage regardless of where the task list came from.
-
-export const RECURRING_STORAGE_KEY = 'recurring-weekly-tasks-v1';
-export const RECURRING_WEEKS_TO_KEEP = 4;
+// schedule.csv in the knowledge-base repo via fetchRecurringSchedule() — edit
+// that sheet and reload Daily View to see the change. DEFAULT_RECURRING_SCHEDULE below
+// is only a fallback for when the server/CSV isn't reachable.
+// The per-week completion/edits (done, assignee overrides, time overrides) are logged
+// server-side in weekly_schedule_status_log.csv (see server/sprint/weeklyScheduleStatusLog.js), keyed
+// by ISO week — so the checklist is shared across whoever opens the dashboard, and a new
+// week has no rows yet and simply starts fresh while past weeks stay behind as a log.
 
 export type RecurringTaskDef = { id: string; label: string; defaultTime: string; defaultAssignee: string };
 export type RecurringDay = { day: string; tasks: RecurringTaskDef[] };
@@ -15,16 +14,18 @@ export type RecurringDay = { day: string; tasks: RecurringTaskDef[] };
 export type RecurringTaskState = { done: boolean; assignedTo: string; time: string };
 export type RecurringWeekState = Record<string, RecurringTaskState>;
 
-// Weekend prep/order execution lives in the Kitchen Prep Automation section,
-// so this stays scoped to the work week. Kept in sync with daily_view.csv by hand
-// as a fallback for when the CSV can't be read.
+// Weekend order-execution planning still lives in its own Kitchen Prep Automation
+// planner — this is just the mandatory checklist cadence, which now spans all 7 days.
+// Kept in sync with schedule.csv by hand as a fallback for when the CSV can't be
+// read. Ids match that CSV's task_id (WS-xx) column so a temporary CSV outage doesn't
+// switch which status-log key a task's done state gets saved/read under.
 export const DEFAULT_RECURRING_SCHEDULE: RecurringDay[] = [
   {
     day: 'Monday',
     tasks: [
-      { id: 'monday-review-weekend-sales-orders', label: 'Review weekend sales & orders', defaultTime: '9:00 AM', defaultAssignee: 'Adarsh' },
+      { id: 'WS-01', label: 'Review weekend sales & orders', defaultTime: '9:00 AM', defaultAssignee: 'Adarsh' },
       {
-        id: 'monday-sprint-retro-carry-over-unfinished-tasks',
+        id: 'WS-02',
         label: 'Sprint retro — carry over unfinished tasks',
         defaultTime: '10:00 AM',
         defaultAssignee: 'Adarsh',
@@ -34,18 +35,18 @@ export const DEFAULT_RECURRING_SCHEDULE: RecurringDay[] = [
   {
     day: 'Tuesday',
     tasks: [
-      { id: 'tuesday-reddit-automation-post', label: 'Reddit automation post', defaultTime: '11:00 AM', defaultAssignee: 'Adarsh' },
-      { id: 'tuesday-linkedin-post', label: 'LinkedIn post', defaultTime: '12:00 PM', defaultAssignee: 'Adarsh' },
+      { id: 'WS-03', label: 'Reddit automation post', defaultTime: '11:00 AM', defaultAssignee: 'Adarsh' },
+      { id: 'WS-04', label: 'LinkedIn post', defaultTime: '12:00 PM', defaultAssignee: 'Adarsh' },
     ],
   },
   { day: 'Wednesday', tasks: [] },
   {
     day: 'Thursday',
     tasks: [
-      { id: 'thursday-reddit-automation-post', label: 'Reddit automation post', defaultTime: '11:00 AM', defaultAssignee: 'Adarsh' },
-      { id: 'thursday-linkedin-post', label: 'LinkedIn post', defaultTime: '12:00 PM', defaultAssignee: 'Adarsh' },
+      { id: 'WS-05', label: 'Reddit automation post', defaultTime: '11:00 AM', defaultAssignee: 'Adarsh' },
+      { id: 'WS-06', label: 'LinkedIn post', defaultTime: '12:00 PM', defaultAssignee: 'Adarsh' },
       {
-        id: 'thursday-inventory-check-place-order',
+        id: 'WS-07',
         label: 'Inventory check & place order',
         defaultTime: '2:00 PM',
         defaultAssignee: 'Sowmya',
@@ -55,17 +56,19 @@ export const DEFAULT_RECURRING_SCHEDULE: RecurringDay[] = [
   {
     day: 'Friday',
     tasks: [
-      { id: 'friday-order-consolidation', label: 'Order consolidation', defaultTime: '10:00 AM', defaultAssignee: 'Adarsh' },
+      { id: 'WS-08', label: 'Order consolidation', defaultTime: '10:00 AM', defaultAssignee: 'Adarsh' },
       {
-        id: 'friday-place-order-to-bread-time-stories',
+        id: 'WS-09',
         label: 'Place order to Bread Time Stories',
         defaultTime: '11:00 AM',
         defaultAssignee: 'Adarsh',
       },
-      { id: 'friday-make-bbq-sauce', label: 'Make BBQ sauce', defaultTime: '12:00 PM', defaultAssignee: 'Sowmya' },
-      { id: 'friday-make-sour-cream', label: 'Make sour cream', defaultTime: '1:00 PM', defaultAssignee: 'Sowmya' },
+      { id: 'WS-10', label: 'Make BBQ sauce', defaultTime: '12:00 PM', defaultAssignee: 'Sowmya' },
+      { id: 'WS-11', label: 'Make sour cream', defaultTime: '1:00 PM', defaultAssignee: 'Sowmya' },
     ],
   },
+  { day: 'Saturday', tasks: [] },
+  { day: 'Sunday', tasks: [] },
 ];
 
 // Fetches the live task list from the CSV-backed endpoint; falls back to the hardcoded
@@ -106,17 +109,20 @@ export const getTaskDefaultState = (schedule: RecurringDay[], taskId: string): R
   };
 };
 
-const readAllWeeks = (): Record<string, RecurringWeekState> => {
-  const stored = window.localStorage.getItem(RECURRING_STORAGE_KEY);
-  if (!stored) return {};
+// Fetches this week's logged task states from the server. A week nobody has touched
+// yet (including a brand-new week) comes back empty — callers fall back to
+// getTaskDefaultState/getEffectiveTaskState below, which is the "starts fresh" behavior.
+export async function fetchWeekState(weekKey: string): Promise<RecurringWeekState> {
   try {
-    return JSON.parse(stored) || {};
-  } catch {
+    const resp = await fetch(`/api/recurring-schedule/status?week=${encodeURIComponent(weekKey)}`);
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) throw new Error(data.error || resp.statusText || 'Malformed response');
+    return (data.weekState as RecurringWeekState) || {};
+  } catch (err) {
+    console.warn(`Couldn't load this week's task status —`, (err as Error).message || err);
     return {};
   }
-};
-
-export const loadWeekState = (weekKey: string): RecurringWeekState => readAllWeeks()[weekKey] || {};
+}
 
 export const getEffectiveTaskState = (
   schedule: RecurringDay[],
@@ -134,14 +140,14 @@ export const getAssigneeNames = (schedule: RecurringDay[], weekState: RecurringW
   return Array.from(names).sort((a, b) => a.localeCompare(b));
 };
 
-export const saveWeekState = (weekKey: string, weekState: RecurringWeekState): void => {
-  const allWeeks = readAllWeeks();
-  allWeeks[weekKey] = weekState;
-  // Keep only the most recent weeks so this doesn't grow forever.
-  const trimmed = Object.fromEntries(
-    Object.entries(allWeeks)
-      .sort(([a], [b]) => (a < b ? 1 : -1))
-      .slice(0, RECURRING_WEEKS_TO_KEEP),
-  );
-  window.localStorage.setItem(RECURRING_STORAGE_KEY, JSON.stringify(trimmed));
-};
+// Upserts one task's state for one week on the server. The first save for a given
+// (week, task) pair creates that week's row — nothing to reset when a new week starts.
+export async function saveTaskState(weekKey: string, taskId: string, state: RecurringTaskState): Promise<void> {
+  const resp = await fetch('/api/recurring-schedule/status', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ week: weekKey, taskId, done: state.done, assignedTo: state.assignedTo, time: state.time }),
+  });
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok) throw new Error(data.error || resp.statusText || 'Request failed');
+}

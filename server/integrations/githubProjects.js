@@ -79,7 +79,7 @@ async function getFields() {
             nodes {
               __typename
               ... on ProjectV2FieldCommon { id name }
-              ... on ProjectV2SingleSelectField { id name options { id name } }
+              ... on ProjectV2SingleSelectField { id name options { id name color } }
               ... on ProjectV2IterationField {
                 id
                 name
@@ -121,7 +121,12 @@ async function getCurrentSprint() {
 
   const startMs = new Date(`${current.startDate}T00:00:00Z`).getTime();
   const endMs = startMs + current.duration * 24 * 60 * 60 * 1000 - 1;
-  return { title: current.title, startDate: current.startDate, endDate: new Date(endMs).toISOString().slice(0, 10) };
+  return {
+    id: current.id,
+    title: current.title,
+    startDate: current.startDate,
+    endDate: new Date(endMs).toISOString().slice(0, 10),
+  };
 }
 
 async function ensureAssignedToField() {
@@ -142,21 +147,48 @@ async function ensureAssignedToField() {
 }
 
 const DAY_FIELD_NAME = 'Day';
-// Work week only — weekend prep/order execution lives in the Kitchen Prep
-// Automation section's own planner, not the office sprint board.
-const WEEKDAY_OPTIONS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
-const WEEKDAY_COLORS = ['BLUE', 'GREEN', 'YELLOW', 'ORANGE', 'PURPLE'];
+// All 7 days — Sprint Board cards can now be scheduled on weekends too, not just
+// the office work week.
+const WEEKDAY_OPTIONS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+const WEEKDAY_COLORS = ['BLUE', 'GREEN', 'YELLOW', 'ORANGE', 'PURPLE', 'RED', 'GRAY'];
 
 async function ensureDayField() {
   const fields = await getFields();
   const existing = fields.find((f) => f.name === DAY_FIELD_NAME && f.__typename === 'ProjectV2SingleSelectField');
-  if (existing) return existing;
+
+  if (existing) {
+    const missing = WEEKDAY_OPTIONS.filter((name) => !(existing.options || []).some((o) => o.name === name));
+    if (!missing.length) return existing;
+
+    // The field already exists but predates one of the WEEKDAY_OPTIONS entries (e.g.
+    // Saturday/Sunday added later) — replace the option set, keeping every existing
+    // option by id (so cards already set to it stay set) and appending what's missing.
+    const data = await graphql(
+      `mutation($fieldId: ID!, $options: [ProjectV2SingleSelectFieldOptionInput!]!) {
+        updateProjectV2Field(input: { fieldId: $fieldId singleSelectOptions: $options }) {
+          projectV2Field { ... on ProjectV2SingleSelectField { id name options { id name color } } }
+        }
+      }`,
+      {
+        fieldId: existing.id,
+        options: [
+          ...existing.options.map((o) => ({ id: o.id, name: o.name, color: o.color, description: '' })),
+          ...missing.map((name) => ({
+            name,
+            color: WEEKDAY_COLORS[WEEKDAY_OPTIONS.indexOf(name)] || 'GRAY',
+            description: '',
+          })),
+        ],
+      },
+    );
+    return data.updateProjectV2Field.projectV2Field;
+  }
 
   const projectId = await getProjectId();
   const data = await graphql(
     `mutation($projectId: ID!, $name: String!, $options: [ProjectV2SingleSelectFieldOptionInput!]!) {
       createProjectV2Field(input: { projectId: $projectId dataType: SINGLE_SELECT name: $name singleSelectOptions: $options }) {
-        projectV2Field { ... on ProjectV2SingleSelectField { id name options { id name } } }
+        projectV2Field { ... on ProjectV2SingleSelectField { id name options { id name color } } }
       }
     }`,
     {
@@ -196,7 +228,11 @@ const ITEMS_QUERY = `
             }
             content {
               __typename
-              ... on Issue { title number url state assignees(first: 5) { nodes { login } } }
+              ... on Issue {
+                id title number url state
+                assignees(first: 5) { nodes { login } }
+                parent { number title }
+              }
               ... on DraftIssue { title body }
             }
           }
@@ -224,6 +260,9 @@ function simplifyItem(node) {
 
   return {
     id: node.id,
+    // The issue's own GraphQL node id — distinct from `id` above (the project *item* id).
+    // Needed as the parent/child argument to the addSubIssue mutation.
+    issueId: isDraft ? null : content.id ?? null,
     status,
     assignedTo,
     sprintTitle,
@@ -235,6 +274,8 @@ function simplifyItem(node) {
     url: isDraft ? null : content.url ?? null,
     state: isDraft ? null : content.state ?? null,
     assignees: isDraft ? [] : (content.assignees?.nodes || []).map((a) => a.login),
+    parentNumber: isDraft ? null : content.parent?.number ?? null,
+    parentTitle: isDraft ? null : content.parent?.title ?? null,
   };
 }
 
@@ -333,6 +374,27 @@ async function setItemDay(itemId, dayName) {
   );
 }
 
+// Puts an item into a specific Sprint iteration — used when filing a new task so it
+// shows up on the current-sprint board immediately instead of landing in limbo.
+async function setItemSprint(itemId, iterationId) {
+  const projectId = await getProjectId();
+  const fields = await getFields();
+  const sprintField = fields.find((f) => f.name === SPRINT_FIELD_NAME && f.__typename === 'ProjectV2IterationField');
+  if (!sprintField) {
+    const err = new Error('This project has no "Sprint" iteration field.');
+    err.status = 404;
+    throw err;
+  }
+  await graphql(
+    `mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $iterationId: String!) {
+      updateProjectV2ItemFieldValue(
+        input: { projectId: $projectId itemId: $itemId fieldId: $fieldId value: { iterationId: $iterationId } }
+      ) { projectV2Item { id } }
+    }`,
+    { projectId, itemId, fieldId: sprintField.id, iterationId },
+  );
+}
+
 // Real GitHub assignees live on the Issue itself, not the project item — PATCH replaces
 // the full assignee list in one call (unlike the assignees-add REST endpoint, which only adds).
 async function setItemAssignees(issueNumber, logins) {
@@ -423,6 +485,86 @@ async function migrateDraftsToIssues() {
     }
   }
   return results;
+}
+
+// Files a brand-new task as a real Issue, nests it under an existing top-level item via
+// GitHub's sub-issue relationship, adds it to the board, and drops it straight into the
+// current Sprint iteration — the one-shot version of what would otherwise be four manual
+// steps on github.com (new issue, parent it, add to project, set Sprint).
+async function createSubIssueTask({ parentIssueId, title, body = '', status, assignee }) {
+  const { repoConfigured } = getConfig();
+  if (!repoConfigured) {
+    const err = new Error('GITHUB_REPO is not set — cannot create a real issue for a sub-task.');
+    err.status = 400;
+    throw err;
+  }
+  if (!parentIssueId) {
+    const err = new Error('parentIssueId is required.');
+    err.status = 400;
+    throw err;
+  }
+
+  const sprint = await getCurrentSprint();
+  if (!sprint) {
+    const err = new Error('No Sprint iteration covers today — add one on the project\'s "Sprint" field first.');
+    err.status = 400;
+    throw err;
+  }
+
+  const repositoryId = await getRepositoryId();
+  const projectId = await getProjectId();
+
+  const created = await graphql(
+    `mutation($repositoryId: ID!, $title: String!, $body: String) {
+      createIssue(input: { repositoryId: $repositoryId title: $title body: $body }) {
+        issue { id number url title state }
+      }
+    }`,
+    { repositoryId, title, body },
+  );
+  const issue = created.createIssue.issue;
+
+  await graphql(
+    `mutation($issueId: ID!, $subIssueId: ID!) {
+      addSubIssue(input: { issueId: $issueId subIssueId: $subIssueId }) {
+        issue { id }
+      }
+    }`,
+    { issueId: parentIssueId, subIssueId: issue.id },
+  );
+
+  const added = await graphql(
+    `mutation($projectId: ID!, $contentId: ID!) {
+      addProjectV2ItemById(input: { projectId: $projectId contentId: $contentId }) {
+        item { id }
+      }
+    }`,
+    { projectId, contentId: issue.id },
+  );
+  const itemId = added.addProjectV2ItemById.item.id;
+
+  const finalStatus = status || 'Backlog';
+  await setItemStatus(itemId, finalStatus);
+  await setItemSprint(itemId, sprint.id);
+  // Real GitHub assignee (same field the card's own "Assigned to" dropdown edits),
+  // not the custom "Assigned To" text field — keeps a new task consistent with
+  // every other card on the board.
+  if (assignee) await setItemAssignees(issue.number, [assignee]);
+
+  return {
+    id: itemId,
+    issueId: issue.id,
+    title: issue.title,
+    number: issue.number,
+    url: issue.url,
+    state: issue.state,
+    status: finalStatus,
+    assignedTo: '',
+    sprintTitle: sprint.title,
+    day: null,
+    isDraft: false,
+    assignees: assignee ? [assignee] : [],
+  };
 }
 
 async function githubRest(path, params = {}, { method = 'GET', body } = {}) {
@@ -572,6 +714,7 @@ function formatActivityForPrompt(activity, maxContentChars = 8000) {
 
 export {
   getConfig,
+  ensureDayField,
   getSprintBoard,
   getCurrentSprintBoard,
   setItemStatus,
@@ -580,6 +723,7 @@ export {
   setItemAssignees,
   getAssignableUsers,
   addDraftItem,
+  createSubIssueTask,
   migrateDraftsToIssues,
   getRecentActivity,
   formatActivityForPrompt,

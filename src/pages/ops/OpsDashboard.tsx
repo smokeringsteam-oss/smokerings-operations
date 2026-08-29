@@ -1,78 +1,25 @@
-import { useState } from 'react';
-import WeeklyPurchasing from './WeeklyPurchasing';
-import SmokingSession from './SmokingSession';
+import B2CDashboard from './b2c/B2CDashboard';
+import B2BDashboard from './b2b/B2BDashboard';
 
-// Sidebar-level id — the Ops Dashboard is a single sidebar entry that opens
-// onto a landing page of module "boxes" (Purchasing, Smoking, …), each of
-// which swaps in its own view below. Sub-navigation between those modules
-// lives entirely inside this component, not in the sidebar.
-export type OpsSub = 'dashboard';
+// Ops is one sidebar section holding the two sides of the business as separate
+// dashboards: B2C (the weekend consumer flow) and B2B (wholesale/corporate).
+// This component owns both sidebar ids and just routes to the right child —
+// each child renders its own header and module landing page.
+export type OpsSub = 'b2cDashboard' | 'b2bDashboard';
 
-export const opsTools: { id: OpsSub; label: string; icon: string }[] = [{ id: 'dashboard', label: 'Dashboard', icon: '🧭' }];
-
-type OpsModule = 'home' | 'weeklyPurchasing' | 'smoking';
-
-const MODULES: { id: OpsModule; label: string; icon: string; description: string; soon?: boolean }[] = [
-  {
-    id: 'weeklyPurchasing',
-    label: 'Weekly Purchasing',
-    icon: '🛒',
-    description: 'Log purchases from all three vendors, update inventory, and send a draft PO to Odoo.',
-  },
-  {
-    id: 'smoking',
-    label: 'Smoking Session',
-    icon: '🔥',
-    description: 'Start a session with raw weight, rub and pitmaster, then complete it with finished weight and quality notes.',
-  },
+export const opsTools: { id: OpsSub; label: string; icon: string }[] = [
+  { id: 'b2cDashboard', label: 'B2C Dashboard', icon: '🧭' },
+  { id: 'b2bDashboard', label: 'B2B Dashboard', icon: '🏢' },
 ];
 
-const OpsDashboard = ({ activeTool: _activeTool }: { activeTool: OpsSub }) => {
-  const [openModule, setOpenModule] = useState<OpsModule>('home');
-
-  const renderModule = () => {
-    switch (openModule) {
-      case 'weeklyPurchasing':
-        return <WeeklyPurchasing />;
-      case 'smoking':
-        return <SmokingSession />;
-      default:
-        return null;
-    }
-  };
-
-  return (
-    <div className="marketing-dashboard">
-      <header>
-        <h2>Ops Dashboard</h2>
-        <p>Weekly purchasing, meat weight logs and smoking sessions — the day-to-day kitchen operations.</p>
-      </header>
-
-      <div className="marketing-content">
-        {openModule === 'home' ? (
-          <div className="ops-box-grid">
-            {MODULES.map((mod) => (
-              <button key={mod.id} type="button" className="ops-box" onClick={() => setOpenModule(mod.id)}>
-                <span className="ops-box-icon">{mod.icon}</span>
-                <span className="ops-box-title">
-                  {mod.label}
-                  {mod.soon && <span className="badge-soon ops-box-badge">Coming soon</span>}
-                </span>
-                <span className="ops-box-desc">{mod.description}</span>
-              </button>
-            ))}
-          </div>
-        ) : (
-          <>
-            <button type="button" className="ops-back-button" onClick={() => setOpenModule('home')}>
-              ← Back to Ops Dashboard
-            </button>
-            {renderModule()}
-          </>
-        )}
-      </div>
-    </div>
-  );
+const OpsDashboard = ({ activeTool }: { activeTool: OpsSub }) => {
+  switch (activeTool) {
+    case 'b2bDashboard':
+      return <B2BDashboard />;
+    case 'b2cDashboard':
+    default:
+      return <B2CDashboard />;
+  }
 };
 
 export default OpsDashboard;

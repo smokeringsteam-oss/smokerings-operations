@@ -25,7 +25,7 @@ const canPickFiles = () => typeof fsWindow().showOpenFilePicker === 'function';
 const canSaveAs = () => typeof fsWindow().showSaveFilePicker === 'function';
 const isAbort = (err: unknown) => (err as { name?: string })?.name === 'AbortError';
 
-// ---- RFC4180 parse/serialize, mirrored from server/csvStore.js but kept
+// ---- RFC4180 parse/serialize, mirrored from server/core/csvStore.js but kept
 // browser-only (no `fs`) and array-of-arrays shaped for a live-editable grid.
 function parseCsvText(text: string): { headers: string[]; rows: string[][] } {
   const table: string[][] = [];

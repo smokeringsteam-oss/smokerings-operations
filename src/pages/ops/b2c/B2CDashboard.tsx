@@ -1,22 +1,60 @@
 import { Fragment, useState } from 'react';
 import WeekendPrepPlanner from './WeekendPrepPlanner';
-import WeeklyPurchasing from './WeeklyPurchasing';
-import SmokingSession from './SmokingSession';
-import OrderPacking from './OrderPacking';
+import WeeklyPurchasing from '../shared/WeeklyPurchasing';
+import SmokingSession from '../shared/SmokingSession';
+import OrderPacking from '../shared/OrderPacking';
 import ServiceWeeks from './ServiceWeeks';
-import MenuItems from './MenuItems';
+import MenuItems from '../menu/MenuItems';
 
 // One of the two dashboards under Ops (see OpsDashboard.tsx, which owns the
-// sidebar ids). Opens onto a landing page of module "boxes" (Weekend Prep,
-// Purchasing, Smoking, …), each of which swaps in its own view below —
-// sub-navigation between those modules lives entirely inside this component.
-type B2CModule = 'home' | 'weekendPrep' | 'weeklyPurchasing' | 'smoking' | 'orderPacking';
+// sidebar ids). Opens onto a landing page of three choices — Service Weeks,
+// Edit Menu, Start Prep — each of which swaps in its own view below.
+// Sub-navigation between all of them lives entirely inside this component.
+//
+// The landing page used to render Service Weeks and the menu editor inline
+// above the flow, which meant every visit scrolled past a month grid and a
+// menu panel to reach the weekend flow. They're choices now, combined into
+// the same box grid the flow steps use, so the three things you can start
+// from the B2C dashboard read as one set.
+type SetupView = 'serviceWeeks' | 'menu';
+type FlowModule = 'weekendPrep' | 'weeklyPurchasing' | 'smoking' | 'orderPacking';
+type B2CView = 'home' | SetupView | 'prep' | FlowModule;
+
+// The three ways into the B2C dashboard. The first two are setup — which
+// weekends are open, and what the dishes are — and the third opens the
+// weekend flow itself (MODULES below).
+const OPTIONS: { id: SetupView | 'prep'; label: string; icon: string; tag: string; description: string }[] = [
+  {
+    id: 'serviceWeeks',
+    label: 'Service Weeks',
+    icon: '🗓',
+    tag: 'Setup',
+    description:
+      'Which weekends the kitchen is open for, and the menu each one sells. Gates everything below it — a closed week has no orders to plan for.',
+  },
+  {
+    id: 'menu',
+    label: 'Edit Menu',
+    icon: '🍽',
+    tag: 'Setup',
+    description:
+      'The dishes themselves — name, price, description, picture and availability — written straight to the Odoo product. B2C only; bulk wholesale lives on the B2B dashboard.',
+  },
+  {
+    id: 'prep',
+    label: 'Start Prep',
+    icon: '🍖',
+    tag: 'Weekend flow',
+    description:
+      'The four-step weekend run: plan Sat/Sun orders, buy against the list, smoke on Friday, then pack and serve.',
+  },
+];
 
 // The B2C weekend flow, in the order it actually happens: plan the weekend's
 // orders and shopping list, buy against that list, smoke on Friday, then pack
 // and serve Sat/Sun. `day` is shown on each box so the sequence reads at a
-// glance without leaving the landing page.
-const MODULES: { id: B2CModule; label: string; icon: string; day: string; description: string; soon?: boolean }[] = [
+// glance without leaving the flow page.
+const MODULES: { id: FlowModule; label: string; icon: string; day: string; description: string; soon?: boolean }[] = [
   {
     id: 'weekendPrep',
     label: 'Weekend Prep Planner',
@@ -47,11 +85,55 @@ const MODULES: { id: B2CModule; label: string; icon: string; day: string; descri
   },
 ];
 
-const B2CDashboard = () => {
-  const [openModule, setOpenModule] = useState<B2CModule>('home');
+// Where each view's back button goes, and what it says. A flow module steps
+// back to the flow it was opened from rather than all the way home, so
+// leaving Smoking Session doesn't cost a second click to get to Purchasing.
+const BACK_TO: Record<Exclude<B2CView, 'home'>, { view: B2CView; label: string }> = {
+  serviceWeeks: { view: 'home', label: '← Back to B2C Dashboard' },
+  menu: { view: 'home', label: '← Back to B2C Dashboard' },
+  prep: { view: 'home', label: '← Back to B2C Dashboard' },
+  weekendPrep: { view: 'prep', label: '← Back to Prep steps' },
+  weeklyPurchasing: { view: 'prep', label: '← Back to Prep steps' },
+  smoking: { view: 'prep', label: '← Back to Prep steps' },
+  orderPacking: { view: 'prep', label: '← Back to Prep steps' },
+};
 
-  const renderModule = () => {
-    switch (openModule) {
+const B2CDashboard = () => {
+  const [view, setView] = useState<B2CView>('home');
+
+  const renderFlowGrid = () => (
+    <div className="ops-flow-grid">
+      {MODULES.map((mod, index) => (
+        <Fragment key={mod.id}>
+          <button type="button" className="ops-box" onClick={() => setView(mod.id)}>
+            <span className="ops-box-step">
+              Step {index + 1} · {mod.day}
+            </span>
+            <span className="ops-box-icon">{mod.icon}</span>
+            <span className="ops-box-title">
+              {mod.label}
+              {mod.soon && <span className="badge-soon ops-box-badge">Coming soon</span>}
+            </span>
+            <span className="ops-box-desc">{mod.description}</span>
+          </button>
+          {index < MODULES.length - 1 && (
+            <span className="ops-flow-arrow" aria-hidden="true">
+              →
+            </span>
+          )}
+        </Fragment>
+      ))}
+    </div>
+  );
+
+  const renderView = () => {
+    switch (view) {
+      case 'serviceWeeks':
+        return <ServiceWeeks />;
+      case 'menu':
+        return <MenuItems channel="b2c" />;
+      case 'prep':
+        return renderFlowGrid();
       case 'weekendPrep':
         return <WeekendPrepPlanner />;
       case 'weeklyPurchasing':
@@ -65,6 +147,8 @@ const B2CDashboard = () => {
     }
   };
 
+  const back = view === 'home' ? null : BACK_TO[view];
+
   return (
     <div className="marketing-dashboard">
       <header>
@@ -73,46 +157,25 @@ const B2CDashboard = () => {
       </header>
 
       <div className="marketing-content">
-        {openModule === 'home' ? (
-          <>
-            {/* Whether the week is serviceable at all gates every step below
-                it, so it sits above the flow rather than inside one module. */}
-            <ServiceWeeks />
-            {/* The dishes themselves, one tier below "is the week open at
-                all" — catalog upkeep rather than part of the weekend flow.
-                Scoped to the B2C channel, so the bulk wholesale products
-                (Finished Products / B2B Wholesale in Odoo) stay off this
-                editor and belong to the B2B dashboard instead. */}
-            <MenuItems channel="b2c" />
-            <div className="ops-flow-grid">
-              {MODULES.map((mod, index) => (
-                <Fragment key={mod.id}>
-                  <button type="button" className="ops-box" onClick={() => setOpenModule(mod.id)}>
-                    <span className="ops-box-step">
-                      Step {index + 1} · {mod.day}
-                    </span>
-                    <span className="ops-box-icon">{mod.icon}</span>
-                    <span className="ops-box-title">
-                      {mod.label}
-                      {mod.soon && <span className="badge-soon ops-box-badge">Coming soon</span>}
-                    </span>
-                    <span className="ops-box-desc">{mod.description}</span>
-                  </button>
-                  {index < MODULES.length - 1 && (
-                    <span className="ops-flow-arrow" aria-hidden="true">
-                      →
-                    </span>
-                  )}
-                </Fragment>
-              ))}
-            </div>
-          </>
+        {view === 'home' ? (
+          <div className="ops-flow-grid">
+            {OPTIONS.map((option) => (
+              <button key={option.id} type="button" className="ops-box" onClick={() => setView(option.id)}>
+                <span className="ops-box-step">{option.tag}</span>
+                <span className="ops-box-icon">{option.icon}</span>
+                <span className="ops-box-title">{option.label}</span>
+                <span className="ops-box-desc">{option.description}</span>
+              </button>
+            ))}
+          </div>
         ) : (
           <>
-            <button type="button" className="ops-back-button" onClick={() => setOpenModule('home')}>
-              ← Back to B2C Dashboard
-            </button>
-            {renderModule()}
+            {back && (
+              <button type="button" className="ops-back-button" onClick={() => setView(back.view)}>
+                {back.label}
+              </button>
+            )}
+            {renderView()}
           </>
         )}
       </div>

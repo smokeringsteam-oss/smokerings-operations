@@ -9,7 +9,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // inside it once via `npm run reddit:login`; the session then persists here
 // for every future automated run. Override with REDDIT_CHROME_PROFILE_DIR.
 export const AUTOMATION_USER_DATA_DIR =
-  process.env.REDDIT_CHROME_PROFILE_DIR || path.join(__dirname, '..', '.reddit-chrome-profile');
+  process.env.REDDIT_CHROME_PROFILE_DIR || path.join(__dirname, '..', '..', '.reddit-chrome-profile');
 
 export function getSystemBrowserPath() {
   const envPath = process.env.BROWSER_PATH || process.env.CHROME_PATH || process.env.CHROME_EXECUTABLE;
@@ -270,7 +270,7 @@ async function verifyPosted(page, subreddit, title, timeoutMs = 15000, pollMs = 
 }
 
 async function debugScreenshot(page, subreddit, suffix) {
-  const debugPath = path.join(__dirname, '..', `debug-${subreddit}-${suffix}.png`);
+  const debugPath = path.join(__dirname, '..', '..', `debug-${subreddit}-${suffix}.png`);
   await page.screenshot({ path: debugPath, fullPage: true }).catch(() => {});
   return debugPath;
 }
@@ -374,7 +374,7 @@ export async function postToSubreddits({ subreddits = [], title = '', text = '',
   return results;
 }
 
-// Allows a quick manual run: SUBS='["smokeringsbbq"]' TITLE="..." node server/redditPoster.js
+// Allows a quick manual run: SUBS='["smokeringsbbq"]' TITLE="..." node server/marketing/redditPoster.js
 if (process.argv[1] && process.argv[1].endsWith('redditPoster.js')) {
   const subs = process.env.SUBS ? JSON.parse(process.env.SUBS) : ['smokeringsbbq'];
   const title = process.env.TITLE || 'Test post from automation';

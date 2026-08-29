@@ -14,7 +14,7 @@ const defaultGroups = [
 
 // Display-only mirror of the flair automatically selected per subreddit
 // during posting. The automation itself is driven by the authoritative map
-// in server/redditFlairs.js — keep this in sync with that file, it does not
+// in server/marketing/redditFlairs.js — keep this in sync with that file, it does not
 // feed the posting request itself.
 const FLAIR_BY_SUBREDDIT: Record<string, string | null> = {
   bangalorefoodies: 'Pop-up',

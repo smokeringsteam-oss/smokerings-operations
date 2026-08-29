@@ -1,11 +1,14 @@
 import { useState } from 'react';
-import WeeklySprintDashboard, { type WeeklySprintSub, weeklySprintTools } from './pages/WeeklySprintDashboard';
-import MarketingDashboard, { type MarketingSub, marketingTools } from './pages/MarketingDashboard';
-import KitchenPrepDashboard, { type KitchenPrepSub, kitchenPrepTools } from './pages/KitchenPrepDashboard';
-import OpsDashboard, { type OpsSub, opsTools } from './pages/OpsDashboard';
-import ToolsDashboard, { type ToolsSub, toolsTools } from './pages/ToolsDashboard';
+import WeeklySprintDashboard, { type WeeklySprintSub, weeklySprintTools } from './pages/sprint/WeeklySprintDashboard';
+import MarketingDashboard, { type MarketingSub, marketingTools } from './pages/marketing/MarketingDashboard';
+import OpsDashboard, { type OpsSub, opsTools } from './pages/ops/OpsDashboard';
+import ToolsDashboard, { type ToolsSub, toolsTools } from './pages/tools/ToolsDashboard';
 
-type ActiveTool = WeeklySprintSub | MarketingSub | KitchenPrepSub | OpsSub | ToolsSub;
+// Weekend Prep Planner used to be its own top-level "Kitchen Prep Automation"
+// sidebar entry; it now lives as the first step inside the B2C Dashboard's
+// sequential weekend flow (see B2CDashboard.tsx) so the whole Fri plan → buy
+// → smoke / Sat-Sun serve pipeline is one unified view.
+type ActiveTool = WeeklySprintSub | MarketingSub | OpsSub | ToolsSub;
 
 const isWeeklySprintTool = (tool: ActiveTool): tool is WeeklySprintSub =>
   weeklySprintTools.some((item) => item.id === tool);
@@ -38,20 +41,6 @@ const App = () => {
           <div className="sidebar-submenu open">
             <ul>
               {opsTools.map((tool) => (
-                <li key={tool.id} className={activeTool === tool.id ? 'active' : ''}>
-                  <button type="button" onClick={() => setActiveTool(tool.id)}>
-                    <span>{tool.icon}</span>
-                    {tool.label}
-                  </button>
-                </li>
-              ))}
-            </ul>
-          </div>
-
-          <span className="sidebar-section-label">Kitchen Prep Automation</span>
-          <div className="sidebar-submenu open">
-            <ul>
-              {kitchenPrepTools.map((tool) => (
                 <li key={tool.id} className={activeTool === tool.id ? 'active' : ''}>
                   <button type="button" onClick={() => setActiveTool(tool.id)}>
                     <span>{tool.icon}</span>
@@ -116,9 +105,7 @@ const App = () => {
             <OpsDashboard activeTool={activeTool} />
           ) : isToolsTool(activeTool) ? (
             <ToolsDashboard activeTool={activeTool} />
-          ) : (
-            <KitchenPrepDashboard activeTool={activeTool} />
-          )}
+          ) : null}
         </div>
       </main>
     </div>

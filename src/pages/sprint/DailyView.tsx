@@ -2,11 +2,11 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   DEFAULT_RECURRING_SCHEDULE,
   fetchRecurringSchedule,
+  fetchWeekState,
   getAssigneeNames,
   getEffectiveTaskState,
   getIsoWeekKey,
-  loadWeekState,
-  saveWeekState,
+  saveTaskState,
   type RecurringDay,
   type RecurringWeekState,
 } from './recurringSchedule';
@@ -54,19 +54,19 @@ const DailyView: React.FC = () => {
   const [githubConfigured, setGithubConfigured] = useState<boolean | null>(null);
   const [sprintLoading, setSprintLoading] = useState(false);
   const [sprintError, setSprintError] = useState('');
+  const [taskStatusError, setTaskStatusError] = useState('');
   const [savingIds, setSavingIds] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     fetchRecurringSchedule().then(setSchedule);
   }, []);
 
+  // Re-fetches from the server every time the week changes (including on a fresh page
+  // load) — a week nobody has touched yet just comes back empty, which is the "starts
+  // fresh" behavior for a new week.
   useEffect(() => {
-    setWeekState(loadWeekState(weekKey));
+    fetchWeekState(weekKey).then(setWeekState);
   }, [weekKey]);
-
-  useEffect(() => {
-    saveWeekState(weekKey, weekState);
-  }, [weekState, weekKey]);
 
   const loadSprintItems = useCallback(async () => {
     setSprintLoading(true);
@@ -90,9 +90,13 @@ const DailyView: React.FC = () => {
   }, [loadSprintItems]);
 
   const toggleDone = (taskId: string) => {
-    setWeekState((current) => {
-      const existing = getEffectiveTaskState(schedule, current, taskId);
-      return { ...current, [taskId]: { ...existing, done: !existing.done } };
+    const previous = getEffectiveTaskState(schedule, weekState, taskId);
+    const next = { ...previous, done: !previous.done };
+    setTaskStatusError('');
+    setWeekState((current) => ({ ...current, [taskId]: next }));
+    saveTaskState(weekKey, taskId, next).catch((err) => {
+      setWeekState((current) => ({ ...current, [taskId]: previous }));
+      setTaskStatusError(`Couldn't save that — ${String((err as Error).message || err)}`);
     });
   };
 
@@ -171,6 +175,8 @@ const DailyView: React.FC = () => {
               ))}
             </select>
           </div>
+
+          {taskStatusError && <p className="chat-error">{taskStatusError}</p>}
 
           {visibleTasks.length === 0 ? (
             <div className="empty-state">

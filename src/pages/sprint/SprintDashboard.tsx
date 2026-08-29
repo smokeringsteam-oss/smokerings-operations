@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 
 type SprintItem = {
   id: string;
+  issueId: string | null;
   status: string | null;
   assignedTo: string;
   sprintTitle: string | null;
@@ -13,6 +14,8 @@ type SprintItem = {
   url: string | null;
   state: string | null;
   assignees: string[];
+  parentNumber: number | null;
+  parentTitle: string | null;
 };
 
 type SprintInfo = { title: string; startDate: string; endDate: string } | null;
@@ -28,7 +31,12 @@ type GithubStatus = {
 type MigrateResult = { title: string; ok: boolean; error?: string };
 
 const STATUS_COLUMNS = ['Backlog', 'In Progress', 'Done'];
-const WEEKDAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
+const WEEKDAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+
+// The board's top-level epics — the only issues a new task should be filed as a
+// sub-issue of. Pinned explicitly (rather than "no parent") so a stray top-level
+// item added to the project later doesn't silently clutter this dropdown.
+const EPIC_ISSUE_NUMBERS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 54];
 
 async function fetchJSON<T>(url: string, options?: RequestInit): Promise<T> {
   const resp = await fetch(url, options);
@@ -48,11 +56,19 @@ const SprintDashboard: React.FC = () => {
   const [sprint, setSprint] = useState<SprintInfo>(null);
   const [items, setItems] = useState<SprintItem[]>([]);
   const [assignableUsers, setAssignableUsers] = useState<string[]>([]);
+  const [parentOptions, setParentOptions] = useState<SprintItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [migrating, setMigrating] = useState(false);
   const [migrateResults, setMigrateResults] = useState<MigrateResult[] | null>(null);
   const [savingIds, setSavingIds] = useState<Record<string, boolean>>({});
+
+  const [showAddForm, setShowAddForm] = useState(false);
+  const [newTitle, setNewTitle] = useState('');
+  const [newParentId, setNewParentId] = useState('');
+  const [newStatus, setNewStatus] = useState(STATUS_COLUMNS[0]);
+  const [newAssignee, setNewAssignee] = useState('');
+  const [adding, setAdding] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -61,13 +77,19 @@ const SprintDashboard: React.FC = () => {
       const status = await fetchJSON<GithubStatus>('/api/github/status');
       setGithubStatus(status);
       if (status.configured) {
-        const [board, assignable] = await Promise.all([
+        const [board, assignable, allItems] = await Promise.all([
           fetchJSON<{ sprint: SprintInfo; items: SprintItem[] }>('/api/github/sprint-board'),
           fetchJSON<{ users: string[] }>('/api/github/assignable-users').catch(() => ({ users: [] })),
+          fetchJSON<{ items: SprintItem[] }>('/api/github/board-items').catch(() => ({ items: [] })),
         ]);
         setSprint(board.sprint);
         setItems(board.items);
         setAssignableUsers(assignable.users);
+        setParentOptions(
+          allItems.items
+            .filter((item) => !item.isDraft && item.issueId && item.number && EPIC_ISSUE_NUMBERS.includes(item.number))
+            .sort((a, b) => (a.number || 0) - (b.number || 0)),
+        );
       }
     } catch (err) {
       setError(String((err as Error).message || err));
@@ -154,6 +176,35 @@ const SprintDashboard: React.FC = () => {
     }
   };
 
+  const handleAddTask = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!newTitle.trim() || !newParentId) return;
+    setAdding(true);
+    setError('');
+    try {
+      await fetchJSON('/api/github/sprint-board/sub-issues', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          parentIssueId: newParentId,
+          title: newTitle.trim(),
+          status: newStatus,
+          assignee: newAssignee,
+        }),
+      });
+      setNewTitle('');
+      setNewParentId('');
+      setNewStatus(STATUS_COLUMNS[0]);
+      setNewAssignee('');
+      setShowAddForm(false);
+      await load();
+    } catch (err) {
+      setError(`Couldn't add task: ${String((err as Error).message || err)}`);
+    } finally {
+      setAdding(false);
+    }
+  };
+
   if (loading && !githubStatus) {
     return (
       <div className="empty-state">
@@ -177,6 +228,11 @@ const SprintDashboard: React.FC = () => {
   }
 
   const draftCount = items.filter((item) => item.isDraft).length;
+  const addDisabledReason = !githubStatus?.repoConfigured
+    ? 'Set GITHUB_REPO in the server .env to create tasks'
+    : !sprint
+      ? "No Sprint iteration covers today — add one on the project's \"Sprint\" field first"
+      : '';
 
   return (
     <div>
@@ -195,6 +251,15 @@ const SprintDashboard: React.FC = () => {
           )}
         </div>
         <div className="sprint-board-toolbar-actions">
+          <button
+            type="button"
+            className="primary-button"
+            onClick={() => setShowAddForm((current) => !current)}
+            disabled={Boolean(addDisabledReason)}
+            title={addDisabledReason || undefined}
+          >
+            {showAddForm ? 'Cancel' : '+ Add Task'}
+          </button>
           <button type="button" className="secondary-button small" onClick={load} disabled={loading}>
             {loading ? 'Refreshing…' : 'Refresh'}
           </button>
@@ -205,6 +270,55 @@ const SprintDashboard: React.FC = () => {
           )}
         </div>
       </div>
+
+      {showAddForm && (
+        <form className="sprint-add-form" onSubmit={handleAddTask}>
+          <div className="sprint-add-form-row">
+            <input
+              type="text"
+              placeholder="Task title"
+              value={newTitle}
+              onChange={(event) => setNewTitle(event.target.value)}
+              disabled={adding}
+              autoFocus
+              required
+            />
+            <select
+              value={newParentId}
+              onChange={(event) => setNewParentId(event.target.value)}
+              disabled={adding}
+              required
+            >
+              <option value="">Sub-issue of…</option>
+              {parentOptions.map((option) => (
+                <option key={option.issueId!} value={option.issueId!}>
+                  {option.title} #{option.number}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="sprint-add-form-row">
+            <select value={newStatus} onChange={(event) => setNewStatus(event.target.value)} disabled={adding}>
+              {STATUS_COLUMNS.map((option) => (
+                <option key={option} value={option}>
+                  {option}
+                </option>
+              ))}
+            </select>
+            <select value={newAssignee} onChange={(event) => setNewAssignee(event.target.value)} disabled={adding}>
+              <option value="">Unassigned</option>
+              {assignableUsers.map((login) => (
+                <option key={login} value={login}>
+                  {login}
+                </option>
+              ))}
+            </select>
+            <button type="submit" className="primary-button" disabled={adding || !newTitle.trim() || !newParentId}>
+              {adding ? 'Adding…' : 'Add to current sprint'}
+            </button>
+          </div>
+        </form>
+      )}
 
       {error && <p className="chat-error">{error}</p>}
 
@@ -253,6 +367,16 @@ const SprintDashboard: React.FC = () => {
                   {item.url && (
                     <a className="sprint-card-link" href={item.url} target="_blank" rel="noreferrer">
                       #{item.number} on GitHub ↗
+                    </a>
+                  )}
+                  {item.parentNumber && (
+                    <a
+                      className="sprint-card-parent"
+                      href={`https://github.com/${githubStatus?.owner}/${githubStatus?.repo}/issues/${item.parentNumber}`}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      ↳ Sub-issue of {item.parentTitle} #{item.parentNumber}
                     </a>
                   )}
 

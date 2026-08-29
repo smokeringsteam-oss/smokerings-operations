@@ -396,3 +396,178 @@ export async function extractWeekendOrders({ text }) {
 
   return { orders, unmatched };
 }
+
+// ---- Order notes: what time does this customer actually want it? ----------
+// Odoo carries a free-text note on every sale order (server/integrations/odoo.js
+// fetchOrderPackingList reads it as `note`). For a website order that note is
+// a machine-written summary of the checkout, and the only human part of it is
+// the "Customer note:" line at the end — which is where a "please deliver by
+// 1PM if possible" ends up, phrased however the customer felt like phrasing
+// it. Nothing structured to match on, so this is a Gemini read rather than a
+// regex.
+//
+// The trap this prompt exists to avoid: every website note also carries a
+// "Delivery slot: Saturday · Lunch (12:30 PM – 3:00 PM)" line. That is the
+// standard slot the order was placed into, not a request — reporting it would
+// put a "time preference" badge on every single order and make the badge
+// worthless. Only what the customer themselves asked for counts.
+const TIME_PREFERENCE_SYSTEM_PROMPT = `You read the notes attached to Smoke Rings BBQ delivery orders and pick out any DELIVERY TIME PREFERENCE the customer asked for.
+
+You are given a JSON array of orders, each with an "orderId" and a "note". Return one entry per order, using the same orderId you were given.
+
+What counts as a time preference:
+- The customer asking for a specific time or window ("deliver by 1PM", "after 8pm please", "around 7:30", "as early as possible in the slot", "don't come before 6").
+- A time-shaped constraint even if vague ("ASAP", "as late as possible", "need it before the match starts at 4").
+
+What does NOT count (this is the important part):
+- The "Delivery slot: ..." line, e.g. "Delivery slot: Saturday · Lunch (12:30 PM – 3:00 PM)". That is the standard slot every order is placed into, NOT a customer request. Never report it as a preference.
+- Anything about payment, Razorpay ids, totals, addresses, phone numbers, item lists, or test-order warnings.
+- Non-time requests (extra sauce, no onions, call on arrival). Those are notes, not time preferences.
+- A customer explicitly saying they have no preference ("nothing specific", "anytime is fine").
+
+For each order return:
+- "orderId": exactly the id you were given.
+- "hasPreference": true only if the customer asked for something about WHEN it arrives.
+- "label": a very short phrase for a kitchen board badge, capitalised like a sentence rather than Like A Title, e.g. "Deliver by 1:00 PM", "After 8:00 PM", "ASAP", "Around 7:30 PM". Empty string when hasPreference is false.
+- "preferredTime": the time in 24-hour HH:MM if the customer named a concrete clock time, otherwise an empty string. For "by 1PM" that is "13:00". For "ASAP" or "as early as possible" it is "".
+- "quote": the customer's own words, copied verbatim from the note, that you based this on. Empty string when hasPreference is false.
+- "confidence": "high" when the customer stated a clear time, "medium" when they were vague but clearly meant timing, "low" when you are unsure it is a timing request at all.
+
+Never invent a time the note does not contain. If a note is empty or has no customer-written part, return hasPreference false for it.`;
+
+// Gemini is asked once per distinct note, not once per board render: the
+// packing boards re-fetch whenever the date range changes or someone hits
+// refresh, and the notes almost never change in between. Keyed by orderId
+// plus the note itself, so a note edited in Odoo is re-read rather than served
+// stale. Bounded, because this is a long-lived server process.
+const TIME_PREFERENCE_CACHE_LIMIT = 500;
+const timePreferenceCache = new Map();
+
+const timePreferenceKey = (orderId, note) => `${orderId}|${note}`;
+
+function cacheGet(key) {
+  if (!timePreferenceCache.has(key)) return undefined;
+  // Re-insert so the entry evicted below is the genuinely least-recently-used
+  // one rather than just the oldest-written.
+  const value = timePreferenceCache.get(key);
+  timePreferenceCache.delete(key);
+  timePreferenceCache.set(key, value);
+  return value;
+}
+
+function cacheSet(key, value) {
+  timePreferenceCache.set(key, value);
+  while (timePreferenceCache.size > TIME_PREFERENCE_CACHE_LIMIT) {
+    timePreferenceCache.delete(timePreferenceCache.keys().next().value);
+  }
+}
+
+const NO_TIME_PREFERENCE = { hasPreference: false, label: '', preferredTime: '', quote: '', confidence: 'high' };
+
+// orders: [{ orderId, note }], straight off fetchOrderPackingList. Returns
+// { preferences: { [orderId]: {...} }, read, cached } — orders with no note
+// never reach Gemini and simply don't appear in the map.
+export async function readOrderTimePreferences({ orders }) {
+  const list = Array.isArray(orders) ? orders : [];
+  const preferences = {};
+  const toRead = [];
+  let cached = 0;
+
+  for (const order of list) {
+    const orderId = String(order?.orderId ?? '').trim();
+    const note = typeof order?.note === 'string' ? order.note.trim() : '';
+    if (!orderId || !note) continue;
+    const hit = cacheGet(timePreferenceKey(orderId, note));
+    if (hit) {
+      preferences[orderId] = hit;
+      cached += 1;
+      continue;
+    }
+    toRead.push({ orderId, note });
+  }
+
+  if (!toRead.length) return { preferences, read: 0, cached };
+
+  const ai = getClient();
+  if (!ai) {
+    const err = new Error('GEMINI_API_KEY is not configured on the server, so order notes cannot be read.');
+    err.status = 503;
+    throw err;
+  }
+
+  const response = await ai.models.generateContent({
+    model: MODEL,
+    contents: [{ role: 'user', parts: [{ text: JSON.stringify(toRead) }] }],
+    config: {
+      systemInstruction: TIME_PREFERENCE_SYSTEM_PROMPT,
+      // Thinking tokens come out of this budget too (see extractWeekendOrders),
+      // and website notes are long, so this needs real headroom above the JSON.
+      maxOutputTokens: 8000,
+      responseMimeType: 'application/json',
+      responseSchema: {
+        type: Type.OBJECT,
+        properties: {
+          preferences: {
+            type: Type.ARRAY,
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                orderId: { type: Type.STRING },
+                hasPreference: { type: Type.BOOLEAN },
+                label: { type: Type.STRING, description: 'Short badge text, empty when hasPreference is false.' },
+                preferredTime: { type: Type.STRING, description: '24-hour HH:MM, or empty when no clock time was named.' },
+                quote: { type: Type.STRING, description: "The customer's own words, verbatim." },
+                confidence: { type: Type.STRING, enum: ['high', 'medium', 'low'] },
+              },
+              required: ['orderId', 'hasPreference'],
+            },
+          },
+        },
+        required: ['preferences'],
+      },
+    },
+  });
+
+  const finishReason = response.candidates?.[0]?.finishReason;
+  if (finishReason && finishReason !== 'STOP') {
+    const err = new Error(`Gemini cut off reading the order notes before finishing (${finishReason}).`);
+    err.status = 502;
+    throw err;
+  }
+
+  let parsed;
+  try {
+    parsed = JSON.parse(response.text || '{}');
+  } catch {
+    const err = new Error('Gemini did not return structured note data. Try again.');
+    err.status = 502;
+    throw err;
+  }
+
+  const byId = new Map();
+  if (Array.isArray(parsed?.preferences)) {
+    for (const row of parsed.preferences) {
+      if (!row || typeof row.orderId !== 'string') continue;
+      byId.set(row.orderId, {
+        hasPreference: Boolean(row.hasPreference),
+        label: typeof row.label === 'string' ? row.label.trim() : '',
+        preferredTime: /^([01]\d|2[0-3]):[0-5]\d$/.test(row.preferredTime || '') ? row.preferredTime : '',
+        quote: typeof row.quote === 'string' ? row.quote.trim() : '',
+        confidence: ['high', 'medium', 'low'].includes(row.confidence) ? row.confidence : 'low',
+      });
+    }
+  }
+
+  // Every note that was sent gets its answer cached, the "nothing asked for"
+  // ones included — otherwise the orders without a preference (the majority)
+  // would be re-sent to Gemini on every fetch and quietly burn the quota.
+  for (const { orderId, note } of toRead) {
+    const result = byId.get(orderId) || NO_TIME_PREFERENCE;
+    // A preference with nothing to show on the card is just a no-preference.
+    const usable = result.hasPreference && (result.label || result.quote) ? result : NO_TIME_PREFERENCE;
+    preferences[orderId] = usable;
+    cacheSet(timePreferenceKey(orderId, note), usable);
+  }
+
+  return { preferences, read: toRead.length, cached };
+}

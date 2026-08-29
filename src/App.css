@@ -448,9 +448,14 @@ button.wizard-step:hover:not(.active) {
   width: 100%;
 }
 
-.secondary-button.small {
+.secondary-button.small,
+.primary-button.small {
   padding: 8px 12px;
   font-size: 0.85rem;
+}
+
+.primary-button.small {
+  box-shadow: 0 6px 16px rgba(217, 72, 15, 0.26);
 }
 
 .group-summary {
@@ -545,6 +550,33 @@ button.wizard-step:hover:not(.active) {
   color: var(--color-ember-dark);
   font-weight: 600;
   font-size: 0.9rem;
+}
+
+/* Confirmation + "go to the next step" call-to-action, shown together so the
+   next action is unmissable instead of a small button trailing a status
+   line — used by the Smoking Session wizard once a step's log action
+   succeeds. */
+.step-next-banner {
+  margin-top: 16px;
+  padding: 14px 16px;
+  border-radius: var(--radius-md);
+  background: var(--color-ember-light);
+  border: 1px solid var(--color-border-strong);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.step-next-banner p {
+  margin: 0;
+  font-weight: 600;
+  color: var(--color-ember-dark);
+}
+
+.step-next-banner .primary-button {
+  white-space: nowrap;
 }
 
 .wizard-actions-top {
@@ -908,6 +940,45 @@ button.wizard-step:hover:not(.active) {
   color: var(--color-charcoal);
 }
 
+/* Batch-detail table's prep column — "start making" / "mark done" per side. */
+.prep-status-cell {
+  white-space: nowrap;
+}
+
+.prep-status-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+
+.prep-status-buttons {
+  display: flex;
+  gap: 6px;
+  justify-content: center;
+}
+
+.prep-status-badge {
+  font-size: 0.75rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.prep-status-badge.making {
+  color: var(--color-ember-dark);
+}
+
+.prep-status-badge.done {
+  color: #2f7a3a;
+}
+
+.prep-status-hint,
+.prep-status-buy {
+  font-size: 0.8rem;
+  color: var(--color-text-muted);
+}
+
 .prep-table tfoot td {
   background: var(--color-surface-alt);
   border-bottom: none;
@@ -961,6 +1032,657 @@ button.wizard-step:hover:not(.active) {
   font-weight: 800;
   color: var(--color-charcoal);
   font-family: var(--font-display);
+}
+
+/* Sauce split under a dish-type total (Burgers: BBQ vs Glaze) — a quieter,
+   smaller line than the total above it, so the card still reads as one number
+   at a glance with the breakdown as the footnote. */
+.prep-summary-split {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--color-border);
+  display: flex;
+  justify-content: center;
+  gap: 14px;
+  font-size: 0.78rem;
+  color: var(--color-text-muted);
+}
+
+.prep-summary-split strong {
+  color: var(--color-charcoal);
+  font-weight: 800;
+}
+
+/* Order Packing (B2C Dashboard) */
+
+/* The weekend's four delivery slots as a horizontal picker — Sat Lunch, Sat
+   Dinner, Sun Lunch, Sun Dinner always all four, always on one row (equal
+   1fr columns rather than a min-width that could push one off screen), with
+   the selected slot's orders shown below it. One slot's dashboard at a time,
+   so the cards get the full page width instead of a quarter of it. */
+.slot-picker {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+  margin: 18px 0;
+}
+
+.slot-picker-btn {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  padding: 12px 10px;
+  text-align: left;
+  cursor: pointer;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font: inherit;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.slot-picker-btn:hover {
+  border-color: var(--color-ember);
+}
+
+.slot-picker-btn.active {
+  background: linear-gradient(135deg, var(--color-charcoal) 0%, #4a2f1c 100%);
+  border-color: transparent;
+  color: #fff5ea;
+  box-shadow: var(--shadow-sm);
+}
+
+.slot-picker-name {
+  display: block;
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: 0.95rem;
+  line-height: 1.25;
+}
+
+.slot-picker-count {
+  display: block;
+  margin-top: 3px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--color-text-muted);
+}
+
+/* Inherit the light text when the tile is the dark selected one — the muted
+   token is a dark brown and would vanish against it. */
+.slot-picker-btn.active .slot-picker-count {
+  color: #e6d3c1;
+}
+
+.slot-picker-btn.empty .slot-picker-name,
+.slot-picker-btn.empty .slot-picker-count {
+  opacity: 0.55;
+}
+
+/* Whole-slot actions, above the selected slot's order cards. */
+.pack-bulk-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 10px 14px;
+  margin-bottom: 14px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-alt);
+}
+
+.pack-bulk-sep {
+  font-size: 0.84rem;
+  color: var(--color-text-muted);
+  font-weight: 600;
+}
+
+.pack-bulk-bar select {
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border-strong);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-size: 0.84rem;
+  font-weight: 600;
+}
+
+/* Pre-packing guidelines for the selected slot — laid across the full width
+   now that only one slot is on screen. */
+.pack-guides {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 16px;
+  align-items: start;
+  margin-bottom: 20px;
+}
+
+.pack-guide h4 {
+  margin: 0 0 6px;
+  font-size: 0.82rem;
+  font-weight: 800;
+  color: var(--color-text-soft);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.pack-guide-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 4px;
+}
+
+.pack-guide-list li {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 5px 9px;
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-alt);
+  border: 1px solid var(--color-border);
+  font-size: 0.83rem;
+}
+
+.pack-guide-list li strong {
+  color: var(--color-ember-dark);
+  white-space: nowrap;
+}
+
+/* Portions lead, packing reads underneath — so the row stacks its value
+   instead of keeping it on one nowrap line. */
+.pack-guide-list li.pack-guide-stacked {
+  align-items: flex-start;
+}
+
+.pack-guide-list li.pack-guide-stacked strong {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  white-space: normal;
+  text-align: right;
+}
+
+.pack-guide-sub {
+  margin-top: 2px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--color-text-muted);
+}
+
+.pack-guide-note {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--color-text-muted);
+}
+
+.pack-slot-empty {
+  margin: 0;
+  padding: 28px 0;
+  text-align: center;
+  color: var(--color-text-muted);
+}
+
+.pack-orders-title {
+  margin: 0 0 10px;
+  font-size: 0.82rem;
+  font-weight: 800;
+  color: var(--color-text-soft);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+/* Order cards for the selected slot — several across the full page width. */
+.pack-order-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(330px, 1fr));
+  gap: 14px;
+  align-items: start;
+}
+
+/* Per-order Odoo Fulfilment Status picker. */
+.pack-status-select {
+  display: block;
+  margin-top: 8px;
+}
+
+.pack-status-select-label {
+  display: block;
+  margin-bottom: 3px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.pack-status-select select {
+  width: 100%;
+  padding: 7px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border-strong);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-size: 0.83rem;
+  font-weight: 600;
+}
+
+.pack-status-select select:focus {
+  outline: none;
+  border-color: var(--color-ember);
+}
+
+.pack-partner-chip {
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: var(--color-surface-alt);
+  border: 1px solid var(--color-border-strong);
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--color-text-soft);
+}
+
+/* Local status saved but Odoo disagrees / didn't take the write. */
+.pack-odoo-drift {
+  margin: 8px 0 0;
+  padding: 7px 10px;
+  border-radius: var(--radius-sm);
+  background: #fff4e0;
+  border: 1px solid #e0a54a;
+  color: #8a5200;
+  font-size: 0.78rem;
+  line-height: 1.4;
+}
+
+.pack-sides-summary {
+  margin: 0 0 14px;
+  padding: 12px 14px;
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-alt);
+  border: 1px solid var(--color-border);
+  color: var(--color-text);
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+.pack-sides-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.pack-sides-card {
+  padding: 14px 16px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-alt);
+  border-left: 4px solid var(--color-ember);
+  text-align: center;
+}
+
+.pack-sides-count {
+  font-size: 1.5rem;
+  font-weight: 800;
+  color: var(--color-ember-dark);
+  font-family: var(--font-display);
+}
+
+.pack-sides-name {
+  margin-top: 4px;
+  font-weight: 700;
+  color: var(--color-charcoal);
+  font-size: 0.92rem;
+}
+
+.pack-sides-qty {
+  margin-top: 2px;
+  color: var(--color-text-muted);
+  font-size: 0.8rem;
+}
+
+/* Which container the side's boxes are, under the portion/quantity line. */
+.pack-sides-box {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px dashed var(--color-border);
+  color: var(--color-ember-dark);
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.pack-combine-box {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.pack-combine-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  border-radius: var(--radius-sm);
+  background: var(--color-ember-light);
+  border: 1px solid var(--color-ember);
+}
+
+.pack-combine-name {
+  font-weight: 700;
+  color: var(--color-ember-dark);
+}
+
+.pack-combine-count {
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: var(--color-ember-dark);
+  white-space: nowrap;
+}
+
+.pack-order-list {
+  display: grid;
+  gap: 14px;
+}
+
+.pack-order-card {
+  padding: 14px 16px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-sm);
+}
+
+.pack-order-header {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.pack-order-rank {
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--color-ember) 0%, #ff7a3d 100%);
+  color: #ffffff;
+  font-size: 0.75rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.pack-order-name {
+  font-weight: 800;
+  color: var(--color-charcoal);
+  font-family: var(--font-display);
+}
+
+/* The card header reads "S00010 .......... 🍳 Prepping" — id on the left, the
+   live fulfilment status pushed to the right edge. */
+.pack-order-header .pack-status-badge {
+  margin-left: auto;
+}
+
+.pack-order-time {
+  font-size: 0.82rem;
+  color: var(--color-text-muted);
+  white-space: nowrap;
+}
+
+.pack-order-customer {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 2px;
+  font-size: 0.85rem;
+  color: var(--color-text-soft);
+}
+
+.pack-prep-unit {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--color-text-muted);
+}
+
+/* In Smoker -> Prepping -> Packed -> Finding Partner -> Partner Assigned -> Out for Delivery -> Delivered per order */
+.pack-status-block {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--color-border-strong);
+}
+
+.pack-status-badge {
+  padding: 4px 12px;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  font-weight: 700;
+  white-space: nowrap;
+  background: var(--color-surface-alt);
+  border: 1px solid var(--color-border-strong);
+  color: var(--color-text-muted);
+}
+
+.pack-status-badge.pack-status-in_smoker {
+  background: #ffe1d6;
+  border-color: #d9632f;
+  color: #a8330a;
+}
+
+.pack-status-badge.pack-status-prepping {
+  background: #fff3cd;
+  border-color: #e0b74b;
+  color: #8a6417;
+}
+
+.pack-status-badge.pack-status-packed {
+  background: var(--color-ember-light);
+  border-color: var(--color-ember);
+  color: var(--color-ember-dark);
+}
+
+.pack-status-badge.pack-status-finding_partner {
+  background: #fde7c8;
+  border-color: #d98c2b;
+  color: #8a5a17;
+}
+
+.pack-status-badge.pack-status-assigned_partner {
+  background: #dbe9ff;
+  border-color: #3b6fd1;
+  color: #234f96;
+}
+
+.pack-status-badge.pack-status-out_for_delivery {
+  background: #e6dbff;
+  border-color: #7a4fd1;
+  color: #4b2f96;
+}
+
+.pack-status-badge.pack-status-delivered {
+  background: #e3f3e6;
+  border-color: #2f7a3a;
+  color: #2f7a3a;
+}
+
+.pack-dispatch-form {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+  flex-wrap: wrap;
+}
+
+.pack-dispatch-form input {
+  flex: 1;
+  min-width: 180px;
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border-strong);
+  background: var(--color-surface);
+  font: inherit;
+  color: var(--color-text);
+}
+
+.pack-dispatch-form input:focus {
+  outline: none;
+  border-color: var(--color-ember);
+}
+
+.pack-invoice-box {
+  margin-top: 10px;
+  font-size: 0.88rem;
+  color: var(--color-text);
+}
+
+.pack-invoice-box a {
+  color: var(--color-ember-dark);
+  font-weight: 700;
+}
+
+.pack-invoice-error {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  color: #a8330a;
+}
+
+.pack-status-error {
+  margin: 8px 0 0;
+}
+
+.pack-order-items {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.pack-order-items li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-alt);
+  font-size: 0.88rem;
+  color: var(--color-text);
+}
+
+.pack-order-item-qty {
+  font-weight: 700;
+  color: var(--color-charcoal);
+}
+
+.pack-order-smart {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--color-border-strong);
+}
+
+.pack-order-smart-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 800;
+  font-size: 0.85rem;
+  color: var(--color-charcoal);
+  margin-bottom: 8px;
+}
+
+.pack-order-savings {
+  padding: 2px 9px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--color-ember) 0%, #ff7a3d 100%);
+  color: #ffffff;
+  font-size: 0.72rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.pack-order-smart-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.pack-order-smart-combine {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--color-ember-light);
+  border: 1px solid var(--color-ember);
+  font-size: 0.85rem;
+  color: var(--color-ember-dark);
+}
+
+/* "4x Caramelised onions" on top, "4 x 2 oz container — one portion each"
+   under it: the count is the instruction, the packing is the detail. */
+.pack-smart-line {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.pack-smart-main {
+  font-weight: 600;
+}
+
+.pack-smart-sub {
+  font-size: 0.78rem;
+  font-weight: 600;
+  opacity: 0.85;
+}
+
+.pack-order-savings-inline {
+  font-size: 0.78rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.pack-order-smart-singles {
+  margin: 8px 0 0;
+  font-size: 0.82rem;
+  color: var(--color-text-soft);
+}
+
+/* A side whose portions can't share a box (a 30 ml sauce in a 30 ml cup) —
+   still listed with its box count, but muted so the combines stand out. */
+.pack-order-smart-single {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-alt);
+  border: 1px solid var(--color-border);
+  font-size: 0.85rem;
+  color: var(--color-text-soft);
+}
+
+/* Total boxes for one order, next to the "Pack smart" heading. */
+.pack-order-boxes {
+  padding: 2px 9px;
+  border-radius: 999px;
+  background: var(--color-surface-alt);
+  border: 1px solid var(--color-border-strong);
+  color: var(--color-charcoal);
+  font-size: 0.72rem;
+  font-weight: 800;
+  white-space: nowrap;
 }
 
 /* Sprint board (Kanban) */
@@ -1048,6 +1770,16 @@ button.wizard-step:hover:not(.active) {
   text-decoration: underline;
 }
 
+.sprint-card-parent {
+  font-size: 0.72rem;
+  color: var(--color-text-soft);
+  text-decoration: none;
+}
+
+.sprint-card-parent:hover {
+  text-decoration: underline;
+}
+
 .sprint-draft-badge {
   font-size: 0.66rem;
   text-transform: uppercase;
@@ -1091,6 +1823,46 @@ button.wizard-step:hover:not(.active) {
   outline: none;
   border-color: var(--color-ember);
   box-shadow: 0 0 0 3px var(--color-ember-light);
+}
+
+.sprint-add-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  background: var(--color-surface-alt);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: 14px;
+  margin-bottom: 18px;
+}
+
+.sprint-add-form-row {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.sprint-add-form-row > input,
+.sprint-add-form-row > select {
+  flex: 1 1 200px;
+  font: inherit;
+  font-size: 0.85rem;
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--color-border-strong);
+  background: var(--color-surface);
+  color: var(--color-text);
+}
+
+.sprint-add-form-row > input:focus,
+.sprint-add-form-row > select:focus {
+  outline: none;
+  border-color: var(--color-ember);
+  box-shadow: 0 0 0 3px var(--color-ember-light);
+}
+
+.sprint-add-form-row > button {
+  flex: 0 0 auto;
 }
 
 /* Daily view */
@@ -1189,6 +1961,72 @@ button.wizard-step:hover:not(.active) {
   font-size: 1.1rem;
 }
 
+/* The one control that opens the rest of Step 2's estimate. Styled as a full
+   width bar rather than a button so it reads as a section divider — meat above
+   it, prep below — with the caret carrying the open/closed state. */
+.inv-prep-toggle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  margin-top: 28px;
+  padding: 14px 16px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-alt);
+  cursor: pointer;
+  text-align: left;
+  font-family: inherit;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.inv-prep-toggle:hover {
+  border-color: var(--color-charcoal);
+  background: var(--color-surface);
+}
+
+.inv-prep-toggle-caret {
+  color: var(--color-text-muted);
+  font-size: 0.9rem;
+}
+
+.inv-prep-toggle-label {
+  color: var(--color-charcoal);
+  font-size: 1.1rem;
+  font-weight: 700;
+}
+
+.inv-prep-toggle-hint {
+  color: var(--color-text-muted);
+  font-size: 0.85rem;
+}
+
+/* On narrow screens the hint drops under the label instead of squeezing it. */
+@media (max-width: 640px) {
+  .inv-prep-toggle {
+    flex-wrap: wrap;
+  }
+
+  .inv-prep-toggle-hint {
+    flex-basis: 100%;
+    padding-left: 24px;
+  }
+}
+
+/* One buy table per vendor inside the "Bread & wraps to order" section —
+   Bakery is a kitchen step, not a supplier, so the rows split across Bread
+   Time Stories and Swiggy (see WeekendPrepPlanner bakeryOrdersByVendor). */
+.prep-vendor-group + .prep-vendor-group {
+  margin-top: 18px;
+}
+
+.inv-section-subtitle {
+  margin: 0 0 8px;
+  color: var(--color-text-muted);
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+
 .inv-section-hint {
   margin: 0 0 14px;
   color: var(--color-text-muted);
@@ -1216,6 +2054,14 @@ button.wizard-step:hover:not(.active) {
 
 .inv-compact-tile.chicken {
   border-left-color: #d9a441;
+}
+
+.inv-compact-tile.jackfruit {
+  border-left-color: #6a9b4a;
+}
+
+.inv-compact-tile.beef {
+  border-left-color: #7a2e2e;
 }
 
 .inv-compact-head {
@@ -1372,7 +2218,7 @@ button.wizard-step:hover:not(.active) {
   text-transform: uppercase;
 }
 
-/* ---- Weekly Purchasing (Ops Dashboard) ---------------------------------- */
+/* ---- Weekly Purchasing (B2C Dashboard) ---------------------------------- */
 
 .wizard-card select {
   width: 100%;
@@ -1468,26 +2314,6 @@ button.wizard-step:hover:not(.active) {
   margin-top: 20px;
 }
 
-.purch-lowstock ul.purch-lowstock-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: grid;
-  gap: 8px;
-}
-
-.purch-lowstock-list li {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 8px 12px;
-  border-radius: var(--radius-sm);
-  background: #fff1e8;
-  color: var(--color-ember-dark);
-  font-size: 0.88rem;
-  font-weight: 600;
-}
-
 .purch-range {
   margin-bottom: 16px;
 }
@@ -1512,16 +2338,21 @@ button.wizard-step:hover:not(.active) {
   margin-bottom: 16px;
 }
 
-/* ---- Ops Dashboard landing (module boxes) ------------------------------- */
+/* ---- B2C/B2B Dashboard landing (module boxes) ------------------------------- */
+/* Sequential flow layout: boxes wrap in flow order with an arrow connector
+   between each step, instead of an order-agnostic grid, so the Fri plan →
+   buy → smoke / Sat–Sun serve pipeline reads as one continuous flow. */
 
-.ops-box-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+.ops-flow-grid {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: stretch;
   gap: 20px;
 }
 
 .ops-box {
   display: flex;
+  flex: 1 1 240px;
   flex-direction: column;
   align-items: flex-start;
   gap: 10px;
@@ -1540,6 +2371,28 @@ button.wizard-step:hover:not(.active) {
   transform: translateY(-2px);
   border-color: var(--color-ember);
   box-shadow: 0 14px 30px rgba(217, 72, 15, 0.2);
+}
+
+.ops-flow-arrow {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  font-size: 1.5rem;
+  color: var(--color-ember);
+  opacity: 0.6;
+}
+
+.ops-box-step {
+  align-self: flex-start;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: rgba(217, 72, 15, 0.12);
+  color: var(--color-ember);
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
 }
 
 .ops-box-icon {
@@ -1581,6 +2434,689 @@ button.wizard-step:hover:not(.active) {
 
 .ops-back-button:hover {
   text-decoration: underline;
+}
+
+/* ---- B2C Dashboard > Service Weeks strip ------------------------------- */
+/* Sits above the module flow on the landing page: whether a week is
+   serviceable at all gates every step below it. Open/closed reads from the
+   card's left edge and the switch, so the state is legible in a glance
+   across the whole strip. */
+
+.svc-week-panel {
+  margin-bottom: 28px;
+  padding-bottom: 24px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.svc-week-panel-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 14px;
+}
+
+.svc-week-panel-head .inv-section-hint {
+  max-width: 60ch;
+}
+
+/* Month pager above the weekend grid. The grid is generated from the
+   calendar, so this is what makes next month's weekends exist at all. */
+.svc-week-month-nav {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.svc-week-month-step {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  color: var(--color-charcoal);
+  font-size: 1.1rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.svc-week-month-step:hover {
+  border-color: var(--color-ember);
+  color: var(--color-ember);
+}
+
+.svc-week-month-title {
+  min-width: 11ch;
+  font-size: 1rem;
+  font-weight: 800;
+  color: var(--color-charcoal);
+}
+
+.svc-week-month-today {
+  padding: 3px 10px;
+  background: none;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  color: var(--color-text-muted);
+  font-size: 0.74rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.svc-week-month-today:hover {
+  border-color: var(--color-ember);
+  color: var(--color-ember);
+}
+
+.svc-week-month-loading {
+  color: var(--color-text-muted);
+  font-size: 0.78rem;
+}
+
+.svc-week-subhead {
+  margin: 18px 0 10px;
+  color: var(--color-text-muted);
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.svc-week-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+}
+
+.svc-week-card {
+  display: flex;
+  flex: 1 1 240px;
+  max-width: 320px;
+  flex-direction: column;
+  gap: 8px;
+  padding: 16px 18px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-left: 4px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-md);
+}
+
+.svc-week-card.is-open {
+  border-left-color: #16a34a;
+}
+
+.svc-week-card.is-closed {
+  border-left-color: #b91c1c;
+}
+
+/* A weekend with no Service Week record in Odoo yet — a real, togglable card,
+   but visibly not a decision anyone has made. */
+.svc-week-card.is-unset {
+  background: var(--color-surface-alt);
+  border-style: dashed;
+  border-left-style: dashed;
+  box-shadow: none;
+}
+
+.svc-week-card.is-unset .svc-week-dates,
+.svc-week-card.is-unset .svc-week-state {
+  color: var(--color-text-muted);
+}
+
+.svc-week-card.is-current {
+  border-color: var(--color-ember);
+  border-left-color: var(--color-ember);
+}
+
+/* A card wide enough to pick menu items in — 320px can't hold a checkbox
+   list without wrapping every label. */
+.svc-week-card.is-editing {
+  flex-basis: 420px;
+  max-width: 480px;
+}
+
+.svc-week-card-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.svc-week-dates {
+  font-size: 1.02rem;
+  font-weight: 800;
+  color: var(--color-charcoal);
+}
+
+.svc-week-now {
+  padding: 2px 9px;
+  border-radius: 999px;
+  background: rgba(217, 72, 15, 0.12);
+  color: var(--color-ember);
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.svc-week-name {
+  color: var(--color-text-muted);
+  font-size: 0.85rem;
+  line-height: 1.3;
+}
+
+.svc-week-control {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 2px;
+}
+
+/* Track + knob switch. Reuses the plain-button reset the rest of the app
+   relies on (font: inherit, no native chrome) so it renders identically
+   across browsers. */
+.svc-week-switch {
+  position: relative;
+  flex: 0 0 auto;
+  width: 46px;
+  height: 26px;
+  padding: 0;
+  border: none;
+  border-radius: 999px;
+  background: #b91c1c;
+  cursor: pointer;
+  font: inherit;
+  transition: background-color 160ms ease;
+}
+
+.svc-week-card.is-open .svc-week-switch {
+  background: #16a34a;
+}
+
+.svc-week-switch:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.svc-week-switch:focus-visible {
+  outline: 2px solid var(--color-ember);
+  outline-offset: 2px;
+}
+
+.svc-week-switch-knob {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+  transition: transform 160ms ease;
+}
+
+.svc-week-card.is-open .svc-week-switch-knob {
+  transform: translateX(20px);
+}
+
+.svc-week-state {
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--color-text);
+}
+
+.svc-week-menu {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 4px;
+}
+
+.svc-week-menu-chip {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.05);
+  color: var(--color-text-muted);
+  font-size: 0.72rem;
+  line-height: 1.5;
+}
+
+.svc-week-menu-chip.is-more {
+  font-weight: 700;
+}
+
+.svc-week-head-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 8px;
+}
+
+/* ---- Add a week / edit a week's menu --------------------------------- */
+
+.svc-week-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-bottom: 18px;
+  padding: 18px;
+  background: var(--color-surface-alt);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+}
+
+.svc-week-form-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px;
+}
+
+.svc-week-field {
+  display: flex;
+  flex: 0 1 auto;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+
+.svc-week-field.is-wide {
+  flex: 1 1 220px;
+}
+
+.svc-week-field input[type='date'],
+.svc-week-field input[type='text'] {
+  padding: 9px 11px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font: inherit;
+  font-size: 0.9rem;
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+/* The "Kitchen open" checkbox sits on the same baseline as the inputs beside
+   it, so it reads as one row rather than a stray control. */
+.svc-week-field.is-check {
+  flex-direction: row;
+  align-items: center;
+  gap: 7px;
+  padding-bottom: 10px;
+  text-transform: none;
+  font-size: 0.85rem;
+  color: var(--color-text);
+}
+
+.svc-week-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 22px;
+  max-height: 260px;
+  padding: 12px 14px;
+  overflow-y: auto;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+
+.svc-week-picker-title {
+  flex: 1 0 100%;
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+
+.svc-week-picker-title em {
+  font-style: normal;
+  color: var(--color-ember);
+}
+
+.svc-week-picker-group {
+  display: flex;
+  flex: 0 1 auto;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 190px;
+}
+
+.svc-week-picker-group-title {
+  font-size: 0.7rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--color-ember);
+}
+
+.svc-week-picker-item {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 0.86rem;
+  line-height: 1.35;
+  color: var(--color-text);
+  cursor: pointer;
+}
+
+.svc-week-form-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+/* Inside a card the picker is narrower and can't afford side-by-side
+   category columns, so it stacks and scrolls instead. */
+.svc-week-menu-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.svc-week-picker.is-inline {
+  flex-direction: column;
+  flex-wrap: nowrap;
+  gap: 8px;
+  max-height: 220px;
+  padding: 10px 12px;
+}
+
+.svc-week-menu-edit {
+  align-self: flex-start;
+  margin-top: 2px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--color-ember);
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.svc-week-menu-edit:hover:not(:disabled) {
+  text-decoration: underline;
+}
+
+.svc-week-menu-edit:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.svc-week-menu-edit.is-danger {
+  color: #b91c1c;
+}
+
+/* ---- Menu items (edit the dishes themselves) -------------------------
+   One dish is one card: a row you click to open, and inside it the two
+   sections that make up a menu item — what the customer sees, and what the
+   kitchen makes. The row is the whole clickable header, so there's no small
+   button to aim at and no second toggle for the recipe. */
+
+.menu-items-panel {
+  margin-bottom: 28px;
+  padding-bottom: 24px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.menu-items-search {
+  min-width: 180px;
+  padding: 7px 11px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font: inherit;
+  font-size: 0.86rem;
+}
+
+.menu-item-group {
+  margin-top: 14px;
+}
+
+.menu-item-group-title {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--color-ember);
+}
+
+.menu-item-row {
+  margin-bottom: 6px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+/* The open card is lifted out of the list so it reads as the one thing being
+   worked on, rather than a row that happens to be taller. */
+.menu-item-row.is-open {
+  border-color: var(--color-ember);
+  box-shadow: 0 2px 14px rgba(0, 0, 0, 0.09);
+}
+
+.menu-item-open {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  padding: 11px 14px;
+  background: none;
+  border: 0;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.menu-item-open:hover {
+  background: var(--color-surface-alt);
+}
+
+.menu-item-row.is-open .menu-item-open {
+  background: var(--color-surface-alt);
+}
+
+.menu-item-chevron {
+  flex: 0 0 auto;
+  width: 14px;
+  color: var(--color-text-muted);
+  font-size: 0.8rem;
+}
+
+.menu-item-main {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.menu-item-thumb {
+  flex: 0 0 auto;
+  width: 52px;
+  height: 52px;
+  object-fit: cover;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border);
+  background: var(--color-surface-alt);
+}
+
+.menu-item-thumb.is-large {
+  width: 104px;
+  height: 104px;
+}
+
+/* Placeholder for an item with no picture yet — same footprint as a real
+   thumbnail so rows don't jump as pictures get added. */
+.menu-item-thumb.is-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.3rem;
+  opacity: 0.45;
+}
+
+.menu-item-thumb.is-large.is-empty {
+  font-size: 2.2rem;
+}
+
+.menu-item-image-edit {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  gap: 7px;
+  align-items: flex-start;
+}
+
+.menu-item-image-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: flex-start;
+}
+
+/* The file input is hidden, so its <label> is what the user clicks — it needs
+   the affordances the sibling <button>s get for free. */
+.svc-week-menu-edit.as-label {
+  cursor: pointer;
+}
+
+.svc-week-menu-edit.as-label:hover {
+  text-decoration: underline;
+}
+
+.menu-item-edit-fields {
+  display: flex;
+  flex: 1 1 260px;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-content: flex-start;
+}
+
+.menu-item-name {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  font-weight: 700;
+  color: var(--color-charcoal);
+}
+
+.menu-item-code {
+  font-style: normal;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--color-text-muted);
+}
+
+.menu-item-tag {
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.07);
+  color: var(--color-text-muted);
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.menu-item-desc {
+  color: var(--color-text-muted);
+  font-size: 0.82rem;
+  line-height: 1.4;
+}
+
+.menu-item-price {
+  flex: 0 0 auto;
+  font-weight: 800;
+  color: var(--color-charcoal);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Both halves of a dish live here — the Odoo sales fields and the recipe —
+   separated by a rule rather than by a tab, since they get edited together
+   and save to two different places. */
+.menu-item-card {
+  display: flex;
+  flex-direction: column;
+  padding: 0 14px 14px;
+  border-top: 1px solid var(--color-border);
+}
+
+.menu-item-card-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 0;
+}
+
+.menu-item-card-section + .menu-item-card-section {
+  border-top: 1px dashed var(--color-border);
+}
+
+.menu-item-card-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 10px;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--color-ember);
+}
+
+.menu-item-edit-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.menu-item-card .svc-week-field input[type='text'],
+.menu-item-card .svc-week-field input[type='number'],
+.menu-item-card .svc-week-field textarea {
+  padding: 9px 11px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font: inherit;
+  font-size: 0.9rem;
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+.menu-item-card .svc-week-field textarea {
+  resize: vertical;
+}
+
+.menu-item-card .svc-week-field.is-wide input,
+.menu-item-card .svc-week-field.is-wide textarea {
+  width: 100%;
+}
+
+@media (max-width: 720px) {
+  .menu-item-open {
+    flex-wrap: wrap;
+  }
 }
 
 /* ---- CSV Editor (Tools > CSV Editor) --------------------------------- */
@@ -1804,4 +3340,1725 @@ td.csv-rownum-col {
   font-size: 0.78rem;
   font-weight: 700;
   white-space: nowrap;
+}
+
+/* "Tag purchases to this cook" — the cost-attribution checklist in the Start
+   smoking step. Boxed off from the fields around it because it answers a
+   different question from the rest of the step: everything else is about the
+   meat going on the smoker right now, this is about the money that got it
+   there. Capped in height since a busy three-week window can list twenty
+   buys and the Start button must stay reachable without a long scroll. */
+.smoke-tag-panel {
+  margin: 24px 0 8px;
+  padding: 14px 16px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-alt);
+}
+
+.smoke-tag-panel .inv-section-title {
+  margin-top: 0;
+}
+
+.smoke-tag-list {
+  list-style: none;
+  margin: 8px 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+.smoke-tag-list label {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 0.88rem;
+  font-weight: 500;
+  color: var(--color-text);
+  cursor: pointer;
+}
+
+.smoke-tag-list input[type='checkbox'] {
+  margin-top: 3px;
+  flex: 0 0 auto;
+}
+
+/* ---------------------------------------------------------------------------
+   AI SEO tracker (src/pages/AISEO.tsx) — assistant-visibility dashboard.
+   Two colour meanings run through this block and nothing else: ember = us,
+   slate = everyone else. The competitor bars and the "not named" chips stay
+   deliberately quiet so a glance at the page reads as "how are WE doing"
+   rather than a rainbow of equally-weighted brands.
+--------------------------------------------------------------------------- */
+.seo-page {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.seo-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.seo-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.seo-head-actions select,
+.seo-page .svc-week-field select,
+.seo-page .svc-week-field textarea {
+  padding: 9px 11px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font: inherit;
+  font-size: 0.9rem;
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+.seo-page .svc-week-field textarea {
+  resize: vertical;
+  line-height: 1.5;
+}
+
+/* Four headline numbers: are we named, how early, how loud versus the field,
+   and how stale the answer to all three is. */
+.seo-stat-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+}
+
+.seo-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 14px 16px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-sm);
+}
+
+.seo-stat-label {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--color-text-soft);
+}
+
+.seo-stat-value {
+  font-family: var(--font-display);
+  font-size: 1.85rem;
+  font-weight: 700;
+  line-height: 1.15;
+  color: var(--color-ember-dark);
+}
+
+.seo-stat-value.is-small {
+  font-size: 1.25rem;
+  padding-top: 6px;
+}
+
+.seo-stat-sub {
+  font-size: 0.78rem;
+  color: var(--color-text-muted);
+}
+
+.seo-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.seo-sweep-current {
+  font-size: 0.82rem;
+  color: var(--color-text-muted);
+  font-style: italic;
+}
+
+.seo-form-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-alt);
+}
+
+.seo-form-row {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.seo-table td {
+  vertical-align: middle;
+}
+
+/* A paused prompt still shows its history — it just stops being counted in
+   "run all", so it fades rather than disappearing. */
+.seo-row-paused {
+  opacity: 0.55;
+}
+
+.seo-prompt-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  color: inherit;
+}
+
+.seo-prompt-text {
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.seo-prompt-meta {
+  font-size: 0.74rem;
+  color: var(--color-text-soft);
+}
+
+.seo-prompt-cell:hover .seo-prompt-meta {
+  color: var(--color-ember);
+}
+
+.seo-intent {
+  display: inline-block;
+  padding: 2px 9px;
+  border-radius: 999px;
+  background: var(--color-bg-alt);
+  color: var(--color-text-muted);
+  font-size: 0.74rem;
+  font-weight: 700;
+}
+
+.seo-chip {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.seo-chip.is-hit {
+  background: #e3f5e6;
+  color: #1e6b32;
+}
+
+/* Named, but framed badly — worth reading the answer, so it cannot look like
+   a clean win. */
+.seo-chip.is-hit.is-negative {
+  background: #fdeacd;
+  color: #8a5300;
+}
+
+.seo-chip.is-miss {
+  background: #f2eee9;
+  color: var(--color-text-muted);
+}
+
+.seo-chip.is-idle {
+  background: transparent;
+  color: var(--color-text-soft);
+  border: 1px dashed var(--color-border-strong);
+}
+
+/* The action column. Clamped to two lines so one wordy suggestion cannot set
+   the height of every row in the table — the full text is on the title
+   attribute and in the expanded history. */
+.seo-advice {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  max-width: 300px;
+  font-size: 0.83rem;
+  line-height: 1.45;
+  color: var(--color-text);
+}
+
+.seo-advice.is-empty {
+  color: var(--color-text-soft);
+  font-style: italic;
+}
+
+.seo-visibility {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-weight: 700;
+  color: var(--color-text);
+}
+
+.seo-visibility em {
+  font-style: normal;
+  font-weight: 600;
+  font-size: 0.76rem;
+  color: var(--color-text-soft);
+}
+
+.seo-when {
+  font-size: 0.82rem;
+  color: var(--color-text-muted);
+  white-space: nowrap;
+}
+
+.seo-row-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.seo-history-row td {
+  background: var(--color-surface-alt);
+}
+
+.seo-history {
+  list-style: none;
+  margin: 0;
+  padding: 4px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.seo-history li {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 0.85rem;
+}
+
+.seo-history-line {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+/* Indented to line up under the framing text it follows from, so a scan down
+   the history reads result-then-action, result-then-action. */
+.seo-history-advice {
+  margin: 0 0 4px 126px;
+  color: var(--color-ember-dark);
+  font-size: 0.83rem;
+  line-height: 1.45;
+}
+
+.seo-history-when {
+  min-width: 116px;
+  color: var(--color-text-muted);
+  font-size: 0.8rem;
+}
+
+.seo-history-framing {
+  flex: 1 1 260px;
+  color: var(--color-text-muted);
+}
+
+.seo-engine {
+  display: inline-block;
+  padding: 2px 9px;
+  border-radius: 999px;
+  background: var(--color-charcoal);
+  color: #fff;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+/* Auto-run engine gets the brand colour; the paste-in ones stay charcoal, so
+   at a glance you can see how much of the history is self-serve. */
+.seo-engine.is-gemini {
+  background: var(--color-ember);
+}
+
+.seo-panels {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 14px;
+}
+
+.seo-panel {
+  padding: 16px 18px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-sm);
+}
+
+.seo-panel h4 {
+  margin: 0 0 4px;
+  font-family: var(--font-display);
+  font-size: 1rem;
+  color: var(--color-charcoal);
+}
+
+.seo-panel .inv-section-hint {
+  margin-bottom: 12px;
+}
+
+.seo-empty-line {
+  margin: 8px 0 0;
+  font-size: 0.85rem;
+  color: var(--color-text-soft);
+}
+
+.seo-bars {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.seo-bars li {
+  display: grid;
+  grid-template-columns: minmax(90px, 1.2fr) 2fr auto;
+  align-items: center;
+  gap: 10px;
+  font-size: 0.85rem;
+}
+
+.seo-bar-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-text);
+  font-weight: 600;
+}
+
+.seo-tag {
+  margin-left: 6px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--color-ember-light);
+  color: var(--color-ember-dark);
+  font-size: 0.68rem;
+  font-style: normal;
+  font-weight: 700;
+}
+
+.seo-bar-track {
+  height: 8px;
+  border-radius: 999px;
+  background: var(--color-bg-alt);
+  overflow: hidden;
+}
+
+.seo-bar-fill {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--color-ember) 0%, #ff7a3d 100%);
+}
+
+.seo-bar-fill.is-rival {
+  background: #b9a892;
+}
+
+.seo-bar-count {
+  font-weight: 700;
+  color: var(--color-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.seo-runs {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.seo-run {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-alt);
+  overflow: hidden;
+}
+
+.seo-run-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 12px;
+  border: none;
+  background: none;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.seo-run-head:hover {
+  background: var(--color-bg-alt);
+}
+
+.seo-run-prompt {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.88rem;
+  color: var(--color-text);
+}
+
+.seo-run-when {
+  font-size: 0.78rem;
+  color: var(--color-text-soft);
+  white-space: nowrap;
+}
+
+.seo-run-body {
+  padding: 4px 14px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 0.85rem;
+}
+
+.seo-run-framing {
+  margin: 0;
+  color: var(--color-text);
+  font-style: italic;
+}
+
+.seo-run-advice {
+  margin: 0;
+  padding: 9px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--color-ember-light);
+  color: var(--color-ember-dark);
+  line-height: 1.5;
+}
+
+.seo-run-line {
+  margin: 0;
+  color: var(--color-text-muted);
+}
+
+.seo-cite-list {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-left: 6px;
+}
+
+.seo-cite-list a {
+  padding: 2px 9px;
+  border-radius: 999px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-strong);
+  color: var(--color-ember-dark);
+  font-size: 0.76rem;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.seo-cite-list a:hover {
+  border-color: var(--color-ember);
+}
+
+/* The stored excerpt keeps the assistant's own line breaks — reading it as
+   the customer saw it is the point, so it is not reflowed into a paragraph. */
+.seo-run-answer {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  font-family: var(--font-body);
+  font-size: 0.82rem;
+  line-height: 1.55;
+  color: var(--color-text-muted);
+  white-space: pre-wrap;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+/* Step 3's delivery-time callout — the one thing on an order card that came
+   from the customer's own mouth rather than from the order lines, so it reads
+   as a note pinned to the card rather than another status chip. Warm amber
+   against the card's cream so it catches the eye mid-pack without shouting
+   like an error would. */
+.pack-time-pref {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid #e0b74b;
+  border-left: 4px solid #d9632f;
+  background: #fff8e6;
+}
+
+.pack-time-pref-label {
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: #8a4a12;
+}
+
+/* The customer's verbatim words. Italic and softer than the label: the label
+   is what the kitchen acts on, this is what it double-checks against. */
+.pack-time-pref-quote {
+  font-size: 0.82rem;
+  font-style: italic;
+  line-height: 1.4;
+  color: var(--color-text-soft);
+}
+
+.pack-time-pref-hint {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #a8330a;
+}
+
+/* A vague note read a shade cooler, so a confident "by 1:00 PM" and a hedged
+   guess don't carry identical weight at a glance. */
+.pack-time-pref-medium,
+.pack-time-pref-low {
+  border-color: var(--color-border-strong);
+  border-left-color: #e0b74b;
+  background: var(--color-surface-alt);
+}
+
+/* ---- B2B Clients (Ops > B2B Dashboard > Clients) ------------------------ */
+
+.b2b-clients {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.b2b-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.b2b-summary-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 12px;
+}
+
+.b2b-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 14px 16px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-sm);
+}
+
+.b2b-stat-label {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--color-text-soft);
+}
+
+.b2b-stat-value {
+  font-family: var(--font-display);
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: var(--color-text);
+}
+
+.b2b-stat-sub {
+  font-size: 0.78rem;
+  color: var(--color-text-muted);
+}
+
+.b2b-demand-roll {
+  padding: 14px 16px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-alt);
+}
+
+.b2b-demand-roll-title {
+  display: block;
+  margin-bottom: 10px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--color-text-soft);
+}
+
+.b2b-demand-roll-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
+}
+
+.b2b-demand-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+}
+
+.b2b-demand-tile-name {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--color-text-muted);
+}
+
+.b2b-demand-tile-value {
+  font-family: var(--font-display);
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: var(--color-ember-dark);
+}
+
+.b2b-demand-tile-sub {
+  font-size: 0.72rem;
+  color: var(--color-text-soft);
+}
+
+.b2b-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.b2b-stage-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.b2b-chip {
+  padding: 6px 12px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 999px;
+  background: var(--color-surface);
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--color-text-muted);
+  cursor: pointer;
+}
+
+.b2b-chip:hover {
+  border-color: var(--color-ember);
+  color: var(--color-ember-dark);
+}
+
+.b2b-chip.is-active {
+  background: var(--color-charcoal);
+  border-color: var(--color-charcoal);
+  color: #fff;
+}
+
+.b2b-chip-count {
+  margin-left: 4px;
+  opacity: 0.7;
+}
+
+.b2b-toolbar-right {
+  display: flex;
+  flex: 1 1 260px;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.b2b-search {
+  flex: 1 1 160px;
+  min-width: 0;
+  max-width: 260px;
+  padding: 8px 12px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  font-family: inherit;
+  font-size: 0.86rem;
+}
+
+.b2b-add-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px 18px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-sm);
+}
+
+.b2b-form-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.b2b-field {
+  display: flex;
+  flex: 1 1 180px;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-text-soft);
+}
+
+.b2b-field-wide {
+  flex-basis: 100%;
+}
+
+.b2b-field input,
+.b2b-field select,
+.b2b-field textarea {
+  padding: 8px 10px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  font-family: var(--font-body);
+  font-size: 0.9rem;
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--color-text);
+}
+
+.b2b-form-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.b2b-client-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.b2b-client-card {
+  border: 1px solid var(--color-border);
+  border-left: 4px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-sm);
+  overflow: hidden;
+}
+
+.b2b-client-card:hover {
+  border-color: var(--color-border-strong);
+  box-shadow: var(--shadow-md);
+}
+
+.b2b-client-card.is-open {
+  box-shadow: var(--shadow-md);
+}
+
+/* Same stage palette as the filter chips and the stage picker, carried onto
+   the card's left edge so scanning the list reads as a pipeline. */
+.b2b-client-card.b2b-stage-sampling {
+  border-left-color: #d8a93c;
+}
+
+.b2b-client-card.b2b-stage-onboarding {
+  border-left-color: #7d9fd8;
+}
+
+.b2b-client-card.b2b-stage-active {
+  border-left-color: #63a877;
+}
+
+.b2b-client-card.b2b-stage-lost,
+.b2b-client-card.b2b-stage-paused {
+  border-left-color: #d8a1a1;
+}
+
+.b2b-client-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px 16px;
+}
+
+.b2b-client-title {
+  display: flex;
+  flex: 1 1 240px;
+  align-items: center;
+  gap: 10px;
+  padding: 0;
+  border: none;
+  background: none;
+  text-align: left;
+  cursor: pointer;
+}
+
+.b2b-client-chevron {
+  font-size: 0.8rem;
+  color: var(--color-text-soft);
+  transition: color 160ms ease;
+}
+
+.b2b-client-title:hover .b2b-client-chevron,
+.b2b-client-title:hover .b2b-client-name {
+  color: var(--color-ember-dark);
+}
+
+.b2b-client-titles {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.b2b-client-name {
+  font-family: var(--font-display);
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--color-text);
+}
+
+.b2b-client-meta {
+  overflow: hidden;
+  font-size: 0.8rem;
+  color: var(--color-text-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.b2b-client-head-right {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.b2b-client-kg {
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--color-ember-light);
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--color-ember-dark);
+  white-space: nowrap;
+}
+
+/* Sample outcome at a glance — the one thing worth seeing on a collapsed
+   card in the Sampling stage, since it decides what happens next. */
+.b2b-sample-badge,
+.b2b-onboard-badge {
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  white-space: nowrap;
+  background: #f2eee9;
+  color: var(--color-text-muted);
+}
+
+.b2b-sample-badge.is-liked {
+  background: #e3f5e6;
+  color: #1e6b32;
+}
+
+.b2b-sample-badge.is-needs_changes {
+  background: #fdeacd;
+  color: #8a5300;
+}
+
+.b2b-sample-badge.is-rejected {
+  background: #fbe3e3;
+  color: #96322f;
+}
+
+.b2b-onboard-badge {
+  background: #e7eefc;
+  color: #2c4a86;
+}
+
+.b2b-stage-select {
+  padding: 6px 10px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 999px;
+  background: var(--color-surface);
+  font-family: inherit;
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--color-text-muted);
+  cursor: pointer;
+}
+
+/* Stage colouring is shared by the filter chips and the per-card select, so a
+   glance down the list reads as a pipeline rather than a flat list. */
+.b2b-stage-select.b2b-stage-sampling,
+.b2b-chip.b2b-stage-sampling {
+  border-color: #d8a93c;
+  color: #8a5300;
+}
+
+.b2b-stage-select.b2b-stage-onboarding,
+.b2b-chip.b2b-stage-onboarding {
+  border-color: #7d9fd8;
+  color: #2c4a86;
+}
+
+.b2b-stage-select.b2b-stage-active,
+.b2b-chip.b2b-stage-active {
+  border-color: #63a877;
+  color: #1e6b32;
+}
+
+.b2b-stage-select.b2b-stage-lost,
+.b2b-chip.b2b-stage-lost {
+  border-color: #d8a1a1;
+  color: #96322f;
+}
+
+.b2b-chip.b2b-stage-sampling.is-active,
+.b2b-chip.b2b-stage-onboarding.is-active,
+.b2b-chip.b2b-stage-active.is-active,
+.b2b-chip.b2b-stage-lost.is-active {
+  color: #fff;
+}
+
+.b2b-client-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 4px 16px 16px;
+  border-top: 1px solid var(--color-border);
+}
+
+.b2b-panel {
+  padding: 14px 16px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-alt);
+}
+
+.b2b-panel h4 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 4px;
+  font-family: var(--font-display);
+  font-size: 0.95rem;
+  color: var(--color-text);
+}
+
+.b2b-panel-stage {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--color-charcoal);
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: #fff;
+}
+
+.b2b-panel-hint {
+  margin: 0 0 10px;
+  font-size: 0.8rem;
+  color: var(--color-text-muted);
+}
+
+.b2b-panel-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.b2b-empty-line {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--color-text-soft);
+}
+
+.b2b-demand-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+.b2b-demand-table th {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--color-border-strong);
+  text-align: left;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-text-soft);
+}
+
+.b2b-demand-table td {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--color-border);
+  vertical-align: middle;
+}
+
+.b2b-demand-table input,
+.b2b-demand-table select,
+.b2b-add-meat {
+  padding: 6px 8px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  font-family: var(--font-body);
+  font-size: 0.85rem;
+  color: var(--color-text);
+}
+
+.b2b-demand-table input {
+  width: 100%;
+}
+
+.b2b-qty-input {
+  max-width: 90px;
+}
+
+.b2b-demand-week {
+  font-weight: 700;
+  color: var(--color-ember-dark);
+  white-space: nowrap;
+}
+
+.b2b-checklist {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.b2b-checklist label {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: baseline;
+  gap: 4px 8px;
+  cursor: pointer;
+}
+
+.b2b-checklist input {
+  grid-row: span 2;
+  align-self: center;
+}
+
+.b2b-check-label {
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.b2b-check-hint {
+  grid-column: 2;
+  font-size: 0.76rem;
+  color: var(--color-text-soft);
+}
+
+.b2b-checklist li.is-done .b2b-check-label {
+  color: #1e6b32;
+  text-decoration: line-through;
+  text-decoration-color: rgba(30, 107, 50, 0.4);
+}
+
+.b2b-onboard-progress {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--color-text-muted);
+}
+
+.b2b-lost-reason {
+  margin: 10px 0 0;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: #fbe3e3;
+  font-size: 0.82rem;
+  color: #96322f;
+}
+
+/* ---- Weekend Prep Planner: unconfirmed Odoo quotations -------------------
+   Visually separate from the confirmed-order table it sits above: these are
+   orders that exist in Odoo but are NOT in the totals yet, and the panel has
+   to read that way at a glance. */
+.prep-quotations {
+  margin-top: 14px;
+  padding: 12px 14px;
+  border-radius: var(--radius-sm);
+  background: #eef4ff;
+  border: 1px solid #c3d5f5;
+  color: #24406e;
+  font-size: 0.88rem;
+}
+
+.prep-quotations-head {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 10px;
+}
+
+.prep-quotations-head span {
+  color: #46608c;
+  font-size: 0.82rem;
+}
+
+/* The list itself is just order numbers — a weekend can carry a dozen
+   quotations, and reading them as full cards buried the confirmed-order
+   totals underneath. Details and the Confirm button live in the modal. */
+.prep-quotation-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.prep-quotation-chip {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  padding: 6px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  border: 1px solid #d5e2f7;
+  color: #24406e;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.prep-quotation-chip:hover {
+  border-color: #7fa4e0;
+  box-shadow: 0 1px 4px rgba(36, 64, 110, 0.14);
+}
+
+.prep-quotation-chip strong {
+  font-size: 0.9rem;
+}
+
+.prep-quotation-chip span {
+  color: #5b6b85;
+  font-size: 0.76rem;
+}
+
+/* A quotation with no Sat/Sun slot can be confirmed but won't add anything to
+   the plan, so it's flagged before you open it. */
+.prep-quotation-chip.has-issue {
+  border-color: #e2be6d;
+  background: #fdf6e7;
+}
+
+.prep-quotation-state {
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: #dce7fa;
+  color: #33507f;
+  font-size: 0.74rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.prep-quotation-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.prep-quotation-items {
+  margin: 8px 0 0;
+  padding-left: 18px;
+}
+
+.prep-quotation-items li {
+  margin-bottom: 3px;
+}
+
+.prep-quotation-item-unmatched {
+  color: #9a6a10;
+}
+
+.prep-quotation-warning {
+  margin: 8px 0 0;
+  color: #9a6a10;
+  font-size: 0.82rem;
+}
+
+/* ---- Quotation detail modal --------------------------------------------- */
+.prep-modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: rgba(19, 28, 45, 0.45);
+}
+
+.prep-modal {
+  width: min(460px, 100%);
+  max-height: 85vh;
+  overflow-y: auto;
+  padding: 18px 20px 20px;
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  box-shadow: 0 12px 40px rgba(19, 28, 45, 0.28);
+  color: #24406e;
+  font-size: 0.88rem;
+}
+
+.prep-modal-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.prep-modal-close {
+  flex-shrink: 0;
+  padding: 0 6px;
+  border: none;
+  background: none;
+  color: #5b6b85;
+  font-size: 1.4rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.prep-modal-close:hover {
+  color: #24406e;
+}
+
+.prep-modal-facts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 16px;
+  margin: 14px 0 0;
+}
+
+.prep-modal-facts dt {
+  color: #7a879c;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.prep-modal-facts dd {
+  margin: 2px 0 0;
+}
+
+.prep-modal-missing {
+  color: #9a6a10;
+}
+
+.prep-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 18px;
+}
+
+@media (max-width: 720px) {
+  .prep-quotation-chip {
+    flex: 1 1 100%;
+  }
+
+  .prep-modal-facts {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* ---- Menu item > Odoo product details (MenuItemDetails.tsx) -----------
+   Kept for the standalone product form; the menu editor no longer opens
+   it. */
+.menu-detail-panel {
+  flex: 1 1 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 12px;
+  padding: 14px;
+  background: var(--color-surface-alt);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+
+.menu-detail-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.menu-detail-title {
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+
+.menu-detail-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.menu-detail-dirty {
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--color-ember);
+}
+
+/* Form pages, mirroring the tabs on Odoo's own product form. */
+.menu-detail-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  border-bottom: 1px solid var(--color-border);
+  padding-bottom: 8px;
+}
+
+.menu-detail-tab {
+  padding: 6px 11px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-text-muted);
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.menu-detail-tab.is-active {
+  background: var(--color-ember);
+  border-color: var(--color-ember);
+  color: var(--color-surface);
+}
+
+/* Marks a page holding unsaved edits, so switching tabs doesn't hide the
+   fact that something is still pending on another one. */
+.menu-detail-tab-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-left: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  vertical-align: middle;
+}
+
+.menu-detail-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 12px;
+}
+
+.menu-detail-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+
+.menu-detail-field.is-wide {
+  grid-column: 1 / -1;
+}
+
+.menu-detail-field.is-check {
+  flex-direction: row-reverse;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.menu-detail-label {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+
+/* Odoo's technical field name, kept visible: it's what an Odoo filter, an
+   import file or a support question needs, and it disambiguates the several
+   fields that share a label. */
+.menu-detail-tech {
+  font-size: 0.68rem;
+  font-weight: 500;
+  font-style: normal;
+  text-transform: none;
+  letter-spacing: normal;
+  color: var(--color-text-muted);
+  opacity: 0.65;
+}
+
+.menu-detail-required {
+  font-size: 0.65rem;
+  font-style: normal;
+  color: var(--color-ember);
+}
+
+.menu-detail-field input[type='text'],
+.menu-detail-field input[type='number'],
+.menu-detail-field input[type='date'],
+.menu-detail-field select,
+.menu-detail-field textarea {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font: inherit;
+  font-size: 0.88rem;
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+.menu-detail-field textarea {
+  resize: vertical;
+}
+
+.menu-detail-field.is-check input[type='checkbox'] {
+  width: auto;
+}
+
+/* An edited-but-unsaved field, so what's pending is obvious at a glance. */
+.menu-detail-field.is-changed input,
+.menu-detail-field.is-changed select,
+.menu-detail-field.is-changed textarea {
+  border-color: var(--color-ember);
+}
+
+.menu-detail-relation {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.menu-detail-relation-controls {
+  display: flex;
+  gap: 6px;
+}
+
+.menu-detail-relation-controls select {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.menu-detail-relation-controls input {
+  flex: 0 1 40%;
+  min-width: 0;
+}
+
+.menu-detail-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.menu-detail-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 6px 3px 9px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 999px;
+  background: var(--color-surface);
+  font-size: 0.78rem;
+  font-weight: 600;
+  text-transform: none;
+  letter-spacing: normal;
+  color: var(--color-text);
+}
+
+.menu-detail-chip-remove {
+  border: none;
+  background: none;
+  color: var(--color-text-muted);
+  font-size: 1rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 2px;
+}
+
+.menu-detail-chip-remove:hover {
+  color: var(--color-ember-dark);
+}
+
+.menu-detail-note {
+  font-size: 0.75rem;
+  font-weight: 500;
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+.menu-detail-note.is-error {
+  color: var(--color-ember-dark);
+}
+
+/* ---- Edit Menu > Recipe section ---------------------------------------- */
+/* The kitchen half of a menu item (MenuItemRecipe.tsx), the second section of
+   an open dish card. Its line is a name on the left and one small number on
+   the right, since a recipe is read down the quantity column — "how much
+   chicken, how much sauce" — not field by field. */
+
+.menu-recipe-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.menu-recipe-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.menu-recipe-group-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 10px;
+  padding: 4px 0;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.menu-recipe-group-title {
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+
+.menu-recipe-group-hint {
+  font-size: 0.78rem;
+  color: var(--color-text-muted);
+}
+
+.menu-recipe-line {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px 12px;
+  padding: 7px 8px;
+  border-radius: var(--radius-sm);
+}
+
+.menu-recipe-line:hover {
+  background: var(--color-surface-alt);
+}
+
+/* An unsaved line is marked on the row itself — the save button is at the
+   bottom of a panel that scrolls, so "what did I change" has to be visible
+   next to the number, not only in the count up top. */
+.menu-recipe-line.is-changed {
+  background: rgba(217, 72, 15, 0.08);
+  box-shadow: inset 2px 0 0 var(--color-ember);
+}
+
+.menu-recipe-name {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.menu-recipe-inputs {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.menu-recipe-qty {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.menu-recipe-qty input[type='number'] {
+  width: 92px;
+  padding: 6px 8px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font: inherit;
+  font-size: 0.88rem;
+  text-align: right;
+}
+
+.menu-recipe-unit {
+  min-width: 34px;
+  font-size: 0.8rem;
+  color: var(--color-text-muted);
+}
+
+.menu-recipe-arrow {
+  color: var(--color-text-muted);
+  opacity: 0.7;
+}
+
+/* Spans both columns so a note or a warning sits under its own line rather
+   than pushing the number out of alignment with the rows around it. */
+.menu-recipe-drift,
+.menu-recipe-note {
+  grid-column: 1 / -1;
+  font-size: 0.78rem;
+  line-height: 1.35;
+  color: var(--color-text-muted);
+}
+
+.menu-recipe-drift {
+  font-weight: 700;
+  color: var(--color-ember);
 }
