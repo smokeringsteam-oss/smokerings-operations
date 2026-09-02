@@ -1,0 +1,21 @@
+{
+  // SQLite Viewer, pointed at server/data/smokerings.db.
+  //
+  // The server holds that database open in WAL mode and writes to it on every
+  // request. "never" keeps the viewer's cell edits in a dirty buffer until an
+  // explicit Ctrl+S, so a stray double-click in a grid can't silently commit
+  // over operational data the app just wrote. Reads are always live.
+  "sqliteViewer.instantCommit": "never",
+
+  // The -wal and -shm sidecars are SQLite's own bookkeeping; the viewer reads
+  // them itself. Hiding them keeps server/data down to the one file worth
+  // opening.
+  "files.exclude": {
+    "**/*.db-wal": true,
+    "**/*.db-shm": true
+  },
+
+  // server/data is gitignored (see .gitignore); this makes sure the explorer
+  // still shows it, since the database is the thing you came to look at.
+  "explorer.excludeGitIgnore": false
+}

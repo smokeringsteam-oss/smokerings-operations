@@ -4,7 +4,12 @@
     "skipLibCheck": true,
     "module": "ESNext",
     "moduleResolution": "bundler",
-    "allowSyntheticDefaultImports": true
+    "allowSyntheticDefaultImports": true,
+    // Without this, `tsc -b` emits vite.config.js + vite.config.d.ts next to
+    // the source. Vite resolves vite.config.js ahead of vite.config.ts, so the
+    // stale build output silently becomes the config that actually loads.
+    "noEmit": true,
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.node.tsbuildinfo"
   },
   "include": ["vite.config.ts"]
 }

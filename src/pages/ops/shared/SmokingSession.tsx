@@ -61,7 +61,13 @@ type Purchase = {
   vendor_name: string;
   quantity_purchased: number;
   unit_of_measure: string;
+  // `remaining` is in kg for a lot bought by the piece that recorded what a
+  // piece weighs (four whole chickens minus a 1.6 kg cook is 4.8 kg left, not
+  // 2.4 birds), and in the bought unit otherwise. `remaining_unit` says
+  // which, so the picker never has to guess.
   remaining: number;
+  remaining_unit: string;
+  weight_per_unit_kg?: number | null;
 };
 
 // A purchase_log.csv line this cook could be charged with — see
@@ -563,8 +569,8 @@ const SmokingSession: React.FC<{ channel?: Channel }> = ({ channel: defaultChann
       const resp = await fetch('/api/smoking/sessions/marinate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        // Id only — the server resolves the account name off b2b_clients.csv,
-        // and drops the tag entirely on a B2C cook.
+        // Id only — the server resolves the account name off the B2B client
+        // book, and drops the tag entirely on a B2C cook.
         body: JSON.stringify({ lines, pitmaster, brineRecipe, brineStart, brineEnd, channel, purpose, clientId }),
       });
       const data = await readJson<{ sessions?: Session[]; error?: string }>(resp);
@@ -1209,7 +1215,11 @@ const SmokingSession: React.FC<{ channel?: Channel }> = ({ channel: defaultChann
                         {availablePurchases.map((p) => (
                           <option key={p.purchase_id} value={p.purchase_id}>
                             {p.purchase_id} — {p.vendor_name || 'unknown vendor'} — {p.purchase_date} ({p.remaining}
-                            {p.unit_of_measure || 'kg'} left)
+                            {p.remaining_unit || p.unit_of_measure || 'kg'} left
+                            {p.weight_per_unit_kg
+                              ? `, bought as ${p.quantity_purchased} × ${p.weight_per_unit_kg} kg`
+                              : ''}
+                            )
                           </option>
                         ))}
                       </select>

@@ -49,8 +49,15 @@
 //                      IP-xxx smoked products (was meat_yield_params.csv),
 //                      told apart by `kind`. output_quantity/output_unit
 //                      hold the batch yield where known.
-import { readCsvFile } from '../../core/csvStore.js';
-import { requireFile } from '../../core/knowledgeBase.js';
+// Read from SQLite as of phase 1, not from the three CSVs described above.
+// The column names below are unchanged — kbViews re-flattens the normalized
+// menu_item / recipe / bom_line rows back into exactly the shape these files
+// had, so the batch maths and gap reporting in this module didn't have to be
+// touched. The CSV names are kept throughout the comments here because they
+// are still what the knowledge-base repo calls these tables, and the gap
+// messages this module writes are read by whoever goes and fixes the data
+// there.
+import { readMenu, readRecipes, readRecipeLines } from '../../core/kbViews.js';
 import { getRawMaterials } from '../../core/inventoryStore.js';
 import { getVendors } from '../shared/purchasing.js';
 // The meat categories, their loss %s and which cut each one is bought as —
@@ -138,7 +145,7 @@ const SIDE_PREP_TIER = {
 };
 
 function getMenu() {
-  return readCsvFile(requireFile('menu')).rows;
+  return readMenu();
 }
 
 // recipe_lines.csv keys everything off ids from three non-colliding spaces —
@@ -150,7 +157,7 @@ const isProductId = (id) => /^IP-/.test(id || '');
 const isMenuId = (id) => !!id && !isSubRecipeId(id) && !isProductId(id);
 
 function getRecipeLines() {
-  return readCsvFile(requireFile('recipeLines')).rows;
+  return readRecipeLines();
 }
 
 // The per-order BoM of each sellable dish (v1: menu_recipe_ingredients.csv).
@@ -162,7 +169,7 @@ function getMenuRecipeLines() {
 // now merged with meat_yield_params.csv). Keyed recipe_id either way, so the
 // SR-xxx lookups below are unaffected by the IP-xxx rows sharing the file.
 function getRecipes() {
-  return readCsvFile(requireFile('recipes')).rows;
+  return readRecipes();
 }
 
 // The raw-ingredient breakdown of each SR-xxx sub-recipe (v1:

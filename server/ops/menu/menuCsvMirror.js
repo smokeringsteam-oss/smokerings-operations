@@ -12,18 +12,46 @@
 // happened and can't be rolled back honestly, and the knowledge-base repo
 // may not even be checked out on this machine — so every path here returns
 // { mirrored, reason } and the dashboard surfaces it as a note.
-import { readCsvFile, writeCsvFile } from '../../core/csvStore.js';
-import { filePath, FILES } from '../../core/knowledgeBase.js';
+//
+// Writes the database rather than menu.csv as of phase 1. The name is kept
+// (the file, the exported function, and the `csv` key menuItems.js returns to
+// the dashboard) so this stayed a change of destination rather than a rename
+// sweep through the UI; what it mirrors onto is the knowledge base, which is
+// a database now.
+//
+// The one structural difference: a menu.csv row was one row, and its
+// database equivalent spans two tables — the name and the active flag belong
+// to `item`, which every kind of thing shares, while price and description
+// are specific to a menu item. So a single mirror can write both, and does it
+// in one transaction: a price that saved while the name silently didn't would
+// be a worse outcome than neither saving.
+import { readMenu } from '../../core/kbViews.js';
+import { transaction, update } from '../../core/repo.js';
 import { matchProduct } from '../../integrations/odoo.js';
-import fs from 'fs';
 
 // Which menu.csv column each mirrorable field lands in. Odoo's picture has no
 // column here at all, which is why setMenuItemImage doesn't call this.
+//
+// These are still the CSV's column names, because they are what the `changed`
+// list reports back to the dashboard and what the knowledge-base repo calls
+// them. TARGETS below says where each one now actually lives.
 const COLUMNS = {
   name: 'item_name',
   price: 'price_inr',
   description: 'description',
   available: 'is_active',
+};
+
+// CSV column -> the table and column it became. `encode` converts a CSV
+// value to what the column stores: is_active was 'yes'/'no' text and is an
+// INTEGER flag now, and the two prices are REAL rather than the strings a
+// cell always was.
+const TARGETS = {
+  item_name: { table: 'item', column: 'name' },
+  is_active: { table: 'item', column: 'is_active', encode: (v) => (v === 'yes' ? 1 : 0) },
+  price_inr: { table: 'menu_item', column: 'price_inr', encode: (v) => (v === '' ? null : Number(v)) },
+  description: { table: 'menu_item', column: 'description' },
+  odoo_product_id: { table: 'menu_item', column: 'odoo_product_id', encode: (v) => (v === '' ? null : Number(v)) },
 };
 
 // The column that pins a CSV row to its Odoo product. It ships blank for
@@ -77,27 +105,27 @@ function findRow(rows, item) {
 // whatever Odoo happens to hold in description_sale.
 function mirrorMenuItemToCsv(item, fields = []) {
   try {
-    const path = filePath('menu');
-    if (!fs.existsSync(path)) {
-      return {
-        mirrored: false,
-        reason: `Saved to Odoo, but ${FILES.menu} isn't at ${path}, so the knowledge-base copy wasn't updated. Set KNOWLEDGE_BASE_DATA_DIR in the server's .env if that repo lives somewhere else.`,
-      };
-    }
-
-    const { header, rows, eol } = readCsvFile(path);
+    const rows = readMenu();
     const { row, matchedBy } = findRow(rows, item);
     if (!row) {
       return {
         mirrored: false,
-        reason: `Saved to Odoo, but no row in ${FILES.menu} matches "${item.name}". Add one (or put ${item.id} in its ${PIN_COLUMN} column) to keep the knowledge base in step.`,
+        reason: `Saved to Odoo, but no menu item matches "${item.name}". Add one (or put ${item.id} in its ${PIN_COLUMN} column) to keep the knowledge base in step.`,
       };
     }
 
     const changed = [];
+    const writes = { item: {}, menu_item: {} };
+    // Compared as text on both sides. The CSV held every cell as a string and
+    // this function's callers still pass strings, but the row read back now
+    // carries real numbers — so a price of 349 that nobody edited would look
+    // different from the "349" being written, and every save would report a
+    // change it did not make.
     const set = (column, value) => {
-      if (!header.includes(column) || row[column] === value) return;
-      row[column] = value;
+      const target = TARGETS[column];
+      if (!target) return;
+      if (String(row[column] ?? '') === String(value ?? '')) return;
+      writes[target.table][target.column] = target.encode ? target.encode(value) : value;
       changed.push(column);
     };
 
@@ -114,11 +142,19 @@ function mirrorMenuItemToCsv(item, fields = []) {
     // value actually changed — that's what makes the *next* rename findable.
     set(PIN_COLUMN, String(item.id));
 
-    if (changed.length) writeCsvFile(path, header, rows, eol);
+    if (changed.length) {
+      transaction(() => {
+        if (Object.keys(writes.item).length) update('item', { item_id: row.menu_id }, writes.item);
+        if (Object.keys(writes.menu_item).length) update('menu_item', { item_id: row.menu_id }, writes.menu_item);
+      });
+    }
 
     return { mirrored: true, menuId: row.menu_id, matchedBy, changed };
   } catch (err) {
-    return { mirrored: false, reason: `Saved to Odoo, but ${FILES.menu} couldn't be updated: ${err.message || String(err)}` };
+    return {
+      mirrored: false,
+      reason: `Saved to Odoo, but the knowledge base couldn't be updated: ${err.message || String(err)}`,
+    };
   }
 }
 
@@ -135,9 +171,7 @@ function mirrorMenuItemToCsv(item, fields = []) {
 function resolveMenuIds(items) {
   const resolved = new Map();
   try {
-    const path = filePath('menu');
-    if (!fs.existsSync(path)) return resolved;
-    const { rows } = readCsvFile(path);
+    const rows = readMenu();
     const claimed = new Set();
     (items || []).forEach((item) => {
       const { row } = findRow(rows.filter((candidate) => !claimed.has(candidate)), item);

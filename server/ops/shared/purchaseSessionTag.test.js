@@ -1,73 +1,106 @@
-// Covers the B2B cost-attribution chain: which purchase_log.csv line ends up
-// charged to which cook, and to which account.
+// Covers the B2B cost-attribution chain: which purchase line ends up charged
+// to which cook, and to which account.
 //
-// Two link columns exist between these two files and it matters that they
-// stay separate, so most of what's tested here is the boundary between them:
-//   smoking_log.csv   source_purchase_id  — where a session's raw weight came
-//                                           from (one lot, drives FIFO maths)
-//   purchase_log.csv  smoking_session_id  — which cook a line of spend was
-//                                           for (many lines, and it includes
-//                                           the spices and packaging that
-//                                           never had a weight of their own)
+// Two link columns exist between purchases and sessions and it matters that
+// they stay separate, so most of what's tested here is the boundary between
+// them:
+//   smoking_session.source_purchase_id — where a session's raw weight came
+//                                        from (one lot, drives FIFO maths)
+//   purchase.smoking_session_id        — which cook a line of spend was for
+//                                        (many lines, and it includes the
+//                                        spices and packaging that never had
+//                                        a weight of their own)
 // The rules worth pinning down are the ones a future edit could plausibly
 // "simplify" into being wrong: a tag must never be stolen from another cook,
 // a client set on the buy itself must outrank the session's, and deleting a
 // session must free the spend rather than delete it.
 import { describe, it, expect, beforeEach, afterAll } from 'vitest';
-import fs from 'fs';
-import os from 'os';
-import path from 'path';
-import { readCsvFile } from '../../core/csvStore.js';
+import { createTestDb, removeTestDb } from '../../core/testDb.js';
 
-const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'purchase-session-tag-'));
-process.env.KNOWLEDGE_BASE_DATA_DIR = dataDir;
-fs.mkdirSync(path.join(dataDir, 'Purchase'), { recursive: true });
-fs.mkdirSync(path.join(dataDir, 'Inventory'), { recursive: true });
-const purchasesPath = path.join(dataDir, 'Purchase', 'purchase_log.csv');
+const VENDORS = [
+  { vendor_id: 'VEN-001', vendor_name: 'Pork Shop', vendor_type: 'Meat Vendor', supplies_category: 'Pork' },
+  { vendor_id: 'VEN-002', vendor_name: 'Swiggy', vendor_type: 'Delivery', supplies_category: 'Groceries' },
+];
 
-const { tagPurchasesToSession, clearSessionPurchaseTags, recordPurchases } = await import('./purchasing.js');
+// One catalogue material, so a purchase line can name a real item_id — that
+// is a foreign key now, not a convention. Its quantity_on_hand moves when
+// recordPurchases runs, which is deliberate: these tests exercise the real
+// write path, stock move and all.
+// RM-047 stands in for the piece-bought half of the catalogue: the butcher
+// counts and prices whole birds, the kitchen works in kg, so a line has to be
+// able to carry both. Its unit of measure is pcs on purpose — that is what
+// moves stock — and the kg comes from weight_per_unit_kg beside it.
+const MATERIALS = [
+  { item_id: 'RM-001', item_name: 'Pork shoulder', category: 'Meat', quantity_on_hand: 0 },
+  { item_id: 'RM-047', item_name: 'Whole chicken', category: 'Meat', unit_of_measure: 'pcs', quantity_on_hand: 0 },
+];
 
-// The post-migration header. purchasesFile() only checks for the added
-// columns once per process (the file is small, but every call would otherwise
-// re-parse it for a migration that has already run), and beforeEach below
-// rewrites this file between tests. A pre-migration fixture here would
-// therefore migrate on the first test only, then silently drop the new
-// columns on every one after it. The migration itself is covered separately
-// in purchasingMigration.test.js, which gets its own fresh module registry.
-const HEADER =
-  'purchase_id,purchase_date,channel,client_id,client_name,smoking_session_id,vendor_id,vendor_name,' +
-  'item_type,material_id,item_name,quantity_purchased,unit_of_measure,unit_price,total_cost,currency';
-const FIXTURE =
-  [
-    HEADER,
-    'PUR-0001,2026-08-17,B2B,,,,VEN-001,Pork Shop,material,RM-001,Pork shoulder,10,kg,400,4000,INR',
-    'PUR-0002,2026-08-17,B2B,,,,VEN-002,Swiggy,,,Butcher paper,50,pcs,4,200,INR',
-    'PUR-0003,2026-08-17,B2C,,,,VEN-001,Pork Shop,material,RM-001,Pork shoulder,5,kg,400,2000,INR',
-  ].join('\n') + '\n';
+const PURCHASES = [
+  {
+    purchase_id: 'PUR-0001',
+    purchase_date: '2026-08-17',
+    channel: 'B2B',
+    vendor_id: 'VEN-001',
+    material_id: 'RM-001',
+    item_name: 'Pork shoulder',
+    quantity_purchased: 10,
+    unit_of_measure: 'kg',
+    unit_price: 400,
+    total_cost: 4000,
+  },
+  // No material_id: an ad hoc line that isn't in the catalogue. It matters to
+  // this file because "what did this cook cost" has to be able to include it.
+  {
+    purchase_id: 'PUR-0002',
+    purchase_date: '2026-08-17',
+    channel: 'B2B',
+    vendor_id: 'VEN-002',
+    item_name: 'Butcher paper',
+    quantity_purchased: 50,
+    unit_of_measure: 'pcs',
+    unit_price: 4,
+    total_cost: 200,
+  },
+  {
+    purchase_id: 'PUR-0003',
+    purchase_date: '2026-08-17',
+    channel: 'B2C',
+    vendor_id: 'VEN-001',
+    material_id: 'RM-001',
+    item_name: 'Pork shoulder',
+    quantity_purchased: 5,
+    unit_of_measure: 'kg',
+    unit_price: 400,
+    total_cost: 2000,
+  },
+];
 
-// vendors.csv is only read by recordPurchases, to resolve a vendor_id.
-fs.writeFileSync(
-  path.join(dataDir, 'Purchase', 'vendors.csv'),
-  'vendor_id,vendor_name,vendor_type,supplies_category,contact_person,phone,email,address,notes\n' +
-    'VEN-001,Pork Shop,Meat Vendor,Pork,,,,,\n',
-  'utf8',
+const { dir: dbDir } = createTestDb({ vendors: VENDORS, materials: MATERIALS, purchases: PURCHASES });
+
+const { run } = await import('../../core/db.js');
+const { insert } = await import('../../core/repo.js');
+const { tagPurchasesToSession, clearSessionPurchaseTags, recordPurchases, getPurchases } = await import(
+  './purchasing.js'
 );
-// materials.csv is read by adjustInventory; an empty catalog just means every
-// line is skipped for the inventory bump, which is fine here.
-fs.writeFileSync(
-  path.join(dataDir, 'Inventory', 'materials.csv'),
-  'material_id,item_name,category,unit_of_measure,quantity_on_hand,reorder_level,last_updated\n',
-  'utf8',
-);
 
-const rowFor = (id) => readCsvFile(purchasesPath).rows.find((r) => r.purchase_id === id);
+const rowFor = (id) => getPurchases().find((r) => r.purchase_id === id);
 
+// Every test starts from the same three purchases. Rebuilt rather than
+// patched back: recordPurchases adds rows of its own, and a leftover PUR-0004
+// would silently change which id the next test's buy gets.
 beforeEach(() => {
-  process.env.KNOWLEDGE_BASE_DATA_DIR = dataDir;
-  fs.writeFileSync(purchasesPath, FIXTURE, 'utf8');
+  run('DELETE FROM purchase');
+  PURCHASES.forEach((p) =>
+    insert('purchase', {
+      ...p,
+      item_type: p.material_id ? 'material' : null,
+    }),
+  );
 });
 
-afterAll(() => fs.rmSync(dataDir, { recursive: true, force: true }));
+afterAll(() => {
+  removeTestDb(dbDir);
+});
 
 describe('tagPurchasesToSession', () => {
   it('stamps the session and inherits its client onto each line', () => {
@@ -78,7 +111,7 @@ describe('tagPurchasesToSession', () => {
       clientName: 'Taj Hotel',
     });
 
-    expect(result.tagged).toEqual(['PUR-0001', 'PUR-0002']);
+    expect(result.tagged.sort()).toEqual(['PUR-0001', 'PUR-0002']);
     // The packaging line matters as much as the meat: "what did this cook
     // cost" is the whole point, and the answer isn't only the meat.
     expect(rowFor('PUR-0002')).toMatchObject({ smoking_session_id: 'SMK-0001', client_name: 'Taj Hotel' });
@@ -179,7 +212,7 @@ describe('clearSessionPurchaseTags', () => {
     expect(rowFor('PUR-0001')).toMatchObject({
       smoking_session_id: '',
       client_name: 'Taj Hotel',
-      total_cost: '4000',
+      total_cost: 4000,
     });
   });
 });
@@ -206,8 +239,14 @@ describe('recordPurchases client tag', () => {
 
     // Per line, because one butcher run routinely covers two accounts and one
     // cart routinely mixes a client's meat with packaging bought for nobody.
-    expect(purchases[0]).toMatchObject({ client_id: 'CLI-001', client_name: 'Taj Hotel' });
-    expect(purchases[1]).toMatchObject({ client_id: '', client_name: '' });
+    expect(purchases.find((p) => p.item_name === 'Pork shoulder')).toMatchObject({
+      client_id: 'CLI-001',
+      client_name: 'Taj Hotel',
+    });
+    expect(purchases.find((p) => p.item_name === 'Butcher paper')).toMatchObject({
+      client_id: '',
+      client_name: '',
+    });
     // Never pre-set here — the cook doesn't exist yet at buying time.
     expect(purchases.every((p) => p.smoking_session_id === '')).toBe(true);
   });
@@ -231,5 +270,82 @@ describe('recordPurchases client tag', () => {
     });
 
     expect(purchases[0]).toMatchObject({ client_id: '', client_name: '' });
+  });
+
+  it('refuses a vendor that isn\'t in the book rather than inventing one', () => {
+    // vendor_id is a foreign key now. The screen picks from a dropdown, so
+    // the only way here is a name that was never added — and a purchase
+    // logged against a vendor nobody can look up is worse than a refusal.
+    expect(() =>
+      recordPurchases({
+        vendorName: 'Some Bloke At The Market',
+        channel: 'B2C',
+        lines: [{ itemName: 'Charcoal', unit: 'kg', quantity: 10, unitPrice: 30 }],
+      }),
+    ).toThrow(/No vendor called/);
+  });
+
+  it('records a piece-bought line as a count, a piece weight and a total in kg', () => {
+    const { purchases } = recordPurchases({
+      vendorName: 'Pork Shop',
+      purchaseDate: '2026-08-18',
+      channel: 'B2B',
+      lines: [
+        { materialId: 'RM-047', itemName: 'Whole chicken', unit: 'pcs', quantity: 4, unitPrice: 450, weightPerUnitKg: 1.6 },
+      ],
+    });
+
+    // The count stays the quantity — that is what the vendor invoices and
+    // what moves stock — and the cost is per bird, so the line totals to four
+    // birds' worth of money, not four kilos' worth.
+    expect(purchases[0]).toMatchObject({
+      quantity_purchased: 4,
+      unit_of_measure: 'pcs',
+      unit_price: 450,
+      total_cost: 1800,
+      weight_per_unit_kg: 1.6,
+      // Derived on read rather than stored, so it can never disagree with the
+      // two numbers it comes from.
+      total_weight_kg: 6.4,
+    });
+  });
+
+  it('leaves the piece weight blank when nobody weighed them', () => {
+    const { purchases } = recordPurchases({
+      vendorName: 'Pork Shop',
+      purchaseDate: '2026-08-18',
+      channel: 'B2B',
+      lines: [{ materialId: 'RM-047', itemName: 'Whole chicken', unit: 'pcs', quantity: 4, unitPrice: 450 }],
+    });
+
+    // Same reason the price below can be blank: unweighed is a real answer,
+    // and a 0 would make the buy total to nothing in kg.
+    expect(purchases[0]).toMatchObject({ quantity_purchased: 4, weight_per_unit_kg: '', total_weight_kg: '' });
+  });
+
+  it('refuses a piece weight of zero, which is a mis-typed box not an unknown', () => {
+    expect(() =>
+      recordPurchases({
+        vendorName: 'Pork Shop',
+        purchaseDate: '2026-08-18',
+        channel: 'B2B',
+        lines: [
+          { materialId: 'RM-047', itemName: 'Whole chicken', unit: 'pcs', quantity: 4, unitPrice: 450, weightPerUnitKg: 0 },
+        ],
+      }),
+    ).toThrow(/Weight of one Whole chicken/);
+  });
+
+  it('records a line with no price rather than calling it free', () => {
+    const { purchases } = recordPurchases({
+      vendorName: 'Pork Shop',
+      purchaseDate: '2026-08-18',
+      channel: 'B2C',
+      lines: [{ materialId: 'RM-001', itemName: 'Pork shoulder', unit: 'kg', quantity: 2 }],
+    });
+
+    // Blank, not 0: the meat was bought, the bill hasn't arrived, and a zero
+    // would quietly total up as if it had been free.
+    expect(purchases[0]).toMatchObject({ quantity_purchased: 2, unit_price: '', total_cost: '' });
   });
 });

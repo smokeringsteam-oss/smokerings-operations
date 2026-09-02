@@ -177,6 +177,10 @@ h1, h2, h3, h4 {
 
 .app-main {
   flex: 1;
+  /* Without this a wide child (a <select> whose longest option is 600px, a
+     datetime-local input) sets the flex item's min-content width and the whole
+     page scrolls sideways instead of the child shrinking. */
+  min-width: 0;
   padding: 36px 40px;
 }
 
@@ -265,10 +269,100 @@ h1, h2, h3, h4 {
   color: var(--color-text-muted);
 }
 
+/* Mobile chrome: hidden on desktop, where the sidebar is always on-canvas. */
+.mobile-topbar,
+.sidebar-backdrop {
+  display: none;
+}
+
 /* Small screens */
 @media (max-width: 720px) {
-  .app-sidebar { display: none; }
+  .app-shell {
+    display: block;
+  }
+
+  .mobile-topbar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    position: sticky;
+    top: 0;
+    z-index: 40;
+    padding: 10px 14px;
+    background: linear-gradient(180deg, var(--color-charcoal) 0%, #1d150f 100%);
+    color: #f3e9de;
+    box-shadow: var(--shadow-sm);
+  }
+
+  .mobile-menu-toggle {
+    width: 42px;
+    height: 42px;
+    flex: none;
+    display: grid;
+    place-items: center;
+    font-size: 1.25rem;
+    line-height: 1;
+    color: #f3e9de;
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+  }
+
+  .mobile-topbar-title {
+    font-family: var(--font-display);
+    font-weight: 700;
+    font-size: 1rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* Off-canvas drawer: slides in over the page instead of being removed. */
+  .app-sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    z-index: 60;
+    width: min(84vw, 300px);
+    padding: 24px 18px;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    transform: translateX(-100%);
+    visibility: hidden;
+    transition: transform 240ms cubic-bezier(.2, .9, .2, 1), visibility 240ms;
+  }
+
+  .menu-open .app-sidebar {
+    transform: translateX(0);
+    visibility: visible;
+  }
+
+  .sidebar-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 50;
+    background: rgba(20, 14, 10, 0.5);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 240ms ease;
+  }
+
+  .menu-open .sidebar-backdrop {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
   .app-main { padding: 18px; }
+}
+
+@media (max-width: 720px) and (prefers-reduced-motion: reduce) {
+  .app-sidebar,
+  .sidebar-backdrop {
+    transition: none;
+  }
 }
 
 .wizard-page {
@@ -333,6 +427,7 @@ button.wizard-step:hover:not(.active) {
 
 .wizard-card {
   padding: 28px;
+  min-width: 0;
   background: var(--color-surface);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
@@ -356,6 +451,8 @@ button.wizard-step:hover:not(.active) {
 .wizard-card textarea,
 .wizard-card input {
   width: 100%;
+  min-width: 0;
+  max-width: 100%;
   padding: 12px 14px;
   margin-top: 8px;
   border: 1px solid var(--color-border-strong);
@@ -2222,6 +2319,8 @@ button.wizard-step:hover:not(.active) {
 
 .wizard-card select {
   width: 100%;
+  min-width: 0;
+  max-width: 100%;
   padding: 12px 14px;
   margin-top: 8px;
   border: 1px solid var(--color-border-strong);
@@ -2260,19 +2359,44 @@ button.wizard-step:hover:not(.active) {
 
 @media (max-width: 960px) {
   .purch-grid {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 
 .purch-side {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 24px;
 }
 
 .purch-form-row {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  /* minmax(0, 1fr), not 1fr: a bare 1fr floors each track at the item's
+     min-content width, which for a <select> is its longest option and for a
+     datetime-local input is ~230px — either one overflows the row. */
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 16px;
+}
+
+/* The piece-bought line (whole chicken): how many, what one weighs, what one
+   costs. Three boxes rather than the usual two, so the row needs a third
+   track — collapsing to two below 520px, where three number inputs side by
+   side stop being readable. */
+.purch-form-row-3 {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+@media (max-width: 520px) {
+  .purch-form-row-3 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+/* Tucked under the row it explains — the labels above already carry an 18px
+   bottom margin, and a second gap on top of it would read as a separate
+   paragraph rather than a footnote to those boxes. */
+.purch-piece-hint {
+  margin-top: -10px;
 }
 
 .purch-add-line {
@@ -5061,4 +5185,195 @@ td.csv-rownum-col {
 .menu-recipe-drift {
   font-weight: 700;
   color: var(--color-ember);
+}
+
+/* ======================================================================
+   Mobile / narrow-screen pass
+   ----------------------------------------------------------------------
+   Appended last on purpose: every rule below overrides an earlier rule of
+   the same specificity, so it has to come after the section it corrects.
+   The shell's off-canvas drawer lives higher up (see the 720px block near
+   the top); this section is about page content — form rows, panel headers,
+   wide tables and the padding budget on a 360-390px screen.
+   ====================================================================== */
+
+/* iOS Safari inflates text in portrait unless told not to, which breaks
+   layouts that were sized against the declared font sizes. */
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+@supports (min-height: 100dvh) {
+  .app-shell {
+    /* 100vh on mobile is the viewport *without* the browser chrome, so the
+       page always ran ~100px taller than the screen. dvh tracks the chrome. */
+    min-height: 100dvh;
+  }
+}
+
+@media (max-width: 720px) {
+  /* ---- Padding budget ---------------------------------------------------
+     Desktop card padding (24-28px a side) eats 15% of a 390px screen. */
+  .app-main {
+    padding: 16px 12px;
+  }
+
+  .page-card,
+  .wizard-card {
+    padding: 18px 16px;
+  }
+
+  .marketing-dashboard header {
+    padding: 20px 18px;
+  }
+
+  .marketing-dashboard header h2 {
+    font-size: 1.25rem;
+  }
+
+  .wizard-page,
+  .purch-page,
+  .csv-editor-page {
+    max-width: 100%;
+  }
+
+  /* ---- Form rows --------------------------------------------------------
+     Two side-by-side fields don't fit: a datetime-local input alone wants
+     ~230px, so the pair overflowed the viewport by 130px on Smoking Session
+     and by 330px on Weekly Purchasing. Stack them. */
+  .purch-form-row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0;
+  }
+
+  .wizard-card label {
+    margin-bottom: 14px;
+  }
+
+  /* Anything below 16px makes iOS Safari zoom the page in on focus and never
+     zoom back out — the single most common "the app went weird" on a phone.
+     Blanket rule rather than a class list so new fields inherit the fix; the
+     CSV grid is exempt because it is a spreadsheet in its own scroller and
+     16px cells would double its width for no gain. */
+  .app-main input:not([type='checkbox']):not([type='radio']),
+  .app-main select,
+  .app-main textarea {
+    font-size: 16px;
+  }
+
+  .csv-table input,
+  .csv-header-cell input {
+    font-size: 0.85rem;
+  }
+
+  /* ---- Panel headers ----------------------------------------------------
+     `justify-content: space-between` with a `flex: 0 0 auto` action group
+     (a 180px search box + a Refresh button) left the title ~90px wide, so
+     "B2C menu" wrapped one word per line and Refresh hung off the edge.
+     Drop the actions onto their own row instead. */
+  .svc-week-panel-head {
+    flex-wrap: wrap;
+  }
+
+  .svc-week-panel-head > div:first-child {
+    flex: 1 1 100%;
+    min-width: 0;
+  }
+
+  .svc-week-head-actions {
+    flex: 1 1 100%;
+    min-width: 0;
+  }
+
+  .menu-items-search {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  .svc-week-head-actions .secondary-button {
+    flex: 0 0 auto;
+  }
+
+  /* ---- Step rails -------------------------------------------------------
+     4 equal steps on a 366px content box is ~80px each — the labels clip.
+     Let them wrap the way Smoking Session's already do. */
+  .wizard-steps {
+    flex-wrap: wrap;
+  }
+
+  .wizard-step {
+    flex: 1 1 140px;
+    padding: 10px 12px;
+    font-size: 0.82rem;
+  }
+
+  .top-tabs {
+    flex-wrap: wrap;
+  }
+
+  /* ---- Wide tables ------------------------------------------------------
+     .prep-table already sits in a .prep-table-wrap scroller. This one never
+     had a wrapper, so it pushed the whole page sideways; making the table
+     itself the scroll container fixes it without touching the JSX. */
+  .b2b-demand-table {
+    display: block;
+    width: 100%;
+    overflow-x: auto;
+  }
+
+  /* The scrollers need to be able to shrink inside their flex/grid parents,
+     or they size to the table and scroll nothing. */
+  .prep-table-wrap,
+  .csv-grid-wrap {
+    max-width: 100%;
+    min-width: 0;
+  }
+
+  .prep-table {
+    min-width: 520px;
+  }
+
+  .prep-table th,
+  .prep-table td {
+    padding: 8px 9px;
+    font-size: 0.84rem;
+  }
+
+  /* A 320px cap made sense in a multi-column wrap; on one column it just
+     leaves 50px of dead space down the right of every week card. */
+  .svc-week-card {
+    max-width: none;
+  }
+
+  /* ---- Grids that were pinned to a fixed column count -------------------
+     Only .slot-picker needs help: everything else already uses
+     `auto-fit, minmax(...)`, which reflows on its own. Forcing those to one
+     column would be a regression at 600-720px, where two still fit. */
+  .slot-picker {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  /* ---- Touch targets ---------------------------------------------------- */
+  .tab-button,
+  .primary-button,
+  .secondary-button {
+    min-height: 42px;
+  }
+
+  .primary-button,
+  .secondary-button {
+    max-width: 100%;
+  }
+}
+
+/* Very narrow phones (<=400px): the 4-slot picker and the stat tiles go to a
+   single column rather than squeezing two columns of clipped text. */
+@media (max-width: 400px) {
+  .slot-picker {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .wizard-step {
+    flex: 1 1 100%;
+  }
 }

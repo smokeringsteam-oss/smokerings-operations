@@ -1,6 +1,7 @@
 // The recipe behind one menu item — how much meat, which sides and sauces,
 // and the packaging that goes with it — read from and written back to the
-// knowledge-base recipe_lines.csv.
+// bill-of-materials table (the knowledge-base repo's recipe_lines.csv, which
+// this moved off in phase 1 of the SQLite migration).
 //
 // This is the other half of the Edit Menu screen. server/ops/menu/menuItems.js edits
 // what the *customer* sees (name, price, picture, availability, all in Odoo);
@@ -23,9 +24,15 @@
 // and side line. When they differ — "2 sheets" of foil stocked as 0.0667 of a
 // roll — the conversion isn't ours to guess, so both numbers are editable
 // side by side and the caller is told which one the planner uses.
-import fs from 'fs';
-import { readCsvFile, writeCsvFile } from '../../core/csvStore.js';
-import { filePath, FILES } from '../../core/knowledgeBase.js';
+//
+// Moved onto the database with server/ops/b2c/recipes.js rather than after it,
+// deliberately. That module reads the BoM to build the shopping list; this one
+// writes it. Leaving this on the CSV for a later phase would have split the
+// two — a recipe edited here would have gone into a file the planner no longer
+// reads, and the weekend's meat weight would quietly have gone on using the
+// old amount with nothing to show anything had been missed.
+import { readRecipeLines } from '../../core/kbViews.js';
+import { selectOne, transaction, update } from '../../core/repo.js';
 
 // recipe_lines.csv keys parents and children off three non-colliding id
 // spaces — menu slugs, SR-xxx sub-recipes, IP-xxx smoked products — so the
@@ -62,17 +69,6 @@ function badRequest(message) {
   return err;
 }
 
-function requireRecipeLinesFile() {
-  const path = filePath('recipeLines');
-  if (!fs.existsSync(path)) {
-    const err = new Error(
-      `Can't find ${FILES.recipeLines} at ${path}. Set KNOWLEDGE_BASE_DATA_DIR in the server's .env if the knowledge-base repo lives somewhere else.`,
-    );
-    err.status = 503;
-    throw err;
-  }
-  return path;
-}
 
 function toLine(row) {
   const quantity = parseQty(row.quantity);
@@ -115,9 +111,10 @@ function sortLines(lines) {
 function getMenuItemRecipe({ menuId }) {
   const id = clean(menuId);
   if (!id) throw badRequest('A menu id is required to read a recipe.');
-  const path = requireRecipeLinesFile();
-  const lines = readCsvFile(path)
-    .rows.filter((row) => row.parent_id === id)
+  // kbViews hands these back in recipe_lines.csv's exact column shape, so
+  // toLine below is unchanged from the CSV version.
+  const lines = readRecipeLines()
+    .filter((row) => row.parent_id === id)
     .map(toLine);
   return { menuId: id, lines: sortLines(lines), editable: true };
 }
@@ -128,26 +125,21 @@ function getMenuItemRecipe({ menuId }) {
 // the menu advertises a portion the kitchen no longer plates, so a meat edit
 // carries it along and says so. Only when the units already agree: a portion
 // written in a different unit is a judgement call, not a copy.
-function mirrorPortionToMenuCsv({ menuId, grams, unit }) {
+function mirrorPortionToMenuItem({ menuId, grams, unit }) {
   try {
-    const path = filePath('menu');
-    if (!fs.existsSync(path)) return null;
-    const { header, rows, eol } = readCsvFile(path);
-    const row = rows.find((r) => r.menu_id === menuId);
-    if (!row || !header.includes('portion_size')) return null;
+    const row = selectOne('menu_item', { item_id: menuId });
+    if (!row) return null;
     if (!sameUnit(row.portion_unit, unit)) {
-      return `menu.csv still lists a portion of ${clean(row.portion_size)} ${clean(row.portion_unit)} — left alone, since it isn't in ${unit}.`;
+      return `The menu still lists a portion of ${clean(row.portion_size)} ${clean(row.portion_unit)} — left alone, since it isn't in ${unit}.`;
     }
-    const next = toCell(grams);
-    if (clean(row.portion_size) === next) return null;
+    if (parseQty(row.portion_size) === grams) return null;
     const was = clean(row.portion_size);
-    row.portion_size = next;
-    writeCsvFile(path, header, rows, eol);
-    return `menu.csv portion_size updated ${was} → ${next} ${unit} to match.`;
+    update('menu_item', { item_id: menuId }, { portion_size: grams });
+    return `Menu portion size updated ${was} → ${toCell(grams)} ${unit} to match.`;
   } catch (err) {
     // The recipe write already succeeded and can't be rolled back honestly,
-    // so this degrades to a note exactly like the Odoo -> menu.csv mirror.
-    return `Recipe saved, but menu.csv's portion_size couldn't be updated: ${err.message || String(err)}`;
+    // so this degrades to a note exactly like the Odoo -> menu mirror.
+    return `Recipe saved, but the menu's portion size couldn't be updated: ${err.message || String(err)}`;
   }
 }
 
@@ -164,15 +156,13 @@ function updateMenuItemRecipe({ menuId, edits }) {
   if (!id) throw badRequest('A menu id is required to save a recipe.');
   if (!Array.isArray(edits) || !edits.length) throw badRequest('Nothing to save.');
 
-  const path = requireRecipeLinesFile();
-  const { header, rows, eol } = readCsvFile(path);
-  const byLineId = new Map(rows.map((row) => [row.line_id, row]));
+  const byLineId = new Map(readRecipeLines().map((row) => [row.line_id, row]));
 
   const planned = [];
   edits.forEach((edit) => {
     const lineId = clean(edit && edit.lineId);
     const row = byLineId.get(lineId);
-    if (!row) throw badRequest(`${FILES.recipeLines} has no line ${lineId || '(blank)'}.`);
+    if (!row) throw badRequest(`There's no recipe line ${lineId || '(blank)'}.`);
     // The dish being edited fences the write: a line id from another recipe
     // can't be repriced through this dish's editor.
     if (row.parent_id !== id) throw badRequest(`Line ${lineId} belongs to ${row.parent_id}, not ${id}.`);
@@ -197,23 +187,29 @@ function updateMenuItemRecipe({ menuId, edits }) {
     planned.push({ row, lineId, quantity, baseQuantity, unitsMatch });
   });
 
-  const changed = [];
-  planned.forEach(({ row, lineId, quantity, baseQuantity }) => {
-    const before = { quantity: clean(row.quantity), base: clean(row.base_quantity) };
-    row.quantity = toCell(quantity);
-    row.base_quantity = toCell(baseQuantity);
-    if (before.quantity !== row.quantity || before.base !== row.base_quantity) changed.push(lineId);
-  });
-
-  if (changed.length) writeCsvFile(path, header, rows, eol);
+  const changed = planned.filter(
+    ({ row, quantity, baseQuantity }) => parseQty(row.quantity) !== quantity || parseQty(row.base_quantity) !== baseQuantity,
+  );
+  // One transaction for the whole save. A recipe edit is several lines at
+  // once and they only make sense together: half a saved recipe is a meat
+  // weight computed from the new burger portion and the old sauce portion,
+  // which is a number nobody asked for and nothing flags.
+  if (changed.length) {
+    transaction(() => {
+      changed.forEach(({ row, quantity, baseQuantity }) => {
+        update('bom_line', { line_id: row.line_id }, { quantity, base_quantity: baseQuantity });
+      });
+    });
+  }
+  const changedIds = changed.map(({ lineId }) => lineId);
 
   // A meat edit carries the menu's stated portion with it (see above). Only
   // one meat line per dish in practice; if there were two, the first written
   // is the one the portion follows.
   const notes = [];
-  const meat = planned.find(({ row }) => isProductId(row.child_id) && changed.includes(row.line_id));
+  const meat = planned.find(({ row }) => isProductId(row.child_id) && changedIds.includes(row.line_id));
   if (meat) {
-    const note = mirrorPortionToMenuCsv({
+    const note = mirrorPortionToMenuItem({
       menuId: id,
       grams: meat.baseQuantity,
       unit: clean(meat.row.base_unit) || clean(meat.row.unit),
@@ -228,7 +224,7 @@ function updateMenuItemRecipe({ menuId, edits }) {
       );
     });
 
-  return { ...getMenuItemRecipe({ menuId: id }), changed, notes };
+  return { ...getMenuItemRecipe({ menuId: id }), changed: changedIds, notes };
 }
 
 export { getMenuItemRecipe, updateMenuItemRecipe };

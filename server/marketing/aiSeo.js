@@ -14,60 +14,35 @@
 //            from training data, which says nothing about today's web.
 //   manual — the same scoring pass over an answer pasted in by hand, for
 //            ChatGPT/Perplexity/Copilot where there's no API key here.
-// Both land in the same aiseo_runs.csv, tagged with which engine produced
+// Both land in the same aiseo_run table, tagged with which engine produced
 // them, so the history is comparable across engines.
 //
-// Storage is the knowledge-base repo's Data folder (see knowledgeBase.js),
-// same as vendors/inventory/weekend status. Both files are created on first
-// use, so a fresh checkout doesn't need them committed ahead of time.
-import fs from 'fs';
-import path from 'path';
+// Storage is the SQLite database (server/core/db.js), migrated off
+// aiseo_prompts.csv / aiseo_runs.csv. The two tables are part of the schema,
+// so there is no file to create on first use and no header to patch when a
+// column is added — the migration that used to rewrite a runs file written
+// before `recommendation` existed is gone, because a schema change gives
+// every row the column at once. Writes go through core/repo.js like every
+// other module's; nothing here touches a file.
 import { GoogleGenAI, Type } from '@google/genai';
-import { readCsvFile, writeCsvFile, appendCsvRows, nextSequentialId } from '../core/csvStore.js';
-import { getDataDir } from '../core/knowledgeBase.js';
+import { getDbConfig } from '../core/db.js';
+import { exists, insert, nextId, remove, select, selectOne, transaction, update } from '../core/repo.js';
 
-// Not in knowledgeBase.js's FILES map on purpose: everything listed there
-// counts toward getConfig().configured, and a knowledge-base checkout that
-// predates this module would start reporting itself as unconfigured to the
-// purchasing/smoking screens over two files they don't use.
-const PROMPTS_FILE = 'aiseo_prompts.csv';
-const RUNS_FILE = 'aiseo_runs.csv';
-
-const PROMPTS_HEADER = ['prompt_id', 'prompt_text', 'intent', 'is_active', 'created_at'];
-
-// prompt_text is denormalized onto the run so the history stays readable —
-// both as a standalone CSV and after its prompt row has been deleted.
-const RUNS_HEADER = [
-  'run_id',
-  'prompt_id',
-  'prompt_text',
-  'engine',
-  'source',
-  'ran_at',
-  'mentioned',
-  'position',
-  'total_brands',
-  'sentiment',
-  'framing',
-  'competitors',
-  'citation_domains',
-  'citation_urls',
-  // The one action worth taking off this answer. Written by the same scoring
-  // pass that reads the answer, because the useful advice is specific to what
-  // that answer said and cited — "get reviewed on the Reddit thread it read"
-  // beats any generic checklist a dashboard could hardcode.
-  'recommendation',
-  'answer_excerpt',
-];
+const PROMPTS_TABLE = 'aiseo_prompt';
+// prompt_text is denormalized onto the run so the history stays readable
+// after the prompt row it was checking has been deleted.
+const RUNS_TABLE = 'aiseo_run';
 
 // Which assistant produced the answer. Only 'gemini' can be run automatically
 // from here; the rest are paste-in, and are listed so the history can be
 // filtered per engine rather than lumping every manual entry together.
 const ENGINES = ['gemini', 'chatgpt', 'perplexity', 'copilot', 'claude', 'other'];
 
-// Semicolons join list-valued cells (competitors, citations). Commas would
-// work — csvStore quotes correctly — but a business name with a comma in it
-// would then be ambiguous to anyone opening the file in Excel.
+// Competitors and citations are stored as one semicolon-joined TEXT column
+// each rather than child tables. They are only ever read back whole — the
+// dashboard counts them and lists them — so a join per run would buy nothing,
+// and the export of this table stays one readable row per check. Semicolons
+// rather than commas because a business name can contain a comma.
 const LIST_SEP = ';';
 
 // Who we're looking for in the answer. Aliases matter because assistants
@@ -166,44 +141,17 @@ function translateGeminiError(err, what) {
   return wrapped;
 }
 
-function ensureFile(fileName, header) {
-  const dir = getDataDir();
-  if (!fs.existsSync(dir)) {
-    const err = new Error(
-      `Can't find the knowledge-base Data folder at ${dir}. Set KNOWLEDGE_BASE_DATA_DIR in the server's .env if that repo lives somewhere else.`,
-    );
-    err.status = 503;
-    throw err;
-  }
-  const p = path.join(dir, fileName);
-  if (!fs.existsSync(p)) fs.writeFileSync(p, `${header.join(',')}\r\n`, 'utf8');
-  return p;
+function notFound(message) {
+  const err = new Error(message);
+  err.status = 404;
+  return err;
 }
 
-function loadPrompts() {
-  const p = ensureFile(PROMPTS_FILE, PROMPTS_HEADER);
-  const { header, rows } = readCsvFile(p);
-  return { path: p, header: header.length ? header : PROMPTS_HEADER, rows };
-}
-
-// A runs file written before a column existed (recommendation was added after
-// the first release) would otherwise keep appending rows in the old shape,
-// silently dropping the new field on every write. Missing columns are added
-// once, on read, and existing rows just carry a blank there.
-function loadRuns() {
-  const p = ensureFile(RUNS_FILE, RUNS_HEADER);
-  const { header, rows } = readCsvFile(p);
-  const onDisk = header.length ? header : RUNS_HEADER;
-  const missing = RUNS_HEADER.filter((column) => !onDisk.includes(column));
-  if (!missing.length) return { path: p, header: onDisk, rows };
-
-  // RUNS_HEADER order, plus any column a human added to the file by hand —
-  // dropping those would lose data the CSV's owner put there on purpose.
-  const merged = [...RUNS_HEADER, ...onDisk.filter((column) => !RUNS_HEADER.includes(column))];
-  writeCsvFile(p, merged, rows);
-  return { path: p, header: merged, rows };
-}
-
+// Both tables stay small — a couple of dozen prompts, a few hundred runs — so
+// the reads below select the table and finish the work in JS rather than
+// pushing every filter into SQL. Case-insensitive duplicate matching and the
+// "keep a row whose ran_at won't parse" rule are both easier to read here,
+// and neither is worth an index at these row counts.
 const splitList = (value) =>
   String(value || '')
     .split(LIST_SEP)
@@ -215,26 +163,28 @@ function toPrompt(row) {
     id: row.prompt_id,
     text: row.prompt_text || '',
     intent: row.intent || '',
-    // Anything but an explicit "no" is active — a hand-edited row that left
-    // the column blank should still get checked.
-    isActive: String(row.is_active || '').toLowerCase() !== 'no',
+    // is_active is a 0/1 integer defaulting to 1, so a row that never said
+    // otherwise is active — the same reading the CSV's blank cell got.
+    isActive: row.is_active !== 0,
     createdAt: row.created_at || '',
   };
 }
 
 function toRun(row) {
-  const position = Number(row.position);
-  const totalBrands = Number(row.total_brands);
   return {
     id: row.run_id,
-    promptId: row.prompt_id,
+    // Null once the prompt it was checking has been deleted — the FK is ON
+    // DELETE SET NULL — which the dashboard then groups as an ad-hoc check.
+    promptId: row.prompt_id || '',
     promptText: row.prompt_text || '',
     engine: row.engine || 'other',
     source: row.source || 'manual',
     ranAt: row.ran_at || '',
-    mentioned: String(row.mentioned || '').toLowerCase() === 'yes',
-    position: Number.isFinite(position) && position > 0 ? position : null,
-    totalBrands: Number.isFinite(totalBrands) && totalBrands > 0 ? totalBrands : null,
+    mentioned: Boolean(row.mentioned),
+    // Stored as INTEGER or NULL, and the schema's CHECKs keep them sane, so
+    // these come back ready to use rather than needing to be parsed.
+    position: row.position ?? null,
+    totalBrands: row.total_brands ?? null,
     sentiment: row.sentiment || 'not_mentioned',
     framing: row.framing || '',
     competitors: splitList(row.competitors),
@@ -246,12 +196,12 @@ function toRun(row) {
 }
 
 function getStatus() {
-  const dir = getDataDir();
+  // The database, not a Data folder: a machine that has never built one has
+  // nowhere to put a check, and the page says so.
+  const { dbPath, exists: dbPresent } = getDbConfig();
   return {
-    dataDir: dir,
-    dataDirPresent: fs.existsSync(dir),
-    promptsFile: PROMPTS_FILE,
-    runsFile: RUNS_FILE,
+    dbPath,
+    dbPresent,
     // Drives the UI's "auto-run available?" state — without a key the page
     // still works, just paste-in only.
     autoRunAvailable: Boolean(process.env.GEMINI_API_KEY),
@@ -262,92 +212,91 @@ function getStatus() {
 }
 
 function listPrompts() {
-  const { rows } = loadPrompts();
-  return { prompts: rows.map(toPrompt) };
+  return { prompts: select(PROMPTS_TABLE, {}, { orderBy: 'prompt_id' }).map(toPrompt) };
 }
 
 function addPrompt({ text, intent }) {
   const trimmed = String(text || '').trim();
   if (!trimmed) throw badRequest('A prompt needs some text — the question a customer would actually ask.');
 
-  const { path: file, header, rows } = loadPrompts();
-  const duplicate = rows.find((r) => (r.prompt_text || '').trim().toLowerCase() === trimmed.toLowerCase());
+  const duplicate = select(PROMPTS_TABLE).find(
+    (r) => (r.prompt_text || '').trim().toLowerCase() === trimmed.toLowerCase(),
+  );
   if (duplicate) throw badRequest('That prompt is already being tracked.');
 
   const row = {
-    prompt_id: nextSequentialId(rows, 'prompt_id', 'SEOP'),
+    prompt_id: nextId(PROMPTS_TABLE, 'prompt_id', 'SEOP'),
     prompt_text: trimmed,
     intent: String(intent || '').trim(),
-    is_active: 'yes',
+    is_active: 1,
     created_at: new Date().toISOString(),
   };
-  appendCsvRows(file, header, [row]);
+  insert(PROMPTS_TABLE, row);
   return { prompt: toPrompt(row) };
 }
 
 function seedPrompts() {
-  const { path: file, header, rows } = loadPrompts();
-  const existing = new Set(rows.map((r) => (r.prompt_text || '').trim().toLowerCase()));
+  const existing = new Set(select(PROMPTS_TABLE).map((r) => (r.prompt_text || '').trim().toLowerCase()));
 
-  // Re-seeding an already-seeded file adds nothing rather than duplicating,
+  // Re-seeding an already-seeded table adds nothing rather than duplicating,
   // so the button is safe to press twice.
   const fresh = STARTER_PROMPTS.filter((p) => !existing.has(p.text.toLowerCase()));
-  const working = [...rows];
-  const newRows = fresh.map((p) => {
-    const row = {
-      prompt_id: nextSequentialId(working, 'prompt_id', 'SEOP'),
-      prompt_text: p.text,
-      intent: p.intent,
-      is_active: 'yes',
-      created_at: new Date().toISOString(),
-    };
-    working.push(row);
-    return row;
-  });
+  if (!fresh.length) return { added: 0, prompts: listPrompts().prompts };
 
-  if (newRows.length) appendCsvRows(file, header, newRows);
-  return { added: newRows.length, prompts: working.map(toPrompt) };
+  // One transaction: seeding is a single action from the button's point of
+  // view, and nextId re-reads the highest id inside it, so the ids come out
+  // contiguous rather than all resolving to the same one.
+  transaction(() =>
+    fresh.forEach((p) =>
+      insert(PROMPTS_TABLE, {
+        prompt_id: nextId(PROMPTS_TABLE, 'prompt_id', 'SEOP'),
+        prompt_text: p.text,
+        intent: p.intent,
+        is_active: 1,
+        created_at: new Date().toISOString(),
+      }),
+    ),
+  );
+  return { added: fresh.length, prompts: listPrompts().prompts };
 }
 
 function updatePrompt({ id, text, intent, isActive }) {
-  const { path: file, header, rows } = loadPrompts();
-  const row = rows.find((r) => r.prompt_id === id);
-  if (!row) {
-    const err = new Error(`No tracked prompt with id ${id}.`);
-    err.status = 404;
-    throw err;
-  }
+  const row = selectOne(PROMPTS_TABLE, { prompt_id: id });
+  if (!row) throw notFound(`No tracked prompt with id ${id}.`);
 
+  // Only the fields that were actually sent: the dashboard's active toggle
+  // posts isActive alone, and an UPDATE that also set prompt_text from a
+  // half-built payload would quietly blank the question being tracked.
+  const patch = {};
   if (text !== undefined) {
     const trimmed = String(text).trim();
     if (!trimmed) throw badRequest('A prompt needs some text.');
-    row.prompt_text = trimmed;
+    patch.prompt_text = trimmed;
   }
-  if (intent !== undefined) row.intent = String(intent).trim();
-  if (isActive !== undefined) row.is_active = isActive ? 'yes' : 'no';
+  if (intent !== undefined) patch.intent = String(intent).trim();
+  if (isActive !== undefined) patch.is_active = isActive ? 1 : 0;
 
-  writeCsvFile(file, header, rows);
-  return { prompt: toPrompt(row) };
+  if (Object.keys(patch).length) update(PROMPTS_TABLE, { prompt_id: id }, patch);
+  return { prompt: toPrompt({ ...row, ...patch }) };
 }
 
 // Past runs are deliberately left behind: they carry their own prompt_text,
 // so the history stays honest about what was asked even after the prompt
-// stops being tracked.
+// stops being tracked. The FK does that part now — ON DELETE SET NULL, so a
+// run outlives its prompt with the dangling id cleared rather than pointing
+// at nothing.
+//
+// Checked before the delete rather than reading repo.remove's count, so the
+// dashboard gets "No tracked prompt with id SEOP-0009" instead of the
+// generic no-rows-matched message.
 function deletePrompt({ id }) {
-  const { path: file, header, rows } = loadPrompts();
-  const remaining = rows.filter((r) => r.prompt_id !== id);
-  if (remaining.length === rows.length) {
-    const err = new Error(`No tracked prompt with id ${id}.`);
-    err.status = 404;
-    throw err;
-  }
-  writeCsvFile(file, header, remaining);
+  if (!exists(PROMPTS_TABLE, { prompt_id: id })) throw notFound(`No tracked prompt with id ${id}.`);
+  remove(PROMPTS_TABLE, { prompt_id: id });
   return { deleted: id };
 }
 
 function listRuns({ days } = {}) {
-  const { rows } = loadRuns();
-  const runs = rows.map(toRun);
+  const runs = select(RUNS_TABLE, {}, { orderBy: 'ran_at desc' }).map(toRun);
   const window = Number(days);
   if (!Number.isFinite(window) || window <= 0) return { runs };
 
@@ -363,14 +312,8 @@ function listRuns({ days } = {}) {
 }
 
 function deleteRun({ id }) {
-  const { path: file, header, rows } = loadRuns();
-  const remaining = rows.filter((r) => r.run_id !== id);
-  if (remaining.length === rows.length) {
-    const err = new Error(`No run with id ${id}.`);
-    err.status = 404;
-    throw err;
-  }
-  writeCsvFile(file, header, remaining);
+  if (!exists(RUNS_TABLE, { run_id: id })) throw notFound(`No run with id ${id}.`);
+  remove(RUNS_TABLE, { run_id: id });
   return { deleted: id };
 }
 
@@ -575,24 +518,37 @@ async function askGrounded({ promptText }) {
   return { answer, ...extractCitations(response) };
 }
 
-// Long answers are truncated on the way to disk: the excerpt exists to make a
-// row readable when scanning history, not to archive the full response, and
-// keeping whole answers would bloat a CSV meant to be opened in Excel.
+// Long answers are truncated on the way in: the excerpt exists to make a row
+// readable when scanning history, not to archive the full response, and the
+// history is read as a list of rows — a full answer per row would push the
+// interesting columns off the screen and out of any export of the table.
 const EXCERPT_LIMIT = 1200;
 const excerpt = (text) => (text.length > EXCERPT_LIMIT ? `${text.slice(0, EXCERPT_LIMIT).trimEnd()}…` : text);
 
+// aiseo_run CHECKs that a rank fits its total (position <= total_brands), and
+// a scoring pass can return "3rd of 2" — the model ranking against businesses
+// it didn't end up listing. The CSV took that contradiction silently; the
+// table would refuse the INSERT and lose a run that cost two Gemini calls.
+// The rank is the field the dashboard averages, so it wins and the total is
+// widened to fit rather than the other way round.
+function reconcileRank({ mentioned, position, totalBrands }) {
+  const rank = mentioned && position > 0 ? position : null;
+  if (rank == null) return { position: null, total_brands: totalBrands ?? null };
+  return { position: rank, total_brands: totalBrands == null ? null : Math.max(totalBrands, rank) };
+}
+
 function saveRun({ promptId, promptText, engine, source, analysis, citations }) {
-  const { path: file, header, rows } = loadRuns();
   const row = {
-    run_id: nextSequentialId(rows, 'run_id', 'SEOR'),
-    prompt_id: promptId || '',
+    run_id: nextId(RUNS_TABLE, 'run_id', 'SEOR'),
+    // Null, not '', for an ad-hoc check: the column is a foreign key, and ''
+    // is a value the prompt table will never hold.
+    prompt_id: promptId || null,
     prompt_text: promptText,
     engine,
     source,
     ran_at: new Date().toISOString(),
-    mentioned: analysis.mentioned ? 'yes' : 'no',
-    position: analysis.position == null ? '' : String(analysis.position),
-    total_brands: analysis.totalBrands == null ? '' : String(analysis.totalBrands),
+    mentioned: analysis.mentioned ? 1 : 0,
+    ...reconcileRank(analysis),
     sentiment: analysis.sentiment,
     framing: analysis.framing,
     competitors: analysis.competitors.join(LIST_SEP),
@@ -601,7 +557,7 @@ function saveRun({ promptId, promptText, engine, source, analysis, citations }) 
     recommendation: analysis.recommendation,
     answer_excerpt: excerpt(analysis.answerText || ''),
   };
-  appendCsvRows(file, header, [row]);
+  insert(RUNS_TABLE, row);
   return toRun(row);
 }
 
@@ -609,13 +565,8 @@ function saveRun({ promptId, promptText, engine, source, analysis, citations }) 
 // text for a one-off check that isn't in the list.
 function resolvePromptText({ promptId, promptText }) {
   if (promptId) {
-    const { rows } = loadPrompts();
-    const row = rows.find((r) => r.prompt_id === promptId);
-    if (!row) {
-      const err = new Error(`No tracked prompt with id ${promptId}.`);
-      err.status = 404;
-      throw err;
-    }
+    const row = selectOne(PROMPTS_TABLE, { prompt_id: promptId });
+    if (!row) throw notFound(`No tracked prompt with id ${promptId}.`);
     return row.prompt_text;
   }
   const trimmed = String(promptText || '').trim();

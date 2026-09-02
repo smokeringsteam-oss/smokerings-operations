@@ -29,6 +29,11 @@ type PurchaseRecord = {
   purchase_date: string;
   quantity_purchased: string;
   unit_of_measure: string;
+  // The piece-bought pair, blank on everything sold by weight: what one piece
+  // weighs, and what the line comes to in kg (derived server-side from the
+  // two beside it — see PURCHASE_SQL in server/core/kbViews.js).
+  weight_per_unit_kg?: string;
+  total_weight_kg?: string;
   unit_price: string;
   total_cost: string;
   // purchase_log.csv's own column names — the log records vendor_id/vendor_name,
@@ -57,6 +62,9 @@ type CartLine = {
   unit: string;
   quantity: number;
   unitPrice: number;
+  // For an item bought by the piece, what one piece weighs — 0 when it
+  // doesn't apply or hasn't been weighed. See isWeighedByPiece below.
+  weightPerUnitKg: number;
   // Which B2B account this one line is for. Per line rather than per cart
   // because one butcher run routinely covers two accounts, and one cart
   // routinely mixes a client's meat with packaging bought for nobody in
@@ -67,6 +75,22 @@ type CartLine = {
 };
 
 const CUSTOM_ITEM_VALUE = '__custom__';
+
+// Items the vendor sells and prices by the piece, but the kitchen uses by the
+// weight — whole chicken (RM-047) is the one on the books today. The butcher
+// hands over four birds and charges per bird; every plan downstream of the
+// buy is in kg (a session's raw weight, a B2B client's kg/week, the meat
+// plan), and a bird is not a fixed weight, so the count alone can't answer
+// them. For these the line is entered as three numbers — how many, what one
+// weighs, what one costs — instead of the usual quantity/unit-price pair.
+//
+// Keyed on the catalogue rather than on the item's name, so a second whole
+// bird or a rack sold by the piece needs a materials row and nothing here.
+// Meat is the qualifier that keeps buns, sporks and containers out of it:
+// those are bought by the piece and used by the piece, and asking what one
+// spork weighs is noise.
+const isWeighedByPiece = (m?: RawMaterial) =>
+  !!m && m.unit_of_measure === 'pcs' && m.category === 'Meat';
 
 // Which materials.csv categories (and, for the two meat categories,
 // which item-name keyword) each vendor's `supplies_category` value is
@@ -148,6 +172,7 @@ const WeeklyPurchasing: React.FC<{ channel?: 'B2C' | 'B2B' }> = ({ channel = 'B2
   const [customUnit, setCustomUnit] = useState('');
   const [quantity, setQuantity] = useState('');
   const [unitPrice, setUnitPrice] = useState('');
+  const [weightPerPiece, setWeightPerPiece] = useState('');
   const [addLineError, setAddLineError] = useState('');
 
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -294,6 +319,20 @@ const WeeklyPurchasing: React.FC<{ channel?: 'B2C' | 'B2B' }> = ({ channel = 'B2
 
   const selectedMaterial = materials.find((m) => m.material_id === materialChoice);
   const isCustom = materialChoice === CUSTOM_ITEM_VALUE;
+  const byPiece = isWeighedByPiece(selectedMaterial);
+  // The running total the three piece boxes add up to, so the pitmaster can
+  // see 4 × 1.6 kg = 6.4 kg before committing the line rather than after.
+  const piecePreview = useMemo(() => {
+    if (!byPiece) return null;
+    const pieces = Number(quantity) || 0;
+    const each = Number(weightPerPiece) || 0;
+    if (!pieces) return null;
+    return {
+      pieces,
+      totalKg: each ? Math.round(pieces * each * 1000) / 1000 : 0,
+      totalCost: pieces * (Number(unitPrice) || 0),
+    };
+  }, [byPiece, quantity, weightPerPiece, unitPrice]);
 
   const handleAddLine = () => {
     setAddLineError('');
@@ -319,6 +358,15 @@ const WeeklyPurchasing: React.FC<{ channel?: 'B2C' | 'B2B' }> = ({ channel = 'B2
       return;
     }
     const price = Number(unitPrice) || 0;
+    // Blank is allowed and means "not weighed yet" — the same answer the log
+    // already accepts for a price that hasn't arrived. A number that isn't a
+    // weight is not: 0 kg per bird would sail through and total the whole buy
+    // to nothing.
+    const perPiece = byPiece && weightPerPiece.trim() ? Number(weightPerPiece) : 0;
+    if (byPiece && weightPerPiece.trim() && !(perPiece > 0)) {
+      setAddLineError('Weight of one piece has to be more than 0 kg — leave it blank if you haven’t weighed them.');
+      return;
+    }
 
     setCart((current) => [
       ...current,
@@ -329,6 +377,7 @@ const WeeklyPurchasing: React.FC<{ channel?: 'B2C' | 'B2B' }> = ({ channel = 'B2
         unit,
         quantity: qty,
         unitPrice: price,
+        weightPerUnitKg: perPiece,
         clientId: channel === 'B2B' ? lineClientId : '',
         clientName: channel === 'B2B' ? clients.find((c) => c.id === lineClientId)?.name || '' : '',
       },
@@ -339,6 +388,7 @@ const WeeklyPurchasing: React.FC<{ channel?: 'B2C' | 'B2B' }> = ({ channel = 'B2
     setCustomUnit('');
     setQuantity('');
     setUnitPrice('');
+    setWeightPerPiece('');
   };
 
   const handleRemoveLine = (key: string) => {
@@ -367,14 +417,18 @@ const WeeklyPurchasing: React.FC<{ channel?: 'B2C' | 'B2B' }> = ({ channel = 'B2
           vendorName,
           purchaseDate,
           channel,
-          lines: cart.map(({ materialId, itemName, unit, quantity: qty, unitPrice: price, clientId }) => ({
+          lines: cart.map(({ materialId, itemName, unit, quantity: qty, unitPrice: price, weightPerUnitKg, clientId }) => ({
             materialId,
             itemName,
             unit,
             quantity: qty,
             unitPrice: price,
-            // Id only — the server resolves the name off b2b_clients.csv so a
-            // renamed account can't leave two spellings in the purchase log.
+            // Blank rather than 0 when it doesn't apply or wasn't weighed —
+            // the column is nullable so it can say "unknown" instead of
+            // claiming a weightless bird.
+            weightPerUnitKg: weightPerUnitKg > 0 ? weightPerUnitKg : '',
+            // Id only — the server resolves the name off the B2B client book
+            // so a renamed account can't leave two spellings in the log.
             clientId,
           })),
         }),
@@ -407,7 +461,7 @@ const WeeklyPurchasing: React.FC<{ channel?: 'B2C' | 'B2B' }> = ({ channel = 'B2
       }
 
       setSubmitStatus(
-        `Logged ${cart.length} line item${cart.length === 1 ? '' : 's'} from ${vendorName} to the CSV.${poNote}`,
+        `Logged ${cart.length} line item${cart.length === 1 ? '' : 's'} from ${vendorName} to the purchase log.${poNote}`,
       );
       setCart([]);
       await Promise.all([loadCatalog(), loadPurchases()]);
@@ -721,7 +775,17 @@ const WeeklyPurchasing: React.FC<{ channel?: 'B2C' | 'B2B' }> = ({ channel = 'B2
           <div className="purch-add-line">
             <label>
               Item
-              <select value={materialChoice} onChange={(e) => setMaterialChoice(e.target.value)}>
+              <select
+                value={materialChoice}
+                onChange={(e) => {
+                  setMaterialChoice(e.target.value);
+                  // Cleared with the item, not left behind: the box is hidden
+                  // for anything not bought by the piece, and a weight typed
+                  // for chicken must not reappear on the next bird-shaped
+                  // item the pitmaster picks.
+                  setWeightPerPiece('');
+                }}
+              >
                 <option value="">Select an item…</option>
                 <option value={CUSTOM_ITEM_VALUE}>— Custom item (not in catalog) —</option>
                 {materialsByCategory.map(([category, items]) => (
@@ -749,16 +813,49 @@ const WeeklyPurchasing: React.FC<{ channel?: 'B2C' | 'B2B' }> = ({ channel = 'B2
               </div>
             )}
 
-            <div className="purch-form-row">
+            {/* Bought by the piece, used by the weight — see isWeighedByPiece.
+                Same three underlying numbers as every other line (quantity,
+                unit price, plus the piece weight), relabelled to the words the
+                butcher actually uses so nobody has to work out whether
+                "quantity" means birds or kilos. */}
+            <div className={`purch-form-row${byPiece ? ' purch-form-row-3' : ''}`}>
               <label>
-                Quantity
+                {byPiece ? 'Number of pieces' : 'Quantity'}
                 <input type="number" min="0" step="any" value={quantity} onChange={(e) => setQuantity(e.target.value)} />
               </label>
+              {byPiece && (
+                <label>
+                  Weight of one piece (kg)
+                  <input
+                    type="number"
+                    min="0"
+                    step="any"
+                    value={weightPerPiece}
+                    onChange={(e) => setWeightPerPiece(e.target.value)}
+                    placeholder="e.g. 1.6"
+                  />
+                </label>
+              )}
               <label>
-                Unit price (₹)
+                {byPiece ? 'Cost of each (₹)' : 'Unit price (₹)'}
                 <input type="number" min="0" step="any" value={unitPrice} onChange={(e) => setUnitPrice(e.target.value)} />
               </label>
             </div>
+
+            {byPiece && (
+              <p className="inv-section-hint purch-piece-hint">
+                {piecePreview ? (
+                  <>
+                    {piecePreview.pieces} ×{' '}
+                    {piecePreview.totalKg ? `${weightPerPiece} kg = ${piecePreview.totalKg} kg total` : '? kg'}
+                    {piecePreview.totalCost ? ` · ${inrFormat(piecePreview.totalCost)}` : ''}
+                    {!piecePreview.totalKg && ' — weigh them and the plans downstream get the kg they work in.'}
+                  </>
+                ) : (
+                  'Stock and the vendor bill stay in pieces; the weight is what the cook, the meat plan and a client’s kg/week are in. Leave it blank if they haven’t been weighed.'
+                )}
+              </p>
+            )}
 
             {/* Sticky on purpose — it isn't cleared when a line is added, so
                 three lines for the same account cost one pick, while a cart
@@ -811,6 +908,15 @@ const WeeklyPurchasing: React.FC<{ channel?: 'B2C' | 'B2B' }> = ({ channel = 'B2
                       {isB2B && <td>{line.clientName || '—'}</td>}
                       <td className="prep-total-cell">
                         {line.quantity} {line.unit}
+                        {line.weightPerUnitKg > 0 && (
+                          <>
+                            <br />
+                            <small>
+                              {line.weightPerUnitKg} kg each ={' '}
+                              {Math.round(line.quantity * line.weightPerUnitKg * 1000) / 1000} kg
+                            </small>
+                          </>
+                        )}
                       </td>
                       <td className="prep-total-cell">{inrFormat(line.unitPrice)}</td>
                       <td className="prep-total-cell">{inrFormat(line.quantity * line.unitPrice)}</td>
@@ -1007,6 +1113,14 @@ const WeeklyPurchasing: React.FC<{ channel?: 'B2C' | 'B2B' }> = ({ channel = 'B2
                           <td>{p.purchase_date}</td>
                           <td className="prep-total-cell">
                             {p.quantity_purchased} {p.unit_of_measure}
+                            {p.total_weight_kg && (
+                              <>
+                                <br />
+                                <small>
+                                  {p.weight_per_unit_kg} kg each = {p.total_weight_kg} kg
+                                </small>
+                              </>
+                            )}
                           </td>
                           <td className="prep-total-cell">{p.total_cost ? inrFormat(Number(p.total_cost)) : '—'}</td>
                           <td className="purch-remove-cell">

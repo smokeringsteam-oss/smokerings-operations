@@ -1,43 +1,55 @@
-// Covers the B2B client store: the meat-demand rollup arithmetic (which is
-// the number the kitchen would plan off), the Sampling/Onboarding stage
-// fields, and the two places a write could silently lose data — a demand
-// edit that has to replace a client's whole set, and a delete that has to
-// take its demand lines with it.
+// Covers the B2B client store on the database: the meat-demand rollup
+// arithmetic (which is the number the kitchen would plan off), the
+// Sampling/Onboarding stage fields, and the places a write could silently
+// lose data — a demand edit that has to replace a client's whole set, an
+// update that must not touch anyone else's row, and a delete that has to take
+// its demand lines with it.
 import { describe, it, expect, beforeEach, afterAll } from 'vitest';
-import fs from 'fs';
-import os from 'os';
-import path from 'path';
+import { createTestDb, removeTestDb } from '../../core/testDb.js';
 
-const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'b2b-clients-'));
-process.env.KNOWLEDGE_BASE_DATA_DIR = dataDir;
+// Before the module under test is imported, so its first query lands on this
+// database rather than the real server/data/smokerings.db. No fixtures: every
+// test below builds the accounts it needs through addClient, which is the
+// only way a client row is ever created.
+const { dir } = createTestDb();
 
 const { listClients, addClient, updateClient, setStage, setDemands, deleteClient } = await import('./b2bClients.js');
+// Straight to db.js for the fixture reset: repo.remove refuses a where-less
+// delete on purpose, which is right for production code and exactly what
+// "clear the table" has to do here.
+const { run, all } = await import('../../core/db.js');
 
-// Both files live under Data/B2B (server/ops/b2b/b2bClients.js CLIENTS_FILE) — the
-// store creates that folder itself, so the temp dir starts out empty here.
-const clientsPath = path.join(dataDir, 'B2B', 'b2b_clients.csv');
-const demandsPath = path.join(dataDir, 'B2B', 'b2b_client_demands.csv');
+beforeEach(() => {
+  run('DELETE FROM b2b_client_demand');
+  run('DELETE FROM b2b_client');
+});
 
-const reset = () => {
-  [clientsPath, demandsPath].forEach((p) => {
-    if (fs.existsSync(p)) fs.unlinkSync(p);
-  });
-};
+afterAll(() => removeTestDb(dir));
 
-beforeEach(reset);
-afterAll(() => fs.rmSync(dataDir, { recursive: true, force: true }));
+const demandRows = (clientId) => all('SELECT * FROM b2b_client_demand WHERE client_id = ?', clientId);
 
 describe('b2bClients', () => {
-  it('creates both CSVs on first use and starts an account as a lead', () => {
-    const { client } = addClient({ name: 'Toit Brewpub', businessType: 'Cafe / Bar', area: 'Indiranagar' });
+  it('starts an account as a lead and allocates the next sequential id', () => {
+    const first = addClient({ name: 'Toit Brewpub', businessType: 'Cafe / Bar', area: 'Indiranagar' }).client;
+    const second = addClient({ name: 'Arbor Brewing' }).client;
 
-    expect(client.id).toBe('B2B-0001');
-    expect(client.stage).toBe('lead');
-    expect(fs.existsSync(clientsPath)).toBe(true);
-    expect(listClients().clients).toHaveLength(1);
-    // The demands file is created lazily, by the first read/write that needs
-    // it — a fresh knowledge-base checkout doesn't have to ship either file.
-    expect(fs.existsSync(demandsPath)).toBe(true);
+    expect(first.id).toBe('B2B-0001');
+    expect(second.id).toBe('B2B-0002');
+    expect(first.stage).toBe('lead');
+    expect(first.businessType).toBe('Cafe / Bar');
+    expect(listClients().clients).toHaveLength(2);
+  });
+
+  it('reads the columns it never set as blanks, not as the string "null"', () => {
+    // Every column addClient leaves alone is NULL in the database now, where
+    // the CSV parser used to hand back ''. A bare null reaching the dashboard
+    // renders as "null" in the contact fields, so the store has to fill them.
+    const { client } = addClient({ name: 'Sparse Co' });
+    expect(client.phone).toBe('');
+    expect(client.gstin).toBe('');
+    expect(client.lostReason).toBe('');
+    expect(client.sampleItems).toEqual([]);
+    expect(client.onboardingSteps).toEqual([]);
   });
 
   it('refuses a duplicate name, case-insensitively', () => {
@@ -84,7 +96,7 @@ describe('b2bClients', () => {
     expect(chicken).toMatchObject({ committedKgPerWeek: 12, pipelineKgPerWeek: 5 });
   });
 
-  it('replaces a client\'s demand set on save, drops zeroed lines, and leaves other clients alone', () => {
+  it("replaces a client's demand set on save, drops zeroed lines, and leaves other clients alone", () => {
     const a = addClient({ name: 'Client A' }).client;
     const b = addClient({ name: 'Client B' }).client;
     setDemands({ id: b.id, demands: [{ category: 'ribs', qtyKg: 4, cadence: 'weekly' }] });
@@ -97,7 +109,8 @@ describe('b2bClients', () => {
     });
 
     // Re-save with pulled pork zeroed: that is how the UI says "drop this
-    // meat", so it must delete the line rather than store a 0 kg row.
+    // meat", so it must delete the line rather than store a 0 kg row — which
+    // the column's CHECK (qty_kg > 0) would reject outright anyway.
     const { client } = setDemands({
       id: a.id,
       demands: [
@@ -108,8 +121,18 @@ describe('b2bClients', () => {
 
     expect(client.demands.map((d) => d.category)).toEqual(['chicken']);
     expect(client.kgPerWeek).toBe(9);
+    // The replace clears only this client's lines: a where-less delete would
+    // take B's with it and the rollup would quietly lose 4 kg a week.
+    expect(demandRows(a.id)).toHaveLength(1);
+    expect(demandRows(b.id)).toHaveLength(1);
     const clientB = listClients().clients.find((c) => c.id === b.id);
     expect(clientB.demands).toHaveLength(1);
+  });
+
+  it('stores the quantity as a number, so the rollup is not doing string maths', () => {
+    const { id } = addClient({ name: 'Numeric Co' }).client;
+    setDemands({ id, demands: [{ category: 'chicken', qtyKg: 2.5, cadence: 'weekly' }] });
+    expect(demandRows(id)[0].qty_kg).toBe(2.5);
   });
 
   it('rejects an unknown category, a duplicated one, and a nonsense quantity', () => {
@@ -125,6 +148,26 @@ describe('b2bClients', () => {
       }),
     ).toThrow(/listed twice/);
     expect(() => setDemands({ id, demands: [{ category: 'chicken', qtyKg: 'lots' }] })).toThrow(/number of kg/);
+  });
+
+  it('leaves the stored demand untouched when a line in the same save is rejected', () => {
+    const { id } = addClient({ name: 'Careful Co' }).client;
+    setDemands({ id, demands: [{ category: 'chicken', qtyKg: 7, cadence: 'weekly' }] });
+
+    // Every line is validated before anything is written, so a bad line in a
+    // batch must not have already cleared the good set that was there.
+    expect(() =>
+      setDemands({
+        id,
+        demands: [
+          { category: 'chicken', qtyKg: 9, cadence: 'weekly' },
+          { category: 'mutton', qtyKg: 3, cadence: 'weekly' },
+        ],
+      }),
+    ).toThrow(/not a meat category/);
+
+    const [row] = demandRows(id);
+    expect(row.qty_kg).toBe(7);
   });
 
   it('keeps the sampling round on the account and validates the outcome', () => {
@@ -145,14 +188,43 @@ describe('b2bClients', () => {
 
   it('stores onboarding steps in checklist order and counts them', () => {
     const { id } = addClient({ name: 'Onboarding Co' }).client;
-    // Ticked out of order — stored in checklist order so the cell reads the
-    // same as the list on screen.
+    // Ticked out of order — stored in checklist order so the stored value
+    // reads the same as the list on screen.
     const { client } = updateClient({ id, onboardingSteps: ['first_order', 'pricing_agreed'] });
 
     expect(client.onboardingSteps).toEqual(['pricing_agreed', 'first_order']);
     expect(client.onboardingDone).toBe(2);
     expect(client.onboardingTotal).toBe(6);
     expect(() => updateClient({ id, onboardingSteps: ['send_flowers'] })).toThrow(/not an onboarding step/);
+  });
+
+  it('updates only the fields it was given, and only on the account it was given', () => {
+    const a = addClient({ name: 'Edited Co', phone: '9000000001', area: 'Koramangala' }).client;
+    const b = addClient({ name: 'Untouched Co', phone: '9000000002' }).client;
+
+    const { client } = updateClient({ id: a.id, phone: '9111111111' });
+    expect(client.phone).toBe('9111111111');
+    // An UPDATE naming only the changed column must leave the rest of the row
+    // alone — the whole-file rewrite this replaced could not promise that.
+    expect(client.area).toBe('Koramangala');
+    expect(client.name).toBe('Edited Co');
+
+    const untouched = listClients().clients.find((c) => c.id === b.id);
+    expect(untouched.phone).toBe('9000000002');
+  });
+
+  it('keeps the Odoo customer id a string on the way back out', () => {
+    // The column is an INTEGER, but the detail form posts it as typed text
+    // and compares it as text — a bare number here shows up as a changed
+    // field on every save.
+    const { id } = addClient({ name: 'Odoo Co' }).client;
+    const { client } = updateClient({ id, odooPartnerId: '4211' });
+    expect(client.odooPartnerId).toBe('4211');
+  });
+
+  it('refuses to blank out the name', () => {
+    const { id } = addClient({ name: 'Named Co' }).client;
+    expect(() => updateClient({ id, name: '   ' })).toThrow(/client name is required/);
   });
 
   it('stamps the go-live date once, and does not rewrite it on a pause and restart', () => {
@@ -173,7 +245,7 @@ describe('b2bClients', () => {
     expect(() => setStage({ id, stage: 'nearly' })).toThrow(/not a pipeline stage/);
   });
 
-  it('takes a deleted client\'s demand lines with it', () => {
+  it("takes a deleted client's demand lines with it", () => {
     const a = addClient({ name: 'Doomed Co' }).client;
     const b = addClient({ name: 'Surviving Co' }).client;
     setDemands({ id: a.id, demands: [{ category: 'chicken', qtyKg: 5, cadence: 'weekly' }] });
@@ -184,16 +256,17 @@ describe('b2bClients', () => {
     const { clients, summary } = listClients();
     expect(clients.map((c) => c.name)).toEqual(['Surviving Co']);
     expect(summary.byCategory.some((c) => c.category === 'chicken')).toBe(false);
+    // Not just absent from the rollup — gone from the table, so the next
+    // account to take that id cannot inherit them.
+    expect(demandRows(a.id)).toHaveLength(0);
+    expect(demandRows(b.id)).toHaveLength(1);
   });
 
-  it('migrates a file written against an older header instead of dropping its new columns', () => {
-    // A pre-Sampling-stage file: the columns this module has gained since
-    // must be added on read, and the rows kept.
-    fs.writeFileSync(clientsPath, 'client_id,name,stage\nB2B-0001,Legacy Co,active\n', 'utf8');
-
-    const { client } = updateClient({ id: 'B2B-0001', sampleOutcome: 'liked' });
-    expect(client.name).toBe('Legacy Co');
-    expect(client.sampleOutcome).toBe('liked');
-    expect(fs.readFileSync(clientsPath, 'utf8')).toMatch(/sample_outcome/);
+  it('404s on an id that is not on the book, rather than writing a new row', () => {
+    expect(() => updateClient({ id: 'B2B-9999', phone: '9' })).toThrow(/No B2B client with id/);
+    expect(() => setStage({ id: 'B2B-9999', stage: 'active' })).toThrow(/No B2B client with id/);
+    expect(() => setDemands({ id: 'B2B-9999', demands: [] })).toThrow(/No B2B client with id/);
+    expect(() => deleteClient({ id: 'B2B-9999' })).toThrow(/No B2B client with id/);
+    expect(listClients().clients).toHaveLength(0);
   });
 });

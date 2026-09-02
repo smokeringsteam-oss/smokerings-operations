@@ -6,9 +6,8 @@
 //
 // Talks to Odoo's JSON-RPC 2.0 API directly over fetch — no XML-RPC client
 // dependency needed, same "raw API over fetch" style as githubProjects.js.
-import fs from 'fs';
-import { readCsvFile, writeCsvFile } from '../core/csvStore.js';
-import { requireFile, filePath } from '../core/knowledgeBase.js';
+import { readMaterials, readMenu } from '../core/kbViews.js';
+import { update } from '../core/repo.js';
 
 // NOTE: includes the raw apiKey — for internal use only (authenticate/execute
 // below). The /api/odoo/status route must never forward this object as-is to
@@ -123,29 +122,25 @@ function keywordMatch(productName) {
   return null;
 }
 
-// menu.csv itself, as a matching source — cached against the file's mtime so
-// a menu edit is picked up without a restart but the file isn't re-parsed for
-// every order line.
+// The menu itself, as a matching source.
 //
 // The hardcoded map above only ever knew the eleven B2C dishes, which is what
 // kept anything else — B2B wholesale SKUs above all — permanently in
-// `unmatched`, i.e. invisible on the packing board. menu.csv is the real
-// catalog (and already carries `channel`), so it's the source that scales:
-// adding a menu item there is enough, no code change here.
-let menuCache = { mtimeMs: 0, byOdooId: new Map(), byName: new Map() };
+// `unmatched`, i.e. invisible on the packing board. The menu table is the
+// real catalog (and already carries `channel`), so it's the source that
+// scales: adding a menu item there is enough, no code change here.
+//
+// Reads the database as of phase 1. It used to read menu.csv behind an
+// mtime cache, which had to go with the file: menuCsvMirror writes a rename
+// to the menu table now, so a cache keyed on a file that no longer changes
+// would have gone on matching orders against the dish's old name forever.
+// Nothing replaces the cache — this is twelve rows behind an indexed read,
+// where the whole point of the old cache was avoiding a re-parse of a file.
 function menuIndex() {
-  let stat;
-  try {
-    stat = fs.statSync(filePath('menu'));
-  } catch {
-    return menuCache; // no menu.csv on this checkout — fall through to the map/keywords
-  }
-  if (stat.mtimeMs === menuCache.mtimeMs) return menuCache;
-
   const byOdooId = new Map();
   const byName = new Map();
   try {
-    readCsvFile(filePath('menu')).rows.forEach((row) => {
+    readMenu().forEach((row) => {
       if (!row.menu_id) return;
       const odooId = String(row.odoo_product_id || '').trim();
       if (odooId) byOdooId.set(odooId, row.menu_id);
@@ -153,16 +148,17 @@ function menuIndex() {
       if (name) byName.set(name, row.menu_id);
     });
   } catch {
-    return menuCache;
+    // No database on this checkout — fall through to the seeded map and the
+    // keyword guess, exactly as a missing menu.csv used to.
+    return { byOdooId: new Map(), byName: new Map() };
   }
-  menuCache = { mtimeMs: stat.mtimeMs, byOdooId, byName };
-  return menuCache;
+  return { byOdooId, byName };
 }
 
-// Strongest evidence first: the odoo_product_id pin menu.csv keeps (same
+// Strongest evidence first: the odoo_product_id pin the menu row keeps (same
 // column server/ops/menu/menuCsvMirror.js backfills, so a product renamed in Odoo
 // still lands on its row), then an exact name — from the seeded map, then
-// from menu.csv — then the keyword guess. Anything left returns null and
+// from the menu table — then the keyword guess. Anything left returns null and
 // surfaces in `unmatched` rather than being placed wrongly.
 function matchProduct(productName, productId) {
   const menu = menuIndex();
@@ -439,12 +435,14 @@ async function fetchWeekendOrders({ fromDate, toDate, includeQuotations = true }
   );
   const phoneByPartnerId = new Map();
   if (quotationPartnerIds.length) {
+    // Odoo 19 dropped res.partner.mobile — the separate mobile number was
+    // merged into `phone`, and asking for it now errors the whole read out.
     const partners = await execute('res.partner', 'read', [
       quotationPartnerIds,
-      ['id', 'phone', 'mobile'],
+      ['id', 'phone'],
     ]);
     for (const partner of partners) {
-      phoneByPartnerId.set(partner.id, partner.mobile || partner.phone || null);
+      phoneByPartnerId.set(partner.id, partner.phone || null);
     }
   }
 
@@ -1056,14 +1054,19 @@ async function findOrCreateProduct(itemName) {
   return { id: variants[0]?.id, created: true };
 }
 
-// materials.csv, whose key column is item_id (v1 raw_materials.csv called it
-// material_id) and which also carries the IP-xxx intermediate products —
-// hence the item_type guard in syncRawMaterialsToOdoo below. Rows come back
-// whole so writeCsvFile can hand the untouched ones back verbatim.
+// The materials catalogue, keyed item_id (v1 raw_materials.csv called it
+// material_id) and carrying the IP-xxx intermediate products too — hence the
+// item_type guard in syncRawMaterialsToOdoo below.
+//
+// Reads the database rather than materials.csv as of phase 1. This matters
+// more here than anywhere else in the migration: odoo_product_id is written
+// back by both functions below, and materials.csv stopped being read the
+// moment inventoryStore moved. Left on the CSV, the backfill
+// syncRawMaterialsToOdoo exists to perform would have written every id it
+// resolved into a file nothing loads — reporting hundreds of successful
+// matches while resolveProductId went on missing the cache for all of them.
 function loadRawMaterials() {
-  const path = requireFile('rawMaterials');
-  const { header, rows } = readCsvFile(path);
-  return { path, header, rows };
+  return readMaterials();
 }
 
 // Resolves the Odoo product.product id for one PO line. Prefers the cached
@@ -1078,14 +1081,15 @@ async function resolveProductId({ materialId, itemName }) {
     const { id } = await findOrCreateProduct(itemName);
     return id;
   }
-  const { path, header, rows } = loadRawMaterials();
-  const row = rows.find((r) => r.item_id === materialId);
+  const row = loadRawMaterials().find((r) => r.item_id === materialId);
   if (row?.odoo_product_id) return Number(row.odoo_product_id);
 
   const { id } = await findOrCreateProduct(itemName);
   if (row && id) {
-    row.odoo_product_id = id;
-    writeCsvFile(path, header, rows);
+    // One column on one row, rather than the whole-catalogue rewrite this
+    // used to be — so a PO built while someone else is logging a purchase
+    // can't hand back a stale copy of every other material's stock count.
+    update('material', { item_id: materialId }, { odoo_product_id: id });
   }
   return id;
 }
@@ -1098,7 +1102,7 @@ async function resolveProductId({ materialId, itemName }) {
 // 'yes') since those aren't purchasable. Safe to re-run — already-synced and
 // inactive rows are reported in `skipped`, not touched again.
 async function syncRawMaterialsToOdoo() {
-  const { path, header, rows } = loadRawMaterials();
+  const rows = loadRawMaterials();
   const results = { matched: [], created: [], skipped: [], errors: [] };
 
   for (const row of rows) {
@@ -1115,7 +1119,13 @@ async function syncRawMaterialsToOdoo() {
     }
     try {
       const { id, created } = await findOrCreateProduct(row.item_name);
-      row.odoo_product_id = id;
+      // Written per row as it is resolved, not batched to the end. This loop
+      // makes a network call per material and can run for a while; if it
+      // fails or is interrupted halfway, the ids already resolved are saved
+      // and a re-run skips them as "already synced" — which is the
+      // resumability the function's own doc comment promises. The old
+      // single writeCsvFile after the loop lost the lot on a crash.
+      update('material', { item_id: row.item_id }, { odoo_product_id: id });
       (created ? results.created : results.matched).push({
         materialId: row.item_id,
         itemName: row.item_name,
@@ -1126,7 +1136,6 @@ async function syncRawMaterialsToOdoo() {
     }
   }
 
-  writeCsvFile(path, header, rows);
   return results;
 }
 

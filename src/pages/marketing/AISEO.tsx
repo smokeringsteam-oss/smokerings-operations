@@ -40,8 +40,8 @@ type Run = {
 };
 
 type Status = {
-  dataDir: string;
-  dataDirPresent: boolean;
+  dbPath: string;
+  dbPresent: boolean;
   autoRunAvailable: boolean;
   model: string;
   brand: { name: string; aliases: string[]; city: string; site: string };
@@ -434,10 +434,10 @@ const AISEO: React.FC = () => {
         </div>
       </div>
 
-      {status && !status.dataDirPresent && (
+      {status && !status.dbPresent && (
         <p className="chat-error">
-          The knowledge-base Data folder isn't at {status.dataDir}. Set KNOWLEDGE_BASE_DATA_DIR in the server's .env and
-          restart it — nothing can be saved until then.
+          There's no database at {status.dbPath}. Build it with <code>npm run db:init</code>, or set KB_SQLITE_PATH in
+          the server's .env if it lives somewhere else — nothing can be saved until then.
         </p>
       )}
       {status && !status.autoRunAvailable && (

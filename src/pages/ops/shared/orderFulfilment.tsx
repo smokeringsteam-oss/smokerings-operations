@@ -260,10 +260,10 @@ export function useOrderFulfilment(orderIds: number[], channel: 'B2C' | 'B2B' = 
 
   // Bulk apply — "start every order in this slot" and the like.
   //
-  // Deliberately sequential, not Promise.all: the server rewrites the whole
-  // orderPackingStatus CSV per call (server/core/csvStore.js writeCsvFile), so
-  // concurrent posts would race and lose rows. Each call also tags Odoo and
-  // can create an invoice, which is not work to fire off in parallel either.
+  // Deliberately sequential, not Promise.all. Each call tags the order in
+  // Odoo and can create an invoice, which is not work to fire off in parallel
+  // — and firing a slot's worth of them at once would have Odoo rate-limiting
+  // us rather than going faster.
   const setStatusBulk = useCallback(
     async (orders: FulfilmentOrder[], status: Exclude<PackStatusValue, 'pending'>) => {
       for (const order of orders) {

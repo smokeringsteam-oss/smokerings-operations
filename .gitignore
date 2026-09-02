@@ -7,3 +7,10 @@ dist-ssr
 server/uploads
 server/logs
 *.log
+# SQLite database — reseed with `npm run kb:import --rebuild`
+server/data
+
+# Compiled output of vite.config.ts — Vite loads .js before .ts, so a stale
+# copy here silently overrides the real config.
+vite.config.js
+vite.config.d.ts

@@ -191,9 +191,8 @@ const MenuItemRecipe: React.FC<{
       <div className="menu-item-card-section">
         <span className="menu-item-card-title">Recipe</span>
         <p className="status-message">
-          No row in the knowledge-base menu.csv matches {itemName}, so there's no recipe to edit. Add one with a
-          matching item_name (or put this product's Odoo id in its odoo_product_id column) and the recipe will open
-          here.
+          No menu row matches {itemName}, so there's no recipe to edit. Add one with a matching name (or put this
+          product's Odoo id in its odoo_product_id column) and the recipe will open here.
         </p>
       </div>
     );
@@ -227,8 +226,8 @@ const MenuItemRecipe: React.FC<{
         <p className="status-message">Reading the recipe…</p>
       ) : lines && !lines.length ? (
         <p className="status-message">
-          No recipe lines reference {menuId} yet, so nothing about this dish reaches the prep planner. Add its rows to
-          recipe_lines.csv to get it costed and bought for.
+          No recipe lines reference {menuId} yet, so nothing about this dish reaches the prep planner. Add its
+          ingredients to get it costed and bought for.
         </p>
       ) : (
         lines && (

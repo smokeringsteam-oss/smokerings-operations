@@ -1,105 +1,26 @@
 // Per-side prep state for the Weekend Prep Planner's "Sides needed — batch
-// detail" table: not started → making → done, one row per side per weekend.
+// detail" table: not started → making → done, one row per side per weekend in
+// `side_prep_status`, with every transition appended to `side_prep_log`.
 //
-// Shared through a knowledge-base CSV rather than localStorage for the same
-// reason server/ops/b2c/weekendStatus.js is (whoever opens the board next sees where
+// Shared through the database rather than localStorage for the same reason
+// server/ops/b2c/weekendStatus.js is (whoever opens the board next sees where
 // the kitchen actually got to, not just the browser that clicked), and keyed
-// the same way: the weekend_start/weekend_end pair from Step 1's Odoo
-// date-range picker, plus the side key computeSwiggyPlan groups by
+// the same way: the weekend, plus the side key computeSwiggyPlan groups by
 // (sub-recipe id where there is one, else material id, else name).
 //
-// side_name rides along denormalised so the CSV reads on its own — "SR-015"
-// means nothing to someone opening the file in Excel.
-import { readCsvFile, writeCsvFile, appendCsvRows } from '../../core/csvStore.js';
-import { getDataDir } from '../../core/knowledgeBase.js';
-import fs from 'fs';
-import path from 'path';
-
-// Deliberately not in knowledgeBase.js's FILES registry: it's created on
-// first use rather than shipped, and listing it there would make getConfig()
-// report the whole knowledge base as unconfigured until someone happens to
-// click "Start making". Same reasoning as server/marketing/aiSeo.js's two files.
-const STATUS_FILE = 'Kitchen/side_prep_status.csv';
-
-const HEADER = ['weekend_start', 'weekend_end', 'side_key', 'side_name', 'status', 'started_at', 'done_at'];
-const STATUSES = new Set(['pending', 'making', 'done']);
-
-// Created on first use — nothing ships this file, same "don't hard-fail on a
-// missing optional file" spirit as weekendStatus.js.
-function ensureFile() {
-  const p = path.join(getDataDir(), STATUS_FILE);
-  if (!fs.existsSync(p)) {
-    fs.mkdirSync(path.dirname(p), { recursive: true });
-    fs.writeFileSync(p, `${HEADER.join(',')}\r\n`, 'utf8');
-  }
-  return p;
-}
-
-function loadRows() {
-  const statusPath = ensureFile();
-  return { path: statusPath, ...readCsvFile(statusPath) };
-}
-
-// ---- Append-only history: Kitchen/packing_log.csv -----------------------
-// Every start/finish is also written as a history row, following the
-// knowledge-base v2 rule that "*_log.csv is append-only history, everything
-// else is current truth" — Kitchen/side_prep_status.csv above is the current
-// truth, this is the trail behind it.
+// side_name rides along denormalised so a row reads on its own — "SR-015"
+// means nothing to someone reading a query result.
 //
-// It reuses packing_log.csv rather than a new file at the pitmaster's call
-// (2026-08-19): the file was left header-only and unwritten by the v2
-// restructure, still carrying an order/invoice-shaped header nothing reads.
-// The `channel` column tags rows B2C so the B2B kitchen can share the same
-// log later rather than getting a file of its own — same convention as
-// order_lifecycle_log.csv and smoking_stage_log.csv.
-const LOG_FILE = 'Kitchen/packing_log.csv';
-const LOG_HEADER = [
-  'changed_at',
-  'channel',
-  'side_key',
-  'side_name',
-  'from_status',
-  'to_status',
-  'weekend_start',
-  'weekend_end',
-  'source',
-];
+// Migrated off Kitchen/side_prep_status.csv (current truth) and the
+// repurposed Kitchen/packing_log.csv (the trail behind it). The status table
+// was seeded keyed on a recipe id with a foreign key to `recipe`, which only
+// ever fitted a third of the sides this board tracks; server/core/migrations.js
+// rekeys it on side_key, and the note there says why.
+import { all } from '../../core/db.js';
+import { insert, select, upsert } from '../../core/repo.js';
+import { ensureWeekend } from './weekendStatus.js';
 
-// The legacy order-shaped header is replaced outright while the file holds no
-// data rows (the state it shipped in). If anything has since been written
-// under that header, the two headers are unioned instead — a stale column
-// layout is worth keeping over silently orphaning somebody's rows.
-function ensureLogFile() {
-  const p = path.join(getDataDir(), LOG_FILE);
-  if (!fs.existsSync(p)) {
-    fs.mkdirSync(path.dirname(p), { recursive: true });
-    fs.writeFileSync(p, `${LOG_HEADER.join(',')}
-`, 'utf8');
-    return { path: p, header: LOG_HEADER };
-  }
-  const { header, rows } = readCsvFile(p);
-  if (LOG_HEADER.every((column) => header.includes(column))) return { path: p, header };
-  if (!rows.length) {
-    fs.writeFileSync(p, `${LOG_HEADER.join(',')}
-`, 'utf8');
-    return { path: p, header: LOG_HEADER };
-  }
-  const merged = [...header, ...LOG_HEADER.filter((column) => !header.includes(column))];
-  writeCsvFile(p, merged, rows);
-  return { path: p, header: merged };
-}
-
-// Best-effort: losing an
-// audit row is bad, but failing the status change itself — and leaving the
-// board showing a batch the kitchen has already started — is worse.
-function logSidePrepChange(row) {
-  try {
-    const { path: p, header } = ensureLogFile();
-    appendCsvRows(p, header, [{ channel: 'B2C', source: 'weekend-prep', ...row }]);
-  } catch (err) {
-    console.error('Failed to append to Kitchen/packing_log.csv:', err);
-  }
-}
+const STATUSES = new Set(['pending', 'making', 'done']);
 
 function requireWeekend(weekendStart, weekendEnd) {
   if (!weekendStart || !weekendEnd) {
@@ -123,10 +44,29 @@ function toMap(rows) {
   return { statuses };
 }
 
+// Matched on weekend_start alone — the weekend's identity, see the note in
+// weekendStatus.js. The end date is carried on the row for readability, not
+// as part of the key.
 function getSidePrepStatuses({ weekendStart, weekendEnd }) {
   requireWeekend(weekendStart, weekendEnd);
-  const { rows } = loadRows();
-  return toMap(rows.filter((r) => r.weekend_start === weekendStart && r.weekend_end === weekendEnd));
+  return toMap(select('side_prep_status', { weekend_start: weekendStart }));
+}
+
+// Every start/finish is also written to side_prep_log, the append-only trail
+// that the current-truth row above would otherwise overwrite. Best-effort:
+// losing an audit row is bad, but failing the status change itself — and
+// leaving the board showing a batch the kitchen has already started — is
+// worse.
+//
+// channel tags the row B2C so the B2B kitchen can share the same log later
+// rather than getting one of its own, the same convention smoking_stage_log
+// and sales_order follow.
+function logSidePrepChange(row) {
+  try {
+    insert('side_prep_log', { channel: 'B2C', source: 'weekend-prep', ...row });
+  } catch (err) {
+    console.error('Failed to append to side_prep_log:', err.message || err);
+  }
 }
 
 function setSidePrepStatus({ weekendStart, weekendEnd, sideKey, sideName, status }) {
@@ -142,38 +82,34 @@ function setSidePrepStatus({ weekendStart, weekendEnd, sideKey, sideName, status
     throw err;
   }
 
-  const { path: statusPath, header, rows } = loadRows();
-  const existing = rows.find(
-    (r) => r.weekend_start === weekendStart && r.weekend_end === weekendEnd && r.side_key === sideKey,
+  const [existing] = all(
+    'SELECT * FROM side_prep_status WHERE weekend_start = ? AND side_key = ?',
+    weekendStart,
+    sideKey,
   );
   const now = new Date().toISOString();
-  // Read off before the row below is mutated in place — otherwise the history
-  // row's from_status would just echo to_status.
+  // Read off before the row below is written — otherwise the history row's
+  // from_status would just echo to_status.
   const fromStatus = existing?.status || 'pending';
   // started_at is kept once set: going back to "making" from done shouldn't
   // rewrite when the batch was actually started. Dropping to pending is the
   // explicit "I mis-clicked" path, so that one does clear both stamps.
-  const startedAt = status === 'pending' ? '' : existing?.started_at || now;
-  const doneAt = status === 'done' ? now : '';
+  const startedAt = status === 'pending' ? null : existing?.started_at || now;
+  const doneAt = status === 'done' ? now : null;
 
-  if (existing) {
-    existing.side_name = sideName || existing.side_name;
-    existing.status = status;
-    existing.started_at = startedAt;
-    existing.done_at = doneAt;
-  } else {
-    rows.push({
-      weekend_start: weekendStart,
-      weekend_end: weekendEnd,
-      side_key: sideKey,
-      side_name: sideName || sideKey,
-      status,
-      started_at: startedAt,
-      done_at: doneAt,
-    });
-  }
+  // The row hangs off `weekend` by foreign key, so the weekend has to be on
+  // file before the side is.
+  ensureWeekend(weekendStart, weekendEnd);
+  upsert('side_prep_status', ['weekend_start', 'side_key'], {
+    weekend_start: weekendStart,
+    weekend_end: weekendEnd,
+    side_key: sideKey,
+    side_name: sideName || existing?.side_name || sideKey,
+    status,
+    started_at: startedAt,
+    done_at: doneAt,
+  });
 
-  writeCsvFile(statusPath, header.length ? header : HEADER, rows);
   logSidePrepChange({
     // The instant of this transition, not the batch's started_at — undoing a
     // "done" keeps the original start stamp, so those two diverge.

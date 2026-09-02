@@ -38,7 +38,7 @@ import {
   syncRawMaterialsToOdoo,
   addStockOnHand,
 } from './integrations/odoo.js';
-import { getRecurringScheduleFromCsv } from './sprint/recurringScheduleCsv.js';
+import { getRecurringSchedule } from './sprint/recurringSchedule.js';
 import { getWeekStatus, setTaskStatus } from './sprint/weeklyScheduleStatusLog.js';
 import {
   getConfig as getPurchasingConfig,
@@ -280,7 +280,7 @@ app.get('/api/odoo/order-packing', async (req, res) => {
   }
 });
 
-// Backfills/re-syncs odoo_product_id on materials.csv against Odoo — see
+// Backfills/re-syncs odoo_product_id on the materials catalogue against Odoo — see
 // server/integrations/odoo.js syncRawMaterialsToOdoo. Re-run whenever new raw materials
 // get added to the catalog without one yet; already-synced rows are skipped.
 app.post('/api/odoo/sync-products', async (req, res) => {
@@ -437,7 +437,7 @@ app.post('/api/ops/menu-items/details', async (req, res) => {
 });
 
 // The kitchen half of a menu item: how much meat, which sides and what
-// packaging go into one order of it, straight out of recipe_lines.csv. Keyed
+// packaging go into one order of it, straight out of the bill of materials. Keyed
 // by the knowledge-base menu_id (which GET /api/ops/menu-items hands back on
 // each item), not the Odoo id — Odoo has no model for a recipe.
 app.get('/api/ops/menu-items/recipe', (req, res) => {
@@ -534,7 +534,7 @@ app.get('/api/recipes/sides-by-item', (req, res) => {
 });
 
 // Weekend Prep Planner's "Meat needed" tiles — per-order finished weight
-// (recipe_lines.csv) converted to a raw buy weight via each
+// (the bill of materials) converted to a raw buy weight via each
 // category's loss % and the cut it's bought as, both from
 // server/core/meatConfig.js.
 app.post('/api/recipes/meat-plan', (req, res) => {
@@ -600,10 +600,10 @@ app.post('/api/order-packing/retry-invoice', async (req, res) => {
   }
 });
 
-// Weekend Prep Planner's "mark this weekend as done" flag — shared via a
-// knowledge-base CSV (see server/ops/b2c/weekendStatus.js) rather than localStorage,
-// keyed by the same weekend_start/weekend_end (YYYY-MM-DD) the Step 1 Odoo
-// date-range picker already uses.
+// Weekend Prep Planner's "mark this weekend as done" flag — shared through
+// the database (see server/ops/b2c/weekendStatus.js) rather than localStorage,
+// keyed by the weekend_start (YYYY-MM-DD) the Step 1 Odoo date-range picker
+// already uses.
 app.get('/api/weekend-status', (req, res) => {
   try {
     const { from, to } = req.query;
@@ -670,9 +670,9 @@ app.post('/api/purchasing/vendors', async (req, res) => {
     const { vendorName, vendorType, suppliesCategory, contactPerson, phone, email, address, notes } = req.body;
     const result = addVendor({ vendorName, vendorType, suppliesCategory, contactPerson, phone, email, address, notes });
 
-    // CSV first (the source of truth), Odoo second and best-effort — same
-    // pattern as "Log purchase to CSV and Odoo": a failed Odoo call doesn't
-    // undo the vendors.csv row, it's just reported back.
+    // The database first (the source of truth), Odoo second and best-effort —
+    // same pattern as logging a purchase: a failed Odoo call doesn't undo the
+    // vendor row, it's just reported back.
     let odoo = null;
     try {
       odoo = await createVendorInOdoo({ vendorName, phone, email, address });
@@ -718,11 +718,11 @@ app.get('/api/purchasing/purchases', (req, res) => {
 app.post('/api/purchasing/purchases', (req, res) => {
   try {
     const { vendorName, purchaseDate, channel, lines } = req.body;
-    // Client names are resolved from b2b_clients.csv here rather than taken
-    // from the body, so a renamed account can't leave two spellings of itself
-    // in the purchase log. Same reason POST .../marinate resolves it, and the
-    // same reason purchasing.js doesn't do the lookup itself: that module has
-    // no business importing the B2B files.
+    // Client names are resolved from the B2B account book here rather than
+    // taken from the body, so a renamed account can't leave two spellings of
+    // itself in the purchase log. Same reason POST .../marinate resolves it,
+    // and the same reason purchasing.js doesn't do the lookup itself: that
+    // module has no business reading the B2B tables.
     const taggedLines =
       channel === 'B2B' && Array.isArray(lines) && lines.some((l) => l?.clientId)
         ? (() => {
@@ -744,7 +744,7 @@ app.post('/api/purchasing/send-po', async (req, res) => {
   try {
     const { vendorName, lines, purchaseIds } = req.body;
     const result = await createPurchaseOrder({ vendorName, lines });
-    // Link each purchase_log.csv row to its matching Odoo PO line so a later
+    // Link each purchase row to its matching Odoo PO line so a later
     // delete can remove just that line — best-effort, doesn't fail the PO
     // creation if the ids don't line up cleanly.
     if (Array.isArray(purchaseIds) && purchaseIds.length === lines.length) {
@@ -778,8 +778,8 @@ app.delete('/api/purchasing/purchases/:purchaseId', async (req, res) => {
 // Manual inventory addition — stock that didn't come through a vendor
 // purchase (opening stock, a correction found while counting, a return).
 // Separate from POST /api/purchasing/purchases because there's no
-// vendor/price attached; logs to inventory_adjustments.csv instead of
-// purchase_log.csv but bumps quantity_on_hand the same way.
+// vendor/price attached; logs to inventory_adjustment instead of purchase but
+// bumps quantity_on_hand the same way.
 app.get('/api/purchasing/inventory/adjustments', (req, res) => {
   try {
     res.json({ adjustments: getInventoryAdjustments() });
@@ -794,9 +794,9 @@ app.post('/api/purchasing/inventory/adjustments', async (req, res) => {
     const { materialId, quantity, reason, date } = req.body;
     const result = addInventoryAdjustment({ materialId, quantity, reason, date });
 
-    // CSV first (the source of truth), Odoo second and best-effort — same
-    // pattern as "Log purchase to CSV and Odoo" / "Add vendor": a failed
-    // Odoo call doesn't undo the CSV write, it's just reported back.
+    // The database first (the source of truth), Odoo second and best-effort —
+    // same pattern as logging a purchase / adding a vendor: a failed Odoo call
+    // doesn't undo the write here, it's just reported back.
     let odoo = null;
     try {
       odoo = await addStockOnHand({ materialId, itemName: result.adjustment.item_name, quantity });
@@ -820,7 +820,8 @@ app.get('/api/smoking/meat-items', (req, res) => {
   }
 });
 
-// Recipe dropdown options — rub_recipes.csv, filterable by category (Brine, Rub, ...).
+// Recipe dropdown options — the recipe table, filterable by category
+// (Brine, Rub, ...).
 app.get('/api/smoking/recipes', (req, res) => {
   try {
     const { category } = req.query;
@@ -867,10 +868,10 @@ app.post('/api/smoking/sessions/marinate', (req, res) => {
       req.body;
     // The client's name is resolved here rather than trusted from the body,
     // and rather than looked up inside smoking.js — that module deliberately
-    // doesn't know about the B2B files (see the note on sessionClientId in
-    // startBrining). Storing the name alongside the id keeps smoking_log.csv
-    // readable on its own in Excel; an id that no longer resolves just leaves
-    // the name blank rather than failing the cook.
+    // doesn't know about the B2B tables (see the note on sessionClientId in
+    // startBrining). Storing the name alongside the id keeps the session row
+    // readable on its own; an id that no longer resolves just leaves the name
+    // blank rather than failing the cook.
     const clientName = clientId ? listB2BClients().clients.find((c) => c.id === clientId)?.name || '' : '';
     const result = startBrining({
       materialId,
@@ -931,9 +932,9 @@ app.get('/api/smoking/sessions/:sessionId/taggable-purchases', (req, res) => {
 });
 
 // Stage 3a — Smoking start. sourcePurchaseId links the raw weight back to
-// the specific purchase_log.csv lot it came from — see getAvailablePurchasesForMaterial.
+// the specific purchase lot it came from — see getAvailablePurchasesForMaterial.
 // taggedPurchaseIds is the separate cost attribution: which buys were made
-// for this cook, stamped onto purchase_log.csv's smoking_session_id.
+// for this cook, stamped onto the purchases' smoking_session_id.
 app.post('/api/smoking/sessions/:sessionId/smoke-start', (req, res) => {
   try {
     const { rawWeightKg, smokingStart, sourcePurchaseId, taggedPurchaseIds } = req.body;
@@ -1035,8 +1036,8 @@ app.get('/api/smoking/yield-stats', (req, res) => {
   }
 });
 
-// Deletes a smoking_log.csv row entirely and reverses any
-// inventory it had already consumed (mirrors DELETE /api/purchasing/purchases).
+// Deletes a smoking session entirely and reverses any inventory it had
+// already consumed (mirrors DELETE /api/purchasing/purchases).
 app.delete('/api/smoking/sessions/:sessionId', (req, res) => {
   try {
     const result = deleteSession(req.params.sessionId);
@@ -1065,11 +1066,11 @@ app.get('/api/github/status', (req, res) => {
   res.json(getGithubConfig());
 });
 
-// Weekly recurring cadence (all 7 days), read live from schedule.csv in the
-// knowledge-base repo — edit the sheet, reload Daily View, see it there.
+// Weekly recurring cadence (all 7 days), read live from the scheduled_task
+// table — see server/sprint/recurringSchedule.js.
 app.get('/api/recurring-schedule', (req, res) => {
   try {
-    const schedule = getRecurringScheduleFromCsv();
+    const schedule = getRecurringSchedule();
     res.json({ schedule });
   } catch (err) {
     console.error('Error in GET /api/recurring-schedule:', err);
@@ -1077,10 +1078,10 @@ app.get('/api/recurring-schedule', (req, res) => {
   }
 });
 
-// Per-week completion log for the recurring cadence — shared via a knowledge-base
-// CSV (see server/sprint/weeklyScheduleStatusLog.js) rather than localStorage, keyed by the
-// ISO week (e.g. "2026-W33"). A new week has no rows yet, so it starts fresh; past
-// weeks' rows stay behind as a log.
+// Per-week completion log for the recurring cadence — shared through the
+// database (see server/sprint/weeklyScheduleStatusLog.js) rather than
+// localStorage, keyed by the ISO week (e.g. "2026-W33"). A new week has no
+// rows yet, so it starts fresh; past weeks' rows stay behind as a log.
 app.get('/api/recurring-schedule/status', (req, res) => {
   try {
     const { week } = req.query;
@@ -1225,8 +1226,8 @@ app.post('/api/github/migrate-backlog', async (req, res) => {
   }
 });
 
-// AI SEO tracker — see server/marketing/aiSeo.js. Prompts and their run history live in
-// the knowledge-base repo as aiseo_prompts.csv / aiseo_runs.csv.
+// AI SEO tracker — see server/marketing/aiSeo.js. Prompts and their run
+// history live in the database, in aiseo_prompt / aiseo_run.
 app.get('/api/aiseo/status', (req, res) => {
   try {
     res.json(getAiSeoStatus());

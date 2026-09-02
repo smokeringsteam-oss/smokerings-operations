@@ -7,13 +7,6 @@
 // Odoo itself is mocked: these are decisions this module makes before any
 // RPC goes out, and the assertions are about the payload it would send.
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import fs from 'fs';
-import os from 'os';
-import path from 'path';
-
-// menuItems.js -> menuCsvMirror.js -> knowledgeBase.js, which wants a data
-// directory even though nothing here touches the CSV mirror.
-process.env.KNOWLEDGE_BASE_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'menu-item-details-'));
 
 const MENU_CATEGORY_ID = 10;
 const B2B_CATEGORY_ID = 21;

@@ -18,62 +18,38 @@
 // Planner's "meat needed" tiles, and the two can be added together later
 // without a translation table.
 //
-// Storage is two CSVs in the knowledge-base Data folder, created on first
-// use. Deliberately NOT in knowledgeBase.js's FILES map — everything listed
-// there counts toward getConfig().configured, and a knowledge-base checkout
-// that predates this module would start reporting itself as unconfigured to
-// the purchasing/smoking screens over two files they don't use. Same
-// reasoning as server/marketing/aiSeo.js.
-import fs from 'fs';
-import path from 'path';
-import { readCsvFile, writeCsvFile, nextSequentialId } from '../../core/csvStore.js';
-import { getDataDir } from '../../core/knowledgeBase.js';
+// Storage is two SQLite tables, `b2b_client` and `b2b_client_demand`,
+// migrated off Data/B2B/b2b_clients.csv and b2b_client_demands.csv. Both are
+// flat and one-to-one with the files they replaced, so unlike the catalogue
+// there is no kbViews projection in between — the column names below are the
+// schema's own.
+//
+// Three things the CSV version could not do, and this now does:
+//
+//   * A client edit is an UPDATE of one row. The old version parsed every
+//     client, mutated one field and wrote them all back, so two people
+//     saving different accounts at the same time meant the second silently
+//     erased the first's change.
+//   * Replacing a client's demand set is one transaction. As two file
+//     rewrites, a crash between clearing the old lines and writing the new
+//     ones left an account with no demand at all — quietly dropping it out
+//     of the meat rollup the kitchen plans off.
+//   * The demand lines are a real child table: ON DELETE CASCADE, a
+//     CHECK (qty_kg > 0), and a foreign key that makes an orphaned line
+//     impossible rather than merely unlikely.
+//
+// The header-migration dance the CSV version did on every read is gone with
+// them. A column this module knows about either exists in the schema or the
+// query fails loudly, instead of a stale header quietly dropping every field
+// added since the file was last written.
+import { insert, nextId, remove, select, selectOne, transaction, update } from '../../core/repo.js';
 import { MEAT_CATEGORY_KEYS, MEAT_CATEGORY_LABELS } from '../../core/meatConfig.js';
 
-// Paths relative to the knowledge-base Data folder — both files live under
-// Data/B2B since the 2026-08-19 reorganisation. Same convention as the
-// FILES map in server/core/knowledgeBase.js; these two aren't in it because this
-// module creates them on first use rather than the repo shipping them.
-const CLIENTS_FILE = 'B2B/b2b_clients.csv';
-const DEMANDS_FILE = 'B2B/b2b_client_demands.csv';
-
-const CLIENTS_HEADER = [
-  'client_id',
-  'name',
-  'business_type',
-  'stage',
-  'contact_name',
-  'contact_role',
-  'phone',
-  'email',
-  'area',
-  'address',
-  'gstin',
-  'lead_source',
-  'order_day',
-  'notes',
-  // Sampling stage
-  'sample_sent_on',
-  'sample_items',
-  'sample_feedback',
-  'sample_outcome',
-  // Onboarding stage
-  'onboarding_steps',
-  'price_list',
-  'payment_terms',
-  'odoo_partner_id',
-  'onboarded_on',
-  // Bookkeeping
-  'lost_reason',
-  'created_at',
-  'updated_at',
-];
-
-// One row per client per meat category. A separate file rather than a packed
-// cell on the client row so the demand table stays something you can open in
-// Excel and pivot — "how much chicken does B2B want in total" is then a
-// column sum, not a parsing exercise.
-const DEMANDS_HEADER = ['demand_id', 'client_id', 'category', 'qty_kg', 'cadence', 'notes', 'updated_at'];
+const CLIENTS_TABLE = 'b2b_client';
+// One row per client per meat category. A child table rather than a packed
+// cell on the client row, so "how much chicken does B2B want in total" stays
+// a sum over a column rather than a parsing exercise.
+const DEMANDS_TABLE = 'b2b_client_demand';
 
 // The pipeline, in order.
 const STAGES = [
@@ -149,9 +125,12 @@ const BUSINESS_TYPES = [
   'Other',
 ];
 
-// Semicolons join list-valued cells (sample items, onboarding steps) for the
-// same reason as aiSeo.js: commas would encode fine, but a menu item with a
-// comma in it is ambiguous to anyone opening the file in Excel.
+// Semicolons join the list-valued columns (sample items, onboarding steps),
+// which the schema stores as one TEXT cell each. Kept as semicolons rather
+// than switched to commas now that a parser is no longer in the way: these
+// rows still get exported back to CSV for the knowledge-base repo, and a
+// menu item with a comma in its name is ambiguous to anyone who opens that
+// in Excel. Same convention as aiSeo.js.
 const LIST_SEP = ';';
 
 function badRequest(message) {
@@ -160,44 +139,35 @@ function badRequest(message) {
   throw err;
 }
 
-function ensureDataDir() {
-  const dir = getDataDir();
-  if (!fs.existsSync(dir)) {
-    const err = new Error(
-      `Knowledge-base Data folder not found at ${dir}. Set KNOWLEDGE_BASE_DATA_DIR in the server's .env if that repo lives somewhere else.`,
-    );
-    err.status = 503;
-    throw err;
-  }
-  return dir;
-}
-
-function ensureFile(fileName, header) {
-  const p = path.join(ensureDataDir(), fileName);
-  if (!fs.existsSync(p)) {
-    // fileName now names a subfolder, which a fresh knowledge-base checkout
-    // may not have yet — create it rather than failing the first write.
-    fs.mkdirSync(path.dirname(p), { recursive: true });
-    fs.writeFileSync(p, `${header.join(',')}\n`, 'utf8');
-    return p;
-  }
-  // Migrate an older file up to the current header, same reasoning as
-  // orderPackingStatus.js: writeCsvFile only writes the columns the header
-  // names, so a file still carrying an older schema would silently drop
-  // every column added since — on every save, with no error to show for it.
-  const { header: existing, rows } = readCsvFile(p);
-  if (!header.every((column) => existing.includes(column))) writeCsvFile(p, header, rows);
-  return p;
-}
-
+// Both tables are small — tens of rows — so every read here is a plain
+// ordered select through repo.js rather than SQL of its own. The one filter
+// that might have wanted SQL, addClient's case-insensitive duplicate-name
+// check, stays in JS so it keeps applying this module's own trim/lowercase
+// rule instead of whatever collation the column happens to carry.
 function loadClients() {
-  const p = ensureFile(CLIENTS_FILE, CLIENTS_HEADER);
-  return { path: p, ...readCsvFile(p) };
+  return select(CLIENTS_TABLE, {}, { orderBy: 'client_id' });
 }
 
 function loadDemands() {
-  const p = ensureFile(DEMANDS_FILE, DEMANDS_HEADER);
-  return { path: p, ...readCsvFile(p) };
+  return select(DEMANDS_TABLE, {}, { orderBy: 'demand_id' });
+}
+
+function loadClient(id) {
+  const row = selectOne(CLIENTS_TABLE, { client_id: String(id || '').trim() });
+  if (!row) {
+    const err = new Error(`No B2B client with id ${id}.`);
+    err.status = 404;
+    throw err;
+  }
+  return row;
+}
+
+// Re-reads a client and its demand lines after a write, so what the endpoint
+// hands back is what the database actually holds rather than what the caller
+// hoped it would — a defaulted column or a value the schema rewrote shows up
+// in the response instead of only on the next page load.
+function readBack(clientId) {
+  return { client: toClient(loadClient(clientId), groupDemands(loadDemands())) };
 }
 
 function splitList(value) {
@@ -213,7 +183,7 @@ function toNumber(value) {
 }
 
 // Round to 2dp without dragging float noise ("1.7999999999999998 kg") into
-// either the CSV or the tiles.
+// either the stored quantity or the tiles.
 function round2(n) {
   return Math.round(n * 100) / 100;
 }
@@ -262,7 +232,9 @@ function toClient(row, demandsByClient) {
     onboardingTotal: ONBOARDING_STEP_KEYS.length,
     priceList: row.price_list || '',
     paymentTerms: row.payment_terms || '',
-    odooPartnerId: row.odoo_partner_id || '',
+    // INTEGER in the schema, a string everywhere above this line — the
+    // detail form posts it back as typed text and the UI compares it as one.
+    odooPartnerId: row.odoo_partner_id == null ? '' : String(row.odoo_partner_id),
     onboardedOn: row.onboarded_on || '',
     lostReason: row.lost_reason || '',
     demands,
@@ -326,11 +298,8 @@ function summarize(clients) {
 }
 
 function listClients() {
-  const { rows } = loadClients();
-  const { rows: demandRows } = loadDemands();
-  const demandsByClient = groupDemands(demandRows);
-  const clients = rows
-    .filter((row) => row.client_id)
+  const demandsByClient = groupDemands(loadDemands());
+  const clients = loadClients()
     .map((row) => toClient(row, demandsByClient))
     // Pipeline order first, then biggest demand — so whoever opens the tab
     // sees the accounts needing a push before the ones already running.
@@ -350,7 +319,7 @@ function listClients() {
   };
 }
 
-// JSON key -> CSV column for the generic update path. Everything a caller is
+// JSON key -> table column for the generic update path. Everything a caller is
 // allowed to write is in here; anything else in the body is ignored rather
 // than rejected, so the UI can post a whole client object back.
 const EDITABLE_FIELDS = {
@@ -374,34 +343,22 @@ const EDITABLE_FIELDS = {
   lostReason: 'lost_reason',
 };
 
-function findRow(rows, id) {
-  const row = rows.find((r) => r.client_id === String(id || '').trim());
-  if (!row) {
-    const err = new Error(`No B2B client with id ${id}.`);
-    err.status = 404;
-    throw err;
-  }
-  return row;
-}
-
 function addClient({ name, businessType, stage, contactName, phone, email, area, notes } = {}) {
   const clean = String(name || '').trim();
   if (!clean) badRequest('A client name is required.');
 
-  const { path: p, rows } = loadClients();
-  if (rows.some((r) => (r.name || '').trim().toLowerCase() === clean.toLowerCase())) {
+  if (loadClients().some((r) => (r.name || '').trim().toLowerCase() === clean.toLowerCase())) {
     const err = new Error(`"${clean}" is already on the B2B client list.`);
     err.status = 409;
     throw err;
   }
 
   const now = new Date().toISOString();
-  const row = {};
-  CLIENTS_HEADER.forEach((column) => {
-    row[column] = '';
-  });
-  Object.assign(row, {
-    client_id: nextSequentialId(rows, 'client_id', 'B2B'),
+  // Only the columns this call has something to say about. The rest are left
+  // to the schema, which stores them as NULL — and every reader above treats
+  // a NULL the way it treated the CSV's empty cell.
+  const row = {
+    client_id: nextId(CLIENTS_TABLE, 'client_id', 'B2B'),
     name: clean,
     business_type: String(businessType || '').trim(),
     // New accounts start as leads unless the caller says otherwise — an
@@ -416,24 +373,28 @@ function addClient({ name, businessType, stage, contactName, phone, email, area,
     notes: String(notes || '').trim(),
     created_at: now,
     updated_at: now,
-  });
+  };
 
-  writeCsvFile(p, CLIENTS_HEADER, [...rows, row]);
-  return { client: toClient(row, new Map()) };
+  insert(CLIENTS_TABLE, row);
+  return readBack(row.client_id);
 }
 
 function updateClient({ id, ...fields } = {}) {
-  const { path: p, rows } = loadClients();
-  const row = findRow(rows, id);
+  const row = loadClient(id);
+  // Collected as a patch of just the columns this call touches rather than by
+  // mutating the row and writing it back whole: an UPDATE that names only
+  // what changed cannot undo a field someone else edited between the read and
+  // the write.
+  const patch = {};
 
   Object.entries(EDITABLE_FIELDS).forEach(([key, column]) => {
     if (fields[key] === undefined) return;
-    row[column] = String(fields[key] ?? '').trim();
+    patch[column] = String(fields[key] ?? '').trim();
   });
 
   if (fields.sampleItems !== undefined) {
     const items = Array.isArray(fields.sampleItems) ? fields.sampleItems : splitList(fields.sampleItems);
-    row.sample_items = items
+    patch.sample_items = items
       .map((s) => String(s).trim())
       .filter(Boolean)
       .join(LIST_SEP);
@@ -441,7 +402,7 @@ function updateClient({ id, ...fields } = {}) {
   if (fields.sampleOutcome !== undefined) {
     const outcome = String(fields.sampleOutcome || '').trim();
     if (!SAMPLE_OUTCOME_KEYS.includes(outcome)) badRequest(`"${outcome}" is not a sample outcome.`);
-    row.sample_outcome = outcome;
+    patch.sample_outcome = outcome;
   }
   if (fields.onboardingSteps !== undefined) {
     const steps = (Array.isArray(fields.onboardingSteps) ? fields.onboardingSteps : splitList(fields.onboardingSteps))
@@ -451,32 +412,28 @@ function updateClient({ id, ...fields } = {}) {
     if (unknown) badRequest(`"${unknown}" is not an onboarding step.`);
     // Stored in checklist order rather than click order, so the cell reads
     // the same as the list on screen.
-    row.onboarding_steps = ONBOARDING_STEP_KEYS.filter((key) => steps.includes(key)).join(LIST_SEP);
+    patch.onboarding_steps = ONBOARDING_STEP_KEYS.filter((key) => steps.includes(key)).join(LIST_SEP);
   }
-  if (!String(row.name || '').trim()) badRequest('A client name is required.');
+  // The column is NOT NULL, but '' satisfies that — and the name is what
+  // every screen identifies the account by, so a blank one is refused here.
+  if (!String(patch.name ?? row.name ?? '').trim()) badRequest('A client name is required.');
 
-  row.updated_at = new Date().toISOString();
-  writeCsvFile(p, CLIENTS_HEADER, rows);
-
-  const { rows: demandRows } = loadDemands();
-  return { client: toClient(row, groupDemands(demandRows)) };
+  patch.updated_at = new Date().toISOString();
+  update(CLIENTS_TABLE, { client_id: row.client_id }, patch);
+  return readBack(row.client_id);
 }
 
 function setStage({ id, stage, lostReason } = {}) {
   if (!STAGE_KEYS.includes(stage)) badRequest(`"${stage}" is not a pipeline stage.`);
 
-  const { path: p, rows } = loadClients();
-  const row = findRow(rows, id);
-  row.stage = stage;
+  const row = loadClient(id);
+  const patch = { stage, updated_at: new Date().toISOString() };
   // Stamped the first time an account goes live and left alone after that —
   // a pause and a restart shouldn't rewrite when they were actually won.
-  if (stage === 'active' && !row.onboarded_on) row.onboarded_on = new Date().toISOString().slice(0, 10);
-  if (stage === 'lost' && lostReason !== undefined) row.lost_reason = String(lostReason || '').trim();
-  row.updated_at = new Date().toISOString();
-  writeCsvFile(p, CLIENTS_HEADER, rows);
-
-  const { rows: demandRows } = loadDemands();
-  return { client: toClient(row, groupDemands(demandRows)) };
+  if (stage === 'active' && !row.onboarded_on) patch.onboarded_on = new Date().toISOString().slice(0, 10);
+  if (stage === 'lost' && lostReason !== undefined) patch.lost_reason = String(lostReason || '').trim();
+  update(CLIENTS_TABLE, { client_id: row.client_id }, patch);
+  return readBack(row.client_id);
 }
 
 // Replaces a client's whole demand list in one call. Replace rather than
@@ -485,9 +442,7 @@ function setStage({ id, stage, lostReason } = {}) {
 function setDemands({ id, demands } = {}) {
   if (!Array.isArray(demands)) badRequest('demands must be an array.');
 
-  const { rows: clientRows } = loadClients();
-  const clientRow = findRow(clientRows, id);
-  const clientId = clientRow.client_id;
+  const clientId = loadClient(id).client_id;
 
   const now = new Date().toISOString();
   const seen = new Set();
@@ -514,40 +469,47 @@ function setDemands({ id, demands } = {}) {
     // rather than a 0 kg row that would clutter every rollup.
     .filter((d) => d.qtyKg > 0);
 
-  const { path: p, rows } = loadDemands();
-  const working = rows.filter((r) => r.client_id !== clientId);
-  cleaned.forEach((d) => {
-    working.push({
-      demand_id: nextSequentialId(working, 'demand_id', 'B2BD'),
-      client_id: clientId,
-      category: d.category,
-      qty_kg: String(d.qtyKg),
-      cadence: d.cadence,
-      notes: d.notes,
-      updated_at: now,
+  // Clear-then-insert in one transaction. Split across two writes the way
+  // the CSV version was, a failure in between is an account whose demand
+  // silently reads as zero — which downstream is not "unknown", it is "does
+  // not need any meat this week".
+  transaction(() => {
+    // No demand lines yet is the normal case for a new account, so a delete
+    // that matches nothing is expected here rather than a 404.
+    remove(DEMANDS_TABLE, { client_id: clientId }, { required: false });
+    cleaned.forEach((d) => {
+      insert(DEMANDS_TABLE, {
+        demand_id: nextId(DEMANDS_TABLE, 'demand_id', 'B2BD'),
+        client_id: clientId,
+        category: d.category,
+        // A real number now, not the CSV's stringified one — the column is
+        // REAL and carries a CHECK (qty_kg > 0), which the zero-line filter
+        // above already satisfies.
+        qty_kg: d.qtyKg,
+        cadence: d.cadence,
+        notes: d.notes,
+        updated_at: now,
+      });
     });
   });
 
-  writeCsvFile(p, DEMANDS_HEADER, working);
-  return { client: toClient(clientRow, groupDemands(working)) };
+  return readBack(clientId);
 }
 
 function deleteClient({ id } = {}) {
-  const { path: p, rows } = loadClients();
-  const row = findRow(rows, id);
-  writeCsvFile(
-    p,
-    CLIENTS_HEADER,
-    rows.filter((r) => r !== row),
-  );
+  const { client_id: clientId } = loadClient(id);
 
   // Demand lines are meaningless without their client, so they go too —
-  // otherwise the next client to take that id would inherit them.
-  const { path: demandPath, rows: demandRows } = loadDemands();
-  const kept = demandRows.filter((r) => r.client_id !== row.client_id);
-  if (kept.length !== demandRows.length) writeCsvFile(demandPath, DEMANDS_HEADER, kept);
+  // otherwise the next account to take that id would inherit them. The
+  // schema's ON DELETE CASCADE would do this on its own, but it is spelled
+  // out here so the behaviour doesn't quietly depend on foreign keys being
+  // switched on for whichever connection is in play.
+  transaction(() => {
+    remove(DEMANDS_TABLE, { client_id: clientId }, { required: false });
+    remove(CLIENTS_TABLE, { client_id: clientId });
+  });
 
-  return { deleted: row.client_id };
+  return { deleted: clientId };
 }
 
 export {

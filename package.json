@@ -6,13 +6,15 @@
   "scripts": {
     "start": "vite",
     "dev": "vite",
-    "start-server": "node server/index.js",
+    "start-server": "node --watch server/index.js",
     "aiseo:sweep": "node server/scripts/runAiSeoSweep.js",
     "post:reddit": "node server/marketing/redditPoster.js",
     "reddit:login": "node server/marketing/redditLogin.js",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
-    "test": "vitest"
+    "test": "vitest",
+    "db:init": "node server/scripts/dbInit.js",
+    "db": "node server/scripts/dbQuery.js"
   },
   "dependencies": {
     "@google/genai": "^2.16.0",

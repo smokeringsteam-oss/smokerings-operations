@@ -1912,8 +1912,8 @@ const WeekendPrepPlanner: React.FC = () => {
                                 {row.qty} {row.unit}
                               </td>
                               {/* Raw ingredients carry no order multiple or unit
-                                  price in materials.csv — buy the quantity
-                                  needed, priced at the till. */}
+                                  price in the materials catalogue — buy the
+                                  quantity needed, priced at the till. */}
                               <td className="prep-total-cell">—</td>
                               <td className="prep-total-cell">—</td>
                             </tr>
@@ -1991,8 +1991,8 @@ const WeekendPrepPlanner: React.FC = () => {
                         )}
                       </li>
                       <li>
-                        Per-order meat weights come from recipe_lines.csv and the Bread Time Stories
-                        order from materials.csv; the loss %s and which cut each meat is bought as (pulled
+                        Per-order meat weights come from the recipe lines and the Bread Time Stories
+                        order from the materials catalogue; the loss %s and which cut each meat is bought as (pulled
                         chicken → chicken legs, pulled pork → pork shoulder) are config in server/core/meatConfig.js —
                         see any gaps listed above the Meat needed tiles for anything still missing. Ribs and
                         chicken buy quantities are shown in kg (how Karnataka Pork Shop/Nayas Chicken actually
@@ -2000,8 +2000,8 @@ const WeekendPrepPlanner: React.FC = () => {
                         file to convert to.
                       </li>
                       <li>Pulled pork can only be bought in 1.2kg minimum units (server/core/meatConfig.js, pulledPork cut.minBuyKg) — the Buy figure is rounded up to the nearest 1.2kg, shown alongside the exact amount needed.</li>
-                      <li>Bun/taco-shell/garlic-bread prices and order multiples (materials.csv standard_cost_inr/order_multiple) are kitchen figures, not yet vendor-invoice-confirmed in writing — worth double-checking with Bread Time Stories. Tortilla's ₹30/pc and 6-piece minimum are the Swiggy pack price (₹180 for 6) divided out, so they move with whatever Instamart is charging that week.</li>
-                      <li>Sides needed &amp; the Swiggy order above are driven by menu.csv/recipe_ingredients.csv/rub_recipes.csv instead of guesses — see "Data gaps found" above for anything still missing from that data.</li>
+                      <li>Bun/taco-shell/garlic-bread prices and order multiples (the materials catalogue's standard_cost_inr/order_multiple) are kitchen figures, not yet vendor-invoice-confirmed in writing — worth double-checking with Bread Time Stories. Tortilla's ₹30/pc and 6-piece minimum are the Swiggy pack price (₹180 for 6) divided out, so they move with whatever Instamart is charging that week.</li>
+                      <li>Sides needed &amp; the Swiggy order above are driven by the menu, recipe lines and recipes instead of guesses — see "Data gaps found" above for anything still missing from that data.</li>
                     </ul>
                   </div>
                 </>

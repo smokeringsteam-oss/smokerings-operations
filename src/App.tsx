@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import WeeklySprintDashboard, { type WeeklySprintSub, weeklySprintTools } from './pages/sprint/WeeklySprintDashboard';
 import MarketingDashboard, { type MarketingSub, marketingTools } from './pages/marketing/MarketingDashboard';
 import OpsDashboard, { type OpsSub, opsTools } from './pages/ops/OpsDashboard';
@@ -20,11 +20,51 @@ const isOpsTool = (tool: ActiveTool): tool is OpsSub => opsTools.some((item) => 
 
 const isToolsTool = (tool: ActiveTool): tool is ToolsSub => toolsTools.some((item) => item.id === tool);
 
+const menuSections: { label: string; tools: { id: ActiveTool; label: string; icon: string }[] }[] = [
+  { label: 'Ops Dashboard', tools: opsTools },
+  { label: 'Weekly Sprint Tasks', tools: weeklySprintTools },
+  { label: 'Marketing', tools: marketingTools },
+  { label: 'Tools', tools: toolsTools },
+];
+
 const App = () => {
   const [activeTool, setActiveTool] = useState<ActiveTool>('dailyView');
+  // Drawer state only matters at <= 720px, where the sidebar is off-canvas.
+  const [menuOpen, setMenuOpen] = useState(false);
+
+  const activeLabel =
+    menuSections.flatMap((section) => section.tools).find((tool) => tool.id === activeTool)?.label ?? 'Menu';
+
+  useEffect(() => {
+    if (!menuOpen) return undefined;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setMenuOpen(false);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [menuOpen]);
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell${menuOpen ? ' menu-open' : ''}`}>
+      <header className="mobile-topbar">
+        <button
+          type="button"
+          className="mobile-menu-toggle"
+          aria-label={menuOpen ? 'Close menu' : 'Open menu'}
+          aria-expanded={menuOpen}
+          onClick={() => setMenuOpen((open) => !open)}
+        >
+          <span aria-hidden="true">{menuOpen ? '✕' : '☰'}</span>
+        </button>
+        <span className="mobile-topbar-title">{activeLabel}</span>
+      </header>
+
+      <div
+        className="sidebar-backdrop"
+        role="presentation"
+        onClick={() => setMenuOpen(false)}
+      />
+
       <aside className="app-sidebar">
         <div className="sidebar-brand">
           <div className="brand-badge">🔥</div>
@@ -37,61 +77,29 @@ const App = () => {
         <div className="sidebar-menu">
           <span className="sidebar-label">Menu</span>
 
-          <span className="sidebar-section-label">Ops Dashboard</span>
-          <div className="sidebar-submenu open">
-            <ul>
-              {opsTools.map((tool) => (
-                <li key={tool.id} className={activeTool === tool.id ? 'active' : ''}>
-                  <button type="button" onClick={() => setActiveTool(tool.id)}>
-                    <span>{tool.icon}</span>
-                    {tool.label}
-                  </button>
-                </li>
-              ))}
-            </ul>
-          </div>
-
-          <span className="sidebar-section-label">Weekly Sprint Tasks</span>
-          <div className="sidebar-submenu open">
-            <ul>
-              {weeklySprintTools.map((tool) => (
-                <li key={tool.id} className={activeTool === tool.id ? 'active' : ''}>
-                  <button type="button" onClick={() => setActiveTool(tool.id)}>
-                    <span>{tool.icon}</span>
-                    {tool.label}
-                  </button>
-                </li>
-              ))}
-            </ul>
-          </div>
-
-          <span className="sidebar-section-label">Marketing</span>
-          <div className="sidebar-submenu open">
-            <ul>
-              {marketingTools.map((tool) => (
-                <li key={tool.id} className={activeTool === tool.id ? 'active' : ''}>
-                  <button type="button" onClick={() => setActiveTool(tool.id)}>
-                    <span>{tool.icon}</span>
-                    {tool.label}
-                  </button>
-                </li>
-              ))}
-            </ul>
-          </div>
-
-          <span className="sidebar-section-label">Tools</span>
-          <div className="sidebar-submenu open">
-            <ul>
-              {toolsTools.map((tool) => (
-                <li key={tool.id} className={activeTool === tool.id ? 'active' : ''}>
-                  <button type="button" onClick={() => setActiveTool(tool.id)}>
-                    <span>{tool.icon}</span>
-                    {tool.label}
-                  </button>
-                </li>
-              ))}
-            </ul>
-          </div>
+          {menuSections.map((section) => (
+            <div key={section.label}>
+              <span className="sidebar-section-label">{section.label}</span>
+              <div className="sidebar-submenu open">
+                <ul>
+                  {section.tools.map((tool) => (
+                    <li key={tool.id} className={activeTool === tool.id ? 'active' : ''}>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setActiveTool(tool.id);
+                          setMenuOpen(false);
+                        }}
+                      >
+                        <span>{tool.icon}</span>
+                        {tool.label}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+          ))}
         </div>
       </aside>
 

@@ -1,10 +1,10 @@
 // Unattended AI SEO sweep — runs every active tracked prompt through a
-// grounded Gemini check and appends the results to aiseo_runs.csv, exactly as
-// the dashboard's "Run all checks" button does.
+// grounded Gemini check and writes the results to the aiseo_run table,
+// exactly as the dashboard's "Run all checks" button does.
 //
 // Calls server/marketing/aiSeo.js directly rather than the HTTP API, so a scheduled run
 // doesn't depend on the express server being up. The dashboard reads the same
-// CSVs, so results show up there next time it loads.
+// database, so results show up there next time it loads.
 //
 // Run with:
 //   npm run aiseo:sweep

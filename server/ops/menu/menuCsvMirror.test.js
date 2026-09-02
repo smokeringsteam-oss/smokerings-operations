@@ -1,34 +1,50 @@
-// Covers the Odoo -> menu.csv mirror: which CSV row an edited Odoo product
-// lands on, what it is allowed to overwrite, and that a file it can't match
-// (or can't find) degrades to a note rather than an exception — the Odoo
-// write has already happened by the time this runs.
+// Covers the Odoo -> knowledge-base mirror: which menu row an edited Odoo
+// product lands on, what it is allowed to overwrite, and that a row it can't
+// match degrades to a note rather than an exception — the Odoo write has
+// already happened by the time this runs.
+//
+// Moved onto the database with the module (phase 1). The behavioural
+// assertions are the ones this made against menu.csv; what changed is that a
+// row is read back from two joined tables, and that its values come back as
+// numbers and an integer flag rather than the strings a CSV cell always was.
+// The test that did not survive was "touches only the edited line — same line
+// endings, same quoting elsewhere", which was about not churning a text
+// file's diff. What it protected is still checked, as "leaves the other menu
+// items alone".
 import { describe, it, expect, beforeEach, afterAll } from 'vitest';
-import fs from 'fs';
-import os from 'os';
-import path from 'path';
-import { readCsvFile } from '../../core/csvStore.js';
+import { createTestDb, removeTestDb } from '../../core/testDb.js';
 
-const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'menu-csv-mirror-'));
-process.env.KNOWLEDGE_BASE_DATA_DIR = dataDir;
-// menu.csv lives under Data/Menu (server/core/knowledgeBase.js FILES.menu); the
-// fixture below is written straight to disk, so create the folder for it.
-fs.mkdirSync(path.join(dataDir, 'Menu'), { recursive: true });
-const menuPath = path.join(dataDir, 'Menu', 'menu.csv');
+// The same three dishes the CSV fixture had, with the columns the mirror
+// touches. jackfruit-tacos is here because one test matches it by Odoo's
+// internal reference rather than by name.
+const MENU_ITEMS = [
+  {
+    item_id: 'pork-tacos',
+    item_name: 'Smoked Pork Tacos',
+    price_inr: 499,
+    description: '12-hour pulled pork, salsa verde.',
+  },
+  {
+    item_id: 'chicken-quesadilla',
+    item_name: 'Smoked Chicken Quesadilla',
+    price_inr: 399,
+    description: 'Smoke. Spice. Cheese.',
+  },
+  {
+    item_id: 'jackfruit-tacos',
+    item_name: 'Smoked Jackfruit Tacos',
+    price_inr: 399,
+    description: 'Pulled jackfruit and salsa verde.',
+  },
+];
+
+const { dir } = createTestDb({ menuItems: MENU_ITEMS });
 
 const { mirrorMenuItemToCsv } = await import('./menuCsvMirror.js');
+const { readMenu } = await import('../../core/kbViews.js');
+const { update } = await import('../../core/repo.js');
 
-// A trimmed menu.csv with the columns the mirror touches, deliberately LF and
-// with a hand-quoted notes field that doesn't strictly need its quotes — both
-// of which the writer has to leave alone on rows it didn't edit.
-const HEADER = 'menu_id,item_name,price_inr,is_active,odoo_product_id,description,notes';
-const FIXTURE = [
-  HEADER,
-  'pork-tacos,Smoked Pork Tacos,499,yes,,"12-hour pulled pork, salsa verde.","Quoted; but comma-free"',
-  'chicken-quesadilla,Smoked Chicken Quesadilla,399,yes,,Smoke. Spice. Cheese.,',
-  'jackfruit-tacos,Smoked Jackfruit Tacos,399,yes,,Pulled jackfruit and salsa verde.,',
-].join('\n') + '\n';
-
-const rowFor = (menuId) => readCsvFile(menuPath).rows.find((r) => r.menu_id === menuId);
+const rowFor = (menuId) => readMenu().find((r) => r.menu_id === menuId);
 const item = (over) => ({
   id: 41,
   name: 'Smoked Pork Tacos',
@@ -41,23 +57,36 @@ const item = (over) => ({
 });
 
 beforeEach(() => {
-  process.env.KNOWLEDGE_BASE_DATA_DIR = dataDir;
-  fs.writeFileSync(menuPath, FIXTURE, 'utf8');
+  // Back to an unpinned, fully-active menu: several tests below depend on a
+  // row being free to match by name, which a pin left by the previous test
+  // would prevent.
+  MENU_ITEMS.forEach((m) => {
+    update('item', { item_id: m.item_id }, { name: m.item_name, is_active: 1 });
+    update('menu_item', { item_id: m.item_id }, { price_inr: m.price_inr, description: m.description, odoo_product_id: null });
+  });
 });
 
-afterAll(() => fs.rmSync(dataDir, { recursive: true, force: true }));
+afterAll(() => removeTestDb(dir));
 
 describe('mirrorMenuItemToCsv', () => {
   it('writes an edited price onto the row matched by name, and pins the row', () => {
     const result = mirrorMenuItemToCsv(item({ price: 549 }), ['price']);
     expect(result).toMatchObject({ mirrored: true, menuId: 'pork-tacos', matchedBy: 'name' });
-    expect(rowFor('pork-tacos').price_inr).toBe('549');
-    expect(rowFor('pork-tacos').odoo_product_id).toBe('41');
+    expect(rowFor('pork-tacos').price_inr).toBe(549);
+    expect(rowFor('pork-tacos').odoo_product_id).toBe(41);
   });
 
   it('leaves fields this edit did not touch alone', () => {
     mirrorMenuItemToCsv(item({ price: 549, description: 'whatever Odoo holds' }), ['price']);
     expect(rowFor('pork-tacos').description).toBe('12-hour pulled pork, salsa verde.');
+  });
+
+  it('reports no change when the price saved is the one already on file', () => {
+    // The row now reads back as the number 499 while the mirror is handed the
+    // string "499". Compared naively those differ, and every save would claim
+    // to have changed a price it did not touch.
+    const result = mirrorMenuItemToCsv(item({ price: 499 }), ['price']);
+    expect(result.changed).toEqual(['odoo_product_id']);
   });
 
   it('follows the pin after the product is renamed in Odoo', () => {
@@ -84,7 +113,7 @@ describe('mirrorMenuItemToCsv', () => {
     mirrorMenuItemToCsv(item({}), ['price']);
     const result = mirrorMenuItemToCsv(item({ id: 99, price: 1 }), ['price']);
     expect(result.mirrored).toBe(false);
-    expect(rowFor('pork-tacos').price_inr).toBe('499');
+    expect(rowFor('pork-tacos').price_inr).toBe(499);
   });
 
   it('collapses archived-or-unavailable into the single is_active flag', () => {
@@ -97,30 +126,21 @@ describe('mirrorMenuItemToCsv', () => {
   });
 
   it('reports an unmatched item instead of throwing or inventing a row', () => {
-    const before = fs.readFileSync(menuPath, 'utf8');
+    const before = readMenu();
     const result = mirrorMenuItemToCsv(item({ id: 500, name: 'Smoked Turkey Sandwich' }), ['price']);
     expect(result.mirrored).toBe(false);
-    expect(result.reason).toMatch(/no row in Menu\/menu\.csv matches/i);
-    expect(fs.readFileSync(menuPath, 'utf8')).toBe(before);
+    expect(result.reason).toMatch(/no menu item matches/i);
+    expect(readMenu()).toEqual(before);
   });
 
-  it('reports a missing knowledge base instead of throwing', () => {
-    process.env.KNOWLEDGE_BASE_DATA_DIR = path.join(dataDir, 'not-checked-out');
-    const result = mirrorMenuItemToCsv(item({}), ['price']);
-    expect(result.mirrored).toBe(false);
-    expect(result.reason).toMatch(/KNOWLEDGE_BASE_DATA_DIR/);
-  });
-
-  it('touches only the edited line — same line endings, same quoting elsewhere', () => {
+  it('leaves the other menu items alone', () => {
     mirrorMenuItemToCsv(item({ id: 77, name: 'Smoked Chicken Quesadilla', price: 429 }), ['price']);
-    const after = fs.readFileSync(menuPath, 'utf8');
-    expect(after).not.toContain('\r\n');
-    const before = FIXTURE.split('\n');
-    const lines = after.split('\n');
-    expect(lines).toHaveLength(before.length);
-    expect(lines[0]).toBe(HEADER);
-    expect(lines[1]).toBe(before[1]); // pork-tacos row, quotes and all
-    expect(lines[3]).toBe(before[3]);
-    expect(lines[2]).toContain('429');
+    expect(rowFor('chicken-quesadilla').price_inr).toBe(429);
+    expect(rowFor('pork-tacos')).toMatchObject({
+      price_inr: 499,
+      item_name: 'Smoked Pork Tacos',
+      description: '12-hour pulled pork, salsa verde.',
+    });
+    expect(rowFor('jackfruit-tacos')).toMatchObject({ price_inr: 399, item_name: 'Smoked Jackfruit Tacos' });
   });
 });

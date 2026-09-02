@@ -1,0 +1,6 @@
+{
+  // Browse server/data/smokerings.db (the knowledge-base SQLite store) by
+  // clicking it in the explorer. *.db is associated with this viewer out of
+  // the box, so no per-file setup is needed.
+  "recommendations": ["qwtel.sqlite-viewer"]
+}
