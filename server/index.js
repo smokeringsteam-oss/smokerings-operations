@@ -6,8 +6,6 @@ import fs from 'fs';
 import cors from 'cors';
 import { fileURLToPath } from 'url';
 import {
-  brainstormReply,
-  generatePostFromConversation,
   extractWeekendOrders,
   readOrderTimePreferences,
 } from './integrations/geminiContent.js';
@@ -23,8 +21,6 @@ import {
   addDraftItem,
   createSubIssueTask,
   migrateDraftsToIssues,
-  getRecentActivity,
-  formatActivityForPrompt,
 } from './integrations/githubProjects.js';
 import {
   getConfig as getOdooConfig,
@@ -38,7 +34,13 @@ import {
   syncRawMaterialsToOdoo,
   addStockOnHand,
 } from './integrations/odoo.js';
-import { getRecurringSchedule } from './sprint/recurringSchedule.js';
+import {
+  createTask as createScheduledTask,
+  deleteTask as deleteScheduledTask,
+  getRecurringSchedule,
+  moveTask as moveScheduledTask,
+  updateTask as updateScheduledTask,
+} from './sprint/recurringSchedule.js';
 import { getWeekStatus, setTaskStatus } from './sprint/weeklyScheduleStatusLog.js';
 import {
   getConfig as getPurchasingConfig,
@@ -49,11 +51,15 @@ import {
   getLowStock,
   getPurchases,
   recordPurchases,
+  catalogPurchaseItem,
+  linkPurchaseToMaterial,
   linkPurchasesToOdoo,
   deletePurchase,
   getInventoryAdjustments,
   addInventoryAdjustment,
 } from './ops/shared/purchasing.js';
+import { MAX_IMAGE_BYTES as MAX_BILL_BYTES, scanPurchaseBill } from './ops/shared/purchaseScan.js';
+import { suggestMatchesForPurchase } from './ops/shared/materialMatch.js';
 import {
   getMeatItems,
   getRecipes,
@@ -71,7 +77,7 @@ import {
   deleteSession,
 } from './ops/shared/smoking.js';
 import { getStageLog } from './ops/shared/smokingStageLog.js';
-import { getMenu, computeSwiggyPlan, computeMeatPlan, computePrepPlan, getPackableSidesByItem } from './ops/b2c/recipes.js';
+import { getMenu, computeSwiggyPlan, computeMeatPlan, computePrepPlan, getPackableSidesByItem, getMeatByItem } from './ops/b2c/recipes.js';
 import { getMenuItemRecipe, updateMenuItemRecipe } from './ops/menu/menuRecipe.js';
 import { getWeekendStatus, setWeekendStatus } from './ops/b2c/weekendStatus.js';
 import { getSidePrepStatuses, setSidePrepStatus } from './ops/b2c/sidePrepStatus.js';
@@ -102,17 +108,68 @@ import {
   deleteClient as deleteB2BClient,
 } from './ops/b2b/b2bClients.js';
 import {
-  getStatus as getAiSeoStatus,
-  listPrompts as listAiSeoPrompts,
-  addPrompt as addAiSeoPrompt,
-  seedPrompts as seedAiSeoPrompts,
-  updatePrompt as updateAiSeoPrompt,
-  deletePrompt as deleteAiSeoPrompt,
-  listRuns as listAiSeoRuns,
-  deleteRun as deleteAiSeoRun,
-  runCheck as runAiSeoCheck,
-  logManualRun as logAiSeoManualRun,
-} from './marketing/aiSeo.js';
+  listSales as listB2BSales,
+  addSale as addB2BSale,
+  updateSale as updateB2BSale,
+  setLines as setB2BSaleLines,
+  recordPayment as recordB2BPayment,
+  deleteSale as deleteB2BSale,
+  raiseInvoice as raiseB2BInvoice,
+  invoicePdf as b2bInvoicePdf,
+  invoiceCatalogue as b2bInvoiceCatalogue,
+} from './ops/b2b/b2bSales.js';
+import {
+  CATEGORIES as SPEND_CATEGORIES,
+  listBudgets,
+  addBudget,
+  updateBudget,
+  deleteBudget,
+} from './marketing/marketingBudget.js';
+import {
+  fetchAttributedOrders,
+  fetchChannelOptions,
+  setOrderAttribution,
+  backfillUtmFromChannel,
+} from './marketing/orderAttribution.js';
+import { buildRoiReport } from './marketing/marketingRoi.js';
+import { buildEngagementReport } from './marketing/siteEngagement.js';
+import {
+  MEDIUMS as LINK_MEDIUMS,
+  listPresets as listLinkPresets,
+  listSourceDetails as listLinkSourceDetails,
+  listLinks,
+  listCampaigns as listLinkCampaigns,
+  saveLinks,
+  deleteLink,
+} from './marketing/trackedLinks.js';
+import {
+  MAX_AUDIO_BYTES,
+  MAX_CLIP_BYTES,
+  CLIPS_DIR,
+  RENDERS_DIR,
+  buildRenderPlan,
+  describeToolchain as describeReelToolchain,
+  ensureMediaDirs,
+  getRenderJob,
+  probeMedia,
+  pruneOldMedia,
+  startRender,
+} from './marketing/reelStudio.js';
+import {
+  checkInstagramAccount,
+  describeInstagramConfig,
+  getPublishJob,
+  startPublish,
+} from './marketing/instagramGraph.js';
+import { buildWeeklyReport, DEFAULT_WEEKS } from './finance/weeklyLedger.js';
+import { buildItemSalesReport } from './finance/itemSales.js';
+import {
+  listExpenseCategories,
+  logSpend,
+  getSpendLog,
+  categorisePurchases,
+} from './finance/purchaseLog.js';
+import { describeConfig as describeGaConfig } from './integrations/googleAnalytics.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const uploadDir = path.join(__dirname, 'uploads');
@@ -124,6 +181,62 @@ const storage = multer.diskStorage({
 });
 
 const upload = multer({ storage });
+
+// Bill photos are read once by Gemini and thrown away, so they never touch
+// the uploads folder the Reddit images live in — memory storage, and a hard
+// size cap here as well as in scanPurchaseBill so an oversized file is
+// rejected before it is fully buffered rather than after.
+const billUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: MAX_BILL_BYTES } });
+
+// multer reports its own failures by calling next(err), which would skip the
+// route's try/catch entirely and land the size limit as a bare 500 naming a
+// code. Answered here instead, in the words the screen shows.
+const readBillUpload = (req, res, next) =>
+  billUpload.single('bill')(req, res, (err) => {
+    if (!err) return next();
+    if (err.code === 'LIMIT_FILE_SIZE') {
+      return res.status(413).json({ error: 'That file is over 10 MB — take the photo again at a smaller size.' });
+    }
+    console.error('Error uploading a bill scan:', err);
+    return res.status(400).json({ error: err.message || String(err) });
+  });
+
+// Reel clips are large and are the one thing here that genuinely has to land
+// on disk rather than in memory — a 400MB buffer per clip would end the
+// process. The stored name keeps a sanitised trace of the original so the
+// uploads folder stays readable to a human, but it is the timestamp and the
+// random suffix that make it unique; two clips named VID_0001.mp4 from two
+// phones must not collide.
+const reelStorage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    const { clipsDir } = ensureMediaDirs();
+    cb(null, clipsDir);
+  },
+  filename: (req, file, cb) => {
+    const parsed = path.parse(file.originalname || 'clip.mp4');
+    const safeBase = parsed.name.replace(/[^A-Za-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'clip';
+    const safeExt = /^\.[A-Za-z0-9]{1,5}$/.test(parsed.ext) ? parsed.ext.toLowerCase() : '.mp4';
+    cb(null, `${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${safeBase}${safeExt}`);
+  },
+});
+
+// Same reason as readBillUpload above: multer's own errors bypass the route's
+// try/catch, so the size limit is answered here in words rather than arriving
+// as a bare 500. Clips and the music track share the storage but not the cap.
+const readReelUpload = (field, maxBytes) => {
+  const handler = multer({ storage: reelStorage, limits: { fileSize: maxBytes } }).array(field);
+  return (req, res, next) =>
+    handler(req, res, (err) => {
+      if (!err) return next();
+      if (err.code === 'LIMIT_FILE_SIZE') {
+        return res
+          .status(413)
+          .json({ error: `That file is over ${Math.round(maxBytes / (1024 * 1024))} MB — trim it down first.` });
+      }
+      console.error('Error uploading reel media:', err);
+      return res.status(400).json({ error: err.message || String(err) });
+    });
+};
 
 const app = express();
 // 16mb rather than the 100kb default: menu item pictures are posted as base64
@@ -167,34 +280,6 @@ app.post('/api/post-reddit', upload.array('images'), async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: String(err) });
-  }
-});
-
-app.post('/api/gemini/chat', async (req, res) => {
-  try {
-    const { messages } = req.body;
-    const result = await brainstormReply({ messages });
-    res.json(result);
-  } catch (err) {
-    console.error('Error in /api/gemini/chat:', err);
-    res.status(err.status || 500).json({ error: err.message || String(err) });
-  }
-});
-
-// Agent 2: a multi-step pipeline (brief -> insights -> draft -> refine-if-
-// needed, see generatePostFromConversation) that turns the Step 1 chat
-// conversation into one finished, on-voice, ≤400-character post. GitHub
-// activity is optional context the founder can pull into the chat itself
-// (see /api/github/recent-activity) rather than something this endpoint
-// fetches automatically.
-app.post('/api/gemini/generate-post', async (req, res) => {
-  try {
-    const { messages } = req.body;
-    const result = await generatePostFromConversation({ messages });
-    res.json(result);
-  } catch (err) {
-    console.error('Error in /api/gemini/generate-post:', err);
-    res.status(err.status || 500).json({ error: err.message || String(err) });
   }
 });
 
@@ -463,7 +548,7 @@ app.post('/api/ops/menu-items/recipe', (req, res) => {
   }
 });
 
-// Picker options for one relational field on that record (?field=uom_id&q=kg).
+// Picker options for one relational field on that record (?field=categ_id&q=food).
 // The model searched comes from the field's own Odoo metadata, so this stays
 // a product-record helper rather than a general model reader.
 app.get('/api/ops/menu-items/field-options', async (req, res) => {
@@ -522,13 +607,26 @@ app.post('/api/recipes/swiggy-plan', (req, res) => {
 });
 
 // Static reference — which packable sides each menu item needs, independent
-// of any order counts. Order Packing fetches this once and uses it to work
+// of any order counts. Order Management fetches this once and uses it to work
 // out, per individual order, which sides can share one container.
 app.get('/api/recipes/sides-by-item', (req, res) => {
   try {
     res.json({ sidesByItem: getPackableSidesByItem() });
   } catch (err) {
     console.error('Error in GET /api/recipes/sides-by-item:', err);
+    res.status(err.status || 500).json({ error: err.message || String(err) });
+  }
+});
+
+// Static reference — which smoked meats each menu item contains, no order
+// counts involved. Order Management's Step 3 fetches this once to work out
+// which orders the "pork in the smoker" / "chicken in the smoker" switches
+// should move to IN_SMOKER.
+app.get('/api/recipes/meat-by-item', (req, res) => {
+  try {
+    res.json({ meatByItem: getMeatByItem() });
+  } catch (err) {
+    console.error('Error in GET /api/recipes/meat-by-item:', err);
     res.status(err.status || 500).json({ error: err.message || String(err) });
   }
 });
@@ -547,7 +645,7 @@ app.post('/api/recipes/meat-plan', (req, res) => {
   }
 });
 
-// Order Packing's "what to toast/warm before packing" table — buns, taco
+// Order Management's "what to toast/warm before packing" table — buns, taco
 // shells, tortillas, garlic bread — scoped to one slot's order counts, same
 // shape/spirit as /api/recipes/swiggy-plan but for Bakery-category prep
 // instead of Swiggy-bought sides.
@@ -561,7 +659,7 @@ app.post('/api/recipes/prep-plan', (req, res) => {
   }
 });
 
-// Order Packing's In Smoker -> Prepping -> Packed -> Finding Partner ->
+// Order Management's In Smoker -> Prepping -> Packed -> Finding Partner ->
 // Partner Assigned -> Out for Delivery -> Delivered state per order (see
 // server/ops/shared/orderPackingStatus.js). ?orderIds=1,2,3 scopes the lookup to the
 // active slot's orders; omit to get every order that has a status on file.
@@ -717,7 +815,7 @@ app.get('/api/purchasing/purchases', (req, res) => {
 
 app.post('/api/purchasing/purchases', (req, res) => {
   try {
-    const { vendorName, purchaseDate, channel, lines } = req.body;
+    const { vendorName, purchaseDate, channel, expenseCategory, lines } = req.body;
     // Client names are resolved from the B2B account book here rather than
     // taken from the body, so a renamed account can't leave two spellings of
     // itself in the purchase log. Same reason POST .../marinate resolves it,
@@ -732,10 +830,92 @@ app.post('/api/purchasing/purchases', (req, res) => {
             );
           })()
         : lines;
-    const result = recordPurchases({ vendorName, purchaseDate, channel, lines: taggedLines });
+    const result = recordPurchases({ vendorName, purchaseDate, channel, expenseCategory, lines: taggedLines });
     res.status(201).json(result);
   } catch (err) {
     console.error('Error in POST /api/purchasing/purchases:', err);
+    res.status(err.status || 500).json({ error: err.message || String(err) });
+  }
+});
+
+// Finishes an ad hoc purchase line: creates the material it was bought as,
+// links the buy to it, and applies the quantity to stock.
+//
+// This is the second half of POST .../purchases for a line typed in by name.
+// That endpoint deliberately accepts an item the catalogue has never heard of
+// — refusing it would mean nobody can log what they actually bought at the
+// counter — and reports it back in `inventorySkipped` as a buy whose money
+// landed but whose stock did not. This is what the screen calls to close
+// that gap.
+//
+// Not exposed as a generic "create a material" endpoint. It is anchored to a
+// purchase on purpose: the row it creates starts at zero and is moved by a
+// buy that actually happened, so the count is always explained by something.
+app.post('/api/purchasing/purchases/:purchaseId/catalog', (req, res) => {
+  try {
+    const { category, reorderLevel, standardCostInr } = req.body || {};
+    const result = catalogPurchaseItem({
+      purchaseId: req.params.purchaseId,
+      category,
+      reorderLevel,
+      standardCostInr,
+    });
+    res.status(201).json(result);
+  } catch (err) {
+    console.error('Error in POST /api/purchasing/purchases/:purchaseId/catalog:', err);
+    res.status(err.status || 500).json({ error: err.message || String(err) });
+  }
+});
+
+// Which catalogue item this ad hoc line probably was — string similarity
+// narrowed to a shortlist, then Gemini choosing from it. See
+// server/ops/shared/materialMatch.js for why it is split that way.
+//
+// A GET because it is a read: nothing is written, no stock moves, and the
+// same request twice is the same question twice. The screen asks it when the
+// pitmaster opens the mapping panel on a line, and every answer is a
+// suggestion they still have to click.
+app.get('/api/purchasing/purchases/:purchaseId/match-suggestions', async (req, res) => {
+  try {
+    res.json(await suggestMatchesForPurchase(req.params.purchaseId));
+  } catch (err) {
+    console.error('Error in GET /api/purchasing/purchases/:purchaseId/match-suggestions:', err);
+    res.status(err.status || 500).json({ error: err.message || String(err) });
+  }
+});
+
+// The other way to finish an ad hoc line: link it to a catalogue item that
+// already exists, rather than creating a new one for it (the endpoint above
+// this one). Separate from .../catalog because they are different decisions
+// with different consequences — this one moves stock onto an existing count,
+// that one starts a new count — and because a wrong guess between them is
+// what splits an ingredient across two rows.
+app.post('/api/purchasing/purchases/:purchaseId/link', (req, res) => {
+  try {
+    const { materialId } = req.body || {};
+    res.status(200).json(linkPurchaseToMaterial({ purchaseId: req.params.purchaseId, materialId }));
+  } catch (err) {
+    console.error('Error in POST /api/purchasing/purchases/:purchaseId/link:', err);
+    res.status(err.status || 500).json({ error: err.message || String(err) });
+  }
+});
+
+// Reads a photo of a vendor bill into draft purchase lines. Deliberately a
+// read-only endpoint: it writes nothing, logs nothing and moves no stock —
+// the screen loads what comes back into the cart, the pitmaster checks it
+// against the paper, and POST /api/purchasing/purchases above is still the
+// only thing that records a buy.
+app.post('/api/purchasing/scan-bill', readBillUpload, async (req, res) => {
+  try {
+    const file = req.file;
+    const result = await scanPurchaseBill({
+      buffer: file?.buffer,
+      mimeType: file?.mimetype,
+      size: file?.size,
+    });
+    res.json(result);
+  } catch (err) {
+    console.error('Error in POST /api/purchasing/scan-bill:', err);
     res.status(err.status || 500).json({ error: err.message || String(err) });
   }
 });
@@ -1078,6 +1258,55 @@ app.get('/api/recurring-schedule', (req, res) => {
   }
 });
 
+// Editing that cadence, from Daily View's edit mode. Each of these answers
+// with the whole schedule as it now stands rather than with just the row it
+// touched: a move renumbers a day, an add lands at the bottom of one, and the
+// page would otherwise have to reproduce that ordering itself and hope it
+// matched. One round trip, one source of truth for the order.
+app.post('/api/recurring-schedule/tasks', (req, res) => {
+  try {
+    const { day, label, time, assignedTo, category } = req.body;
+    const created = createScheduledTask({ day, label, time, assignedTo, category });
+    res.json({ ...created, schedule: getRecurringSchedule() });
+  } catch (err) {
+    console.error('Error in POST /api/recurring-schedule/tasks:', err);
+    res.status(err.status || 500).json({ error: err.message || String(err) });
+  }
+});
+
+app.patch('/api/recurring-schedule/tasks/:taskId', (req, res) => {
+  try {
+    const { label, time, assignedTo, category } = req.body;
+    const updated = updateScheduledTask({ taskId: req.params.taskId, label, time, assignedTo, category });
+    res.json({ ...updated, schedule: getRecurringSchedule() });
+  } catch (err) {
+    console.error('Error in PATCH /api/recurring-schedule/tasks:', err);
+    res.status(err.status || 500).json({ error: err.message || String(err) });
+  }
+});
+
+app.delete('/api/recurring-schedule/tasks/:taskId', (req, res) => {
+  try {
+    const removed = deleteScheduledTask({ taskId: req.params.taskId });
+    res.json({ ...removed, schedule: getRecurringSchedule() });
+  } catch (err) {
+    console.error('Error in DELETE /api/recurring-schedule/tasks:', err);
+    res.status(err.status || 500).json({ error: err.message || String(err) });
+  }
+});
+
+// Both kinds of drag: within a day (day omitted) and across to another one.
+app.post('/api/recurring-schedule/tasks/:taskId/move', (req, res) => {
+  try {
+    const { day, index } = req.body;
+    const moved = moveScheduledTask({ taskId: req.params.taskId, day, index });
+    res.json({ ...moved, schedule: getRecurringSchedule() });
+  } catch (err) {
+    console.error('Error in POST /api/recurring-schedule/tasks/move:', err);
+    res.status(err.status || 500).json({ error: err.message || String(err) });
+  }
+});
+
 // Per-week completion log for the recurring cadence — shared through the
 // database (see server/sprint/weeklyScheduleStatusLog.js) rather than
 // localStorage, keyed by the ISO week (e.g. "2026-W33"). A new week has no
@@ -1205,122 +1434,12 @@ app.post('/api/github/sprint-board/sub-issues', async (req, res) => {
   }
 });
 
-app.get('/api/github/recent-activity', async (req, res) => {
-  try {
-    const days = Number(req.query.days) || 7;
-    const activity = await getRecentActivity({ days });
-    res.json({ activity, summaryText: formatActivityForPrompt(activity) });
-  } catch (err) {
-    console.error('Error in GET /api/github/recent-activity:', err);
-    res.status(err.status || 500).json({ error: err.message || String(err) });
-  }
-});
-
 app.post('/api/github/migrate-backlog', async (req, res) => {
   try {
     const results = await migrateDraftsToIssues();
     res.json({ results });
   } catch (err) {
     console.error('Error in POST /api/github/migrate-backlog:', err);
-    res.status(err.status || 500).json({ error: err.message || String(err) });
-  }
-});
-
-// AI SEO tracker — see server/marketing/aiSeo.js. Prompts and their run
-// history live in the database, in aiseo_prompt / aiseo_run.
-app.get('/api/aiseo/status', (req, res) => {
-  try {
-    res.json(getAiSeoStatus());
-  } catch (err) {
-    console.error('Error in GET /api/aiseo/status:', err);
-    res.status(err.status || 500).json({ error: err.message || String(err) });
-  }
-});
-
-app.get('/api/aiseo/prompts', (req, res) => {
-  try {
-    res.json(listAiSeoPrompts());
-  } catch (err) {
-    console.error('Error in GET /api/aiseo/prompts:', err);
-    res.status(err.status || 500).json({ error: err.message || String(err) });
-  }
-});
-
-app.post('/api/aiseo/prompts', (req, res) => {
-  try {
-    const { text, intent } = req.body;
-    res.status(201).json(addAiSeoPrompt({ text, intent }));
-  } catch (err) {
-    console.error('Error in POST /api/aiseo/prompts:', err);
-    res.status(err.status || 500).json({ error: err.message || String(err) });
-  }
-});
-
-app.post('/api/aiseo/prompts/seed', (req, res) => {
-  try {
-    res.json(seedAiSeoPrompts());
-  } catch (err) {
-    console.error('Error in POST /api/aiseo/prompts/seed:', err);
-    res.status(err.status || 500).json({ error: err.message || String(err) });
-  }
-});
-
-app.post('/api/aiseo/prompts/update', (req, res) => {
-  try {
-    const { id, text, intent, isActive } = req.body;
-    res.json(updateAiSeoPrompt({ id, text, intent, isActive }));
-  } catch (err) {
-    console.error('Error in POST /api/aiseo/prompts/update:', err);
-    res.status(err.status || 500).json({ error: err.message || String(err) });
-  }
-});
-
-app.delete('/api/aiseo/prompts/:promptId', (req, res) => {
-  try {
-    res.json(deleteAiSeoPrompt({ id: req.params.promptId }));
-  } catch (err) {
-    console.error('Error in DELETE /api/aiseo/prompts/:promptId:', err);
-    res.status(err.status || 500).json({ error: err.message || String(err) });
-  }
-});
-
-app.get('/api/aiseo/runs', (req, res) => {
-  try {
-    res.json(listAiSeoRuns({ days: req.query.days }));
-  } catch (err) {
-    console.error('Error in GET /api/aiseo/runs:', err);
-    res.status(err.status || 500).json({ error: err.message || String(err) });
-  }
-});
-
-// One prompt per request — two Gemini round trips each, so the dashboard
-// walks its list one at a time rather than holding a request open for a
-// whole sweep.
-app.post('/api/aiseo/runs/check', async (req, res) => {
-  try {
-    const { promptId, promptText } = req.body;
-    res.status(201).json(await runAiSeoCheck({ promptId, promptText }));
-  } catch (err) {
-    console.error('Error in POST /api/aiseo/runs/check:', err);
-    res.status(err.status || 500).json({ error: err.message || String(err) });
-  }
-});
-
-app.post('/api/aiseo/runs/manual', async (req, res) => {
-  try {
-    const { promptId, promptText, engine, answerText, citationUrls } = req.body;
-    res.status(201).json(await logAiSeoManualRun({ promptId, promptText, engine, answerText, citationUrls }));
-  } catch (err) {
-    console.error('Error in POST /api/aiseo/runs/manual:', err);
-    res.status(err.status || 500).json({ error: err.message || String(err) });
-  }
-});
-
-app.delete('/api/aiseo/runs/:runId', (req, res) => {
-  try {
-    res.json(deleteAiSeoRun({ id: req.params.runId }));
-  } catch (err) {
-    console.error('Error in DELETE /api/aiseo/runs/:runId:', err);
     res.status(err.status || 500).json({ error: err.message || String(err) });
   }
 });
@@ -1381,6 +1500,678 @@ app.delete('/api/b2b/clients/:clientId', (req, res) => {
     console.error('Error in DELETE /api/b2b/clients/:clientId:', err);
     res.status(err.status || 500).json({ error: err.message || String(err) });
   }
+});
+
+// ---- B2B sales & payments (Ops > B2B Dashboard > Sales & Payments) --------
+// Revenue is scoped by ?from/?to; the receivables block in the response is
+// not, and neither ?clientId nor ?status narrows the totals — see the note in
+// b2bSales.js listSales.
+
+app.get('/api/b2b/sales', (req, res) => {
+  try {
+    const { from, to, clientId, status } = req.query || {};
+    res.json(listB2BSales({ from, to, clientId, status }));
+  } catch (err) {
+    console.error('Error in GET /api/b2b/sales:', err);
+    res.status(err.status || 500).json({ error: err.message || String(err) });
+  }
+});
+
+app.post('/api/b2b/sales', (req, res) => {
+  try {
+    res.status(201).json(addB2BSale(req.body || {}));
+  } catch (err) {
+    console.error('Error in POST /api/b2b/sales:', err);
+    res.status(err.status || 500).json({ error: err.message || String(err) });
+  }
+});
+
+app.post('/api/b2b/sales/update', (req, res) => {
+  try {
+    res.json(updateB2BSale(req.body || {}));
+  } catch (err) {
+    console.error('Error in POST /api/b2b/sales/update:', err);
+    res.status(err.status || 500).json({ error: err.message || String(err) });
+  }
+});
+
+app.post('/api/b2b/sales/payment', (req, res) => {
+  try {
+    const { id, amountPaid, paidOn } = req.body || {};
+    res.json(recordB2BPayment({ id, amountPaid, paidOn }));
+  } catch (err) {
+    console.error('Error in POST /api/b2b/sales/payment:', err);
+    res.status(err.status || 500).json({ error: err.message || String(err) });
+  }
+});
+
+app.delete('/api/b2b/sales/:saleId', (req, res) => {
+  try {
+    res.json(deleteB2BSale({ id: req.params.saleId }));
+  } catch (err) {
+    console.error('Error in DELETE /api/b2b/sales/:saleId:', err);
+    res.status(err.status || 500).json({ error: err.message || String(err) });
+  }
+});
+
+// The line-item picker: Odoo's sellable catalogue with the rate this client
+// last paid folded in. ?clientId is optional — without it the rates are Odoo's
+// list prices.
+app.get('/api/b2b/sales/catalogue', async (req, res) => {
+  try {
+    res.json(await b2bInvoiceCatalogue({ clientId: req.query.clientId }));
+  } catch (err) {
+    console.error('Error in GET /api/b2b/sales/catalogue:', err);
+    res.status(err.status || 500).json({ error: err.message || String(err) });
+  }
+});
+
+app.post('/api/b2b/sales/lines', (req, res) => {
+  try {
+    const { id, lines } = req.body || {};
+    res.json(setB2BSaleLines({ id, lines }));
+  } catch (err) {
+    console.error('Error in POST /api/b2b/sales/lines:', err);
+    res.status(err.status || 500).json({ error: err.message || String(err) });
+  }
+});
+
+// Creates AND posts the invoice in Odoo — an entry in the books, not a draft.
+// The store refuses a second run against the same sale, so a double-clicked
+// button cannot bill a client twice.
+app.post('/api/b2b/sales/invoice', async (req, res) => {
+  try {
+    res.json(await raiseB2BInvoice({ id: (req.body || {}).id }));
+  } catch (err) {
+    console.error('Error in POST /api/b2b/sales/invoice:', err);
+    res.status(err.status || 500).json({ error: err.message || String(err) });
+  }
+});
+
+// The PDF itself rather than a link to it. Odoo's portal URL carries the
+// invoice's access token, which is a bearer credential for that document —
+// handing it to the browser would put it in history, and in the address bar of
+// whoever is looking over the shoulder. So the server fetches the file and
+// streams the bytes.
+app.get('/api/b2b/sales/:saleId/invoice.pdf', async (req, res) => {
+  try {
+    const { pdf, filename } = await b2bInvoicePdf({ id: req.params.saleId });
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send(pdf);
+  } catch (err) {
+    console.error('Error in GET /api/b2b/sales/:saleId/invoice.pdf:', err);
+    res.status(err.status || 500).json({ error: err.message || String(err) });
+  }
+});
+
+// ---- Marketing ROI (Marketing > Marketing ROI) ----------------------------
+// Invested vs generated: the spend ledger out of SQLite, the revenue out of
+// Odoo, the traffic out of GA4 when it is set up. See
+// server/marketing/marketingRoi.js for why unattributed revenue is reported
+// as its own figure rather than spread across the channels.
+
+app.get('/api/marketing/status', (req, res) => {
+  // Both halves, so the screen can say which one is missing rather than
+  // failing as a whole. Neither getter's secret-bearing fields are forwarded:
+  // getOdooConfig carries the API key and describeGaConfig is already the
+  // safe projection of the service account (see googleAnalytics.js).
+  const { url, db, configured } = getOdooConfig();
+  res.json({
+    odoo: { url, db, configured },
+    ga: describeGaConfig(),
+    spendCategories: SPEND_CATEGORIES,
+  });
+});
+
+app.get('/api/marketing/roi', async (req, res) => {
+  try {
+    const { from, to } = req.query || {};
+    res.json(await buildRoiReport({ fromDate: from, toDate: to }));
+  } catch (err) {
+    console.error('Error in GET /api/marketing/roi:', err);
+    res.status(err.status || 500).json({ error: err.message || String(err) });
+  }
+});
+
+// The Site funnel tab: pages, scroll depth and the path to an order, all out
+// of GA4. Its own route rather than another block on /roi, because it is six
+// more GA round trips for a tab most loads never open — and because it fails
+// differently. /roi survives GA being down (the money half is Odoo's); this
+// cannot, so it returns the error and the screen says GA is the problem.
+app.get('/api/marketing/engagement', async (req, res) => {
+  try {
+    const { from, to } = req.query || {};
+    res.json(await buildEngagementReport({ fromDate: from, toDate: to }));
+  } catch (err) {
+    console.error('Error in GET /api/marketing/engagement:', err);
+    res.status(err.status || 500).json({ error: err.message || String(err) });
+  }
+});
+
+// ?from/?to are optional here, unlike on /roi: the spend screen also wants
+// the whole ledger, and a row's `amountInRange` is its full amount when no
+// window is given.
+app.get('/api/marketing/budget', (req, res) => {
+  try {
+    const { from, to } = req.query || {};
+    res.json({ spend: listBudgets({ fromDate: from, toDate: to }), categories: SPEND_CATEGORIES });
+  } catch (err) {
+    console.error('Error in GET /api/marketing/budget:', err);
+    res.status(err.status || 500).json({ error: err.message || String(err) });
+  }
+});
+
+app.post('/api/marketing/budget', (req, res) => {
+  try {
+    res.status(201).json(addBudget(req.body || {}));
+  } catch (err) {
+    console.error('Error in POST /api/marketing/budget:', err);
+    res.status(err.status || 500).json({ error: err.message || String(err) });
+  }
+});
+
+app.post('/api/marketing/budget/update', (req, res) => {
+  try {
+    res.json(updateBudget(req.body || {}));
+  } catch (err) {
+    console.error('Error in POST /api/marketing/budget/update:', err);
+    res.status(err.status || 500).json({ error: err.message || String(err) });
+  }
+});
+
+app.delete('/api/marketing/budget/:budgetId', (req, res) => {
+  try {
+    res.json(deleteBudget(req.params.budgetId));
+  } catch (err) {
+    console.error('Error in DELETE /api/marketing/budget/:budgetId:', err);
+    res.status(err.status || 500).json({ error: err.message || String(err) });
+  }
+});
+
+// The tagging list: every order in the window with whatever attribution it
+// carries, so the orders with none can be given one. `channels` comes from
+// Odoo's own Order Source selection rather than a list in our code — see
+// fetchChannelOptions.
+app.get('/api/marketing/attribution/orders', async (req, res) => {
+  try {
+    const { from, to } = req.query || {};
+    const [orders, options] = await Promise.all([
+      fetchAttributedOrders({ fromDate: from, toDate: to }),
+      fetchChannelOptions(),
+    ]);
+    res.json({ ...orders, channels: options.channels });
+  } catch (err) {
+    console.error('Error in GET /api/marketing/attribution/orders:', err);
+    res.status(err.status || 500).json({ error: err.message || String(err) });
+  }
+});
+
+// Writes the channel and campaign onto the Odoo order — the Studio selection
+// AND Odoo's native campaign_id/source_id/medium_id, so Odoo's own reporting
+// sees the same attribution this screen does.
+app.post('/api/marketing/attribution', async (req, res) => {
+  try {
+    const { orderId, channel, campaign } = req.body || {};
+    res.json(await setOrderAttribution({ orderId, channel, campaign }));
+  } catch (err) {
+    console.error('Error in POST /api/marketing/attribution:', err);
+    res.status(err.status || 500).json({ error: err.message || String(err) });
+  }
+});
+
+// Fills Odoo's native UTM fields in for orders that already have a channel
+// but nothing Odoo can group by. Idempotent, and never invents a campaign —
+// see backfillUtmFromChannel.
+app.post('/api/marketing/attribution/backfill', async (req, res) => {
+  try {
+    const { from, to } = req.body || {};
+    res.json(await backfillUtmFromChannel({ fromDate: from, toDate: to }));
+  } catch (err) {
+    console.error('Error in POST /api/marketing/attribution/backfill:', err);
+    res.status(err.status || 500).json({ error: err.message || String(err) });
+  }
+});
+
+// ---- Tracked links & QR codes (Marketing > QR & Link Builder) -------------
+// The other end of attribution from the tagging list above: instead of
+// working out afterwards where an order came from, publish a link that says
+// so. The QR code itself is drawn in the browser (src/pages/marketing/
+// qrcode.ts) — nothing about a QR needs a server, and a code that only
+// renders while the API is up would be a poor thing to send to a printer.
+
+app.get('/api/marketing/links', (req, res) => {
+  try {
+    const { campaign } = req.query || {};
+    res.json({
+      links: listLinks({ campaign }),
+      presets: listLinkPresets(),
+      // What to offer for utm_content once a source is picked — 'Link in bio'
+      // under Instagram, a subreddit under Reddit, a name under Referral.
+      details: listLinkSourceDetails(),
+      mediums: LINK_MEDIUMS,
+      campaigns: listLinkCampaigns(),
+      // Every link this screen builds points at the order page; the screen
+      // shows it rather than asking for it, because it has never once been
+      // anything else and a destination box was a field to skip past. Still
+      // overridable by env for a landing page that isn't /order.
+      defaultDestination: (process.env.MARKETING_SITE_URL || 'https://smokerings.in/order').trim(),
+    });
+  } catch (err) {
+    console.error('Error in GET /api/marketing/links:', err);
+    res.status(err.status || 500).json({ error: err.message || String(err) });
+  }
+});
+
+// Takes one link or a batch of them, because the screen's whole point is
+// building the same campaign for several sources at once — saving those one
+// request at a time would leave a half-saved batch behind on the first bad
+// row. Each is an upsert on its placement, so re-saving a corrected batch
+// updates rather than duplicates.
+app.post('/api/marketing/links', (req, res) => {
+  try {
+    const body = req.body || {};
+    res.status(201).json({ links: saveLinks(Array.isArray(body.links) ? body.links : [body]) });
+  } catch (err) {
+    console.error('Error in POST /api/marketing/links:', err);
+    res.status(err.status || 500).json({ error: err.message || String(err) });
+  }
+});
+
+app.delete('/api/marketing/links/:linkId', (req, res) => {
+  try {
+    res.json(deleteLink(req.params.linkId));
+  } catch (err) {
+    console.error('Error in DELETE /api/marketing/links/:linkId:', err);
+    res.status(err.status || 500).json({ error: err.message || String(err) });
+  }
+});
+
+// ---- Insta Reel Generator (Marketing > Insta Reel Generator) --------------
+// Upload clips, arrange and trim them on a timeline, burn captions, render one
+// vertical 1080x1920 file, then hand it to Instagram. server/marketing/
+// reelStudio.js does the ffmpeg work and instagramGraph.js does the publish;
+// the routes below are the thin layer between them and the screen.
+//
+// Two ideas run through all of them:
+//
+//   * A clip id IS its filename inside server/uploads/reels/clips. There is no
+//     database table and no in-memory registry of uploads, so a server restart
+//     mid-edit does not orphan a timeline that still references real files on
+//     disk. That makes every id in a request body a path fragment supplied by
+//     a client, which is why resolveMediaFile below is the only way any of
+//     these routes turn one into a path.
+//
+//   * Rendering and publishing both take longer than a browser will hold a
+//     request open, so both answer 202 with a job id and are polled.
+
+// The whole defence against a request body reaching outside the media folder.
+// A name is accepted only if it is a bare filename of safe characters *and*
+// resolves back inside the directory it is supposed to be in — the second
+// check catching anything the first did not think of.
+function resolveMediaFile(dir, name) {
+  if (typeof name !== 'string' || !/^[A-Za-z0-9._-]+$/.test(name) || name.includes('..')) {
+    const err = new Error('That file name is not one of ours.');
+    err.status = 400;
+    throw err;
+  }
+  const resolved = path.resolve(dir, name);
+  if (path.dirname(resolved) !== path.resolve(dir)) {
+    const err = new Error('That file name is not one of ours.');
+    err.status = 400;
+    throw err;
+  }
+  if (!fs.existsSync(resolved)) {
+    const err = new Error(`${name} is no longer on the server — re-upload it.`);
+    err.status = 404;
+    throw err;
+  }
+  return resolved;
+}
+
+// ffprobe costs a process spawn, and a ten-clip timeline is re-planned on
+// every render. Keyed by name and mtime so a replaced file is never served
+// from a stale probe.
+const probeCache = new Map();
+async function probeCached(filePath) {
+  const { mtimeMs, size } = fs.statSync(filePath);
+  const key = `${filePath}:${mtimeMs}:${size}`;
+  if (!probeCache.has(key)) probeCache.set(key, await probeMedia(filePath));
+  return probeCache.get(key);
+}
+
+app.get('/api/marketing/reel/status', (req, res) => {
+  res.json({ toolchain: describeReelToolchain(), instagram: describeInstagramConfig() });
+});
+
+// Confirms the token actually works and says whose account it is, so nobody
+// posts to the wrong Instagram because two tokens looked alike in a .env file.
+app.get('/api/marketing/reel/account', async (req, res) => {
+  try {
+    res.json(await checkInstagramAccount());
+  } catch (err) {
+    console.error('Error in GET /api/marketing/reel/account:', err);
+    res.status(err.status || 500).json({ error: err.message || String(err) });
+  }
+});
+
+// Every upload is probed before it is answered for. The screen needs the real
+// duration to draw a timeline and the real dimensions to warn about a
+// landscape clip, and a file ffprobe cannot read is not a clip at all — better
+// to say so at the moment it is dropped than at the moment it is rendered.
+app.post('/api/marketing/reel/clips', readReelUpload('clips', MAX_CLIP_BYTES), async (req, res) => {
+  try {
+    const files = req.files || [];
+    if (!files.length) return res.status(400).json({ error: 'No files were uploaded.' });
+
+    const clips = [];
+    for (const file of files) {
+      let probe;
+      try {
+        probe = await probeCached(file.path);
+      } catch {
+        fs.rmSync(file.path, { force: true });
+        return res
+          .status(400)
+          .json({ error: `${file.originalname} is not a video file we can read — try an .mp4 or .mov.` });
+      }
+
+      if (!probe.hasVideo || probe.duration <= 0) {
+        fs.rmSync(file.path, { force: true });
+        return res.status(400).json({ error: `${file.originalname} has no video track in it.` });
+      }
+
+      clips.push({
+        id: file.filename,
+        name: file.originalname,
+        url: `/api/marketing/reel/clip-file/${encodeURIComponent(file.filename)}`,
+        ...probe,
+      });
+    }
+
+    res.json({ clips });
+  } catch (err) {
+    console.error('Error in POST /api/marketing/reel/clips:', err);
+    res.status(err.status || 500).json({ error: err.message || String(err) });
+  }
+});
+
+app.post('/api/marketing/reel/music', readReelUpload('clips', MAX_AUDIO_BYTES), async (req, res) => {
+  try {
+    const file = (req.files || [])[0];
+    if (!file) return res.status(400).json({ error: 'No audio file was uploaded.' });
+
+    let probe;
+    try {
+      probe = await probeCached(file.path);
+    } catch {
+      fs.rmSync(file.path, { force: true });
+      return res.status(400).json({ error: `${file.originalname} is not an audio file we can read.` });
+    }
+
+    if (!probe.hasAudio) {
+      fs.rmSync(file.path, { force: true });
+      return res.status(400).json({ error: `${file.originalname} has no audio track in it.` });
+    }
+
+    res.json({
+      music: {
+        id: file.filename,
+        name: file.originalname,
+        url: `/api/marketing/reel/clip-file/${encodeURIComponent(file.filename)}`,
+        duration: probe.duration,
+      },
+    });
+  } catch (err) {
+    console.error('Error in POST /api/marketing/reel/music:', err);
+    res.status(err.status || 500).json({ error: err.message || String(err) });
+  }
+});
+
+// Serves an uploaded clip back for preview. sendFile answers Range requests,
+// which is not a detail — without them the <video> element on the editor
+// screen can play a clip but cannot seek within it, and seeking is the whole
+// point of a trim control.
+app.get('/api/marketing/reel/clip-file/:name', (req, res) => {
+  try {
+    res.sendFile(resolveMediaFile(CLIPS_DIR, req.params.name));
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message || String(err) });
+  }
+});
+
+app.delete('/api/marketing/reel/clips/:name', (req, res) => {
+  try {
+    fs.rmSync(resolveMediaFile(CLIPS_DIR, req.params.name), { force: true });
+    res.json({ removed: req.params.name });
+  } catch (err) {
+    console.error('Error in DELETE /api/marketing/reel/clips/:name:', err);
+    res.status(err.status || 500).json({ error: err.message || String(err) });
+  }
+});
+
+app.post('/api/marketing/reel/render', async (req, res) => {
+  try {
+    const { clips = [], music = null, target = 'story' } = req.body || {};
+    if (!Array.isArray(clips) || !clips.length) {
+      return res.status(400).json({ error: 'Add at least one clip before rendering.' });
+    }
+
+    // Resolve every id the timeline names into a real file plus its probe, and
+    // hand that to the planner. The planner never sees a client-supplied path.
+    const sources = {};
+    for (const clip of clips) {
+      const filePath = resolveMediaFile(CLIPS_DIR, clip.id);
+      const probe = await probeCached(filePath);
+      sources[clip.id] = { path: filePath, name: clip.name || clip.id, duration: probe.duration, hasAudio: probe.hasAudio };
+    }
+
+    let plannedMusic = null;
+    if (music && music.id) {
+      const musicPath = resolveMediaFile(CLIPS_DIR, music.id);
+      plannedMusic = {
+        path: musicPath,
+        name: music.name || music.id,
+        mode: music.mode,
+        volume: music.volume,
+        originalVolume: music.originalVolume,
+      };
+    }
+
+    const plan = buildRenderPlan({ clips, sources, music: plannedMusic, target });
+
+    // Sweep before starting rather than after finishing: a render that fails
+    // still leaves its inputs behind, and this is the moment we know nothing
+    // older is in use.
+    pruneOldMedia();
+
+    const job = startRender(plan);
+    res.status(202).json({
+      renderId: job.renderId,
+      status: job.status,
+      totalDuration: job.totalDuration,
+      warnings: job.warnings,
+    });
+  } catch (err) {
+    console.error('Error in POST /api/marketing/reel/render:', err);
+    res.status(err.status || 500).json({ error: err.message || String(err) });
+  }
+});
+
+app.get('/api/marketing/reel/render/:renderId', (req, res) => {
+  const job = getRenderJob(req.params.renderId);
+  if (!job) return res.status(404).json({ error: 'That render is not one this server knows about.' });
+
+  res.json({
+    renderId: job.renderId,
+    status: job.status,
+    percent: job.percent,
+    error: job.error,
+    warnings: job.warnings,
+    totalDuration: job.totalDuration,
+    sizeBytes: job.sizeBytes,
+    // Only offered once the file is actually complete; a URL to a half-written
+    // mp4 is worse than no URL.
+    url: job.status === 'ready' ? `/api/marketing/reel/render-file/${encodeURIComponent(job.fileName)}` : null,
+    fileName: job.status === 'ready' ? job.fileName : null,
+  });
+});
+
+// The finished reel. This route is also the one Instagram's own servers fetch
+// during a publish (see instagramGraph.js — the Graph API pulls the video from
+// a public URL rather than accepting an upload), so it must stay reachable
+// without a session and must keep answering Range requests.
+app.get('/api/marketing/reel/render-file/:name', (req, res) => {
+  try {
+    const filePath = resolveMediaFile(RENDERS_DIR, req.params.name);
+    if (req.query.download) res.attachment(req.params.name);
+    res.sendFile(filePath);
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message || String(err) });
+  }
+});
+
+app.post('/api/marketing/reel/publish', (req, res) => {
+  try {
+    const { fileName, target = 'story', caption = '', shareToFeed = false } = req.body || {};
+    // Confirms the render exists before Instagram is told to come and get it.
+    resolveMediaFile(RENDERS_DIR, fileName);
+
+    const job = startPublish({
+      fileName,
+      target: target === 'reel' ? 'reel' : 'story',
+      caption: String(caption || '').slice(0, 2200),
+      shareToFeed: Boolean(shareToFeed),
+    });
+    res.status(202).json({ publishId: job.publishId, status: job.status, stage: job.stage });
+  } catch (err) {
+    console.error('Error in POST /api/marketing/reel/publish:', err);
+    res.status(err.status || 500).json({ error: err.message || String(err) });
+  }
+});
+
+app.get('/api/marketing/reel/publish/:publishId', (req, res) => {
+  const job = getPublishJob(req.params.publishId);
+  if (!job) return res.status(404).json({ error: 'That publish is not one this server knows about.' });
+  res.json(job);
+});
+
+// ---- Finance (Finance > Spending vs Sales) --------------------------------
+// Money out against money in, one row per Monday-to-Sunday week. Purchases and
+// wholesale invoices come out of SQLite, so this answers with or without Odoo;
+// the B2C half needs Odoo and says so when it is missing. See
+// server/finance/weeklyLedger.js for why the week runs Monday to Sunday and
+// why Odoo orders tagged B2B are held out of the totals.
+
+app.get('/api/finance/weekly', async (req, res) => {
+  try {
+    // All three are optional: `weeks` alone walks back from today, `from`/`to`
+    // pin an explicit window, and nothing at all gives the last quarter.
+    const { from, to, weeks } = req.query || {};
+    res.json(await buildWeeklyReport({ fromDate: from, toDate: to, weeks }));
+  } catch (err) {
+    console.error('Error in GET /api/finance/weekly:', err);
+    res.status(err.status || 500).json({ error: err.message || String(err) });
+  }
+});
+
+// Sales by Item — units and revenue per dish over time, plus what is rising
+// and falling between the two halves of the range. See
+// server/finance/itemSales.js for why the B2C and B2B unit counts are kept
+// apart rather than added together.
+app.get('/api/finance/item-sales', async (req, res) => {
+  try {
+    // All three optional: nothing at all gives the last twelve weeks.
+    const { from, to, granularity } = req.query || {};
+    res.json(await buildItemSalesReport({ fromDate: from, toDate: to, granularity }));
+  } catch (err) {
+    console.error('Error in GET /api/finance/item-sales:', err);
+    res.status(err.status || 500).json({ error: err.message || String(err) });
+  }
+});
+
+// Purchase Logger — the spend ledger with a category on it. See
+// server/finance/purchaseLog.js for why this writes the same `purchase`
+// table Weekly Purchasing does rather than a book of its own, and
+// server/core/expenseCategories.js for the twelve categories and why ad spend
+// is not one of them.
+
+// The vocabulary, served rather than duplicated in the frontend: one list, so
+// the dropdown cannot offer a category the writer will reject.
+app.get('/api/finance/expense-categories', (req, res) => {
+  res.json(listExpenseCategories());
+});
+
+// The log plus its rollups. Every filter is optional; nothing at all gives the
+// last 90 days. The category and channel totals are always computed over the
+// whole range, not over the filter — see getSpendLog.
+app.get('/api/finance/purchase-log', (req, res) => {
+  try {
+    const { from, to, channel, category, vendor, uncategorisedOnly } = req.query || {};
+    res.json(
+      getSpendLog({
+        from,
+        to,
+        channel,
+        category,
+        vendor,
+        // Query strings have no booleans; anything but the literal 'true' is
+        // off, so a stray '0' or 'false' cannot read as on.
+        uncategorisedOnly: uncategorisedOnly === 'true',
+      }),
+    );
+  } catch (err) {
+    console.error('Error in GET /api/finance/purchase-log:', err);
+    res.status(err.status || 500).json({ error: err.message || String(err) });
+  }
+});
+
+// Records spend. Same body as POST /api/purchasing/purchases plus a required
+// expenseCategory, and it goes through the same writer — the difference is
+// that this one refuses a cart with no category on it.
+//
+// The B2B client name is resolved from the account book here for the same
+// reason it is on the ops endpoint: a renamed account must not leave two
+// spellings of itself in the purchase log.
+app.post('/api/finance/purchase-log', (req, res) => {
+  try {
+    const { vendorName, purchaseDate, channel, expenseCategory, lines, notes } = req.body || {};
+    const taggedLines =
+      channel === 'B2B' && Array.isArray(lines) && lines.some((l) => l?.clientId)
+        ? (() => {
+            const byId = new Map(listB2BClients().clients.map((c) => [c.id, c.name]));
+            return lines.map((line) =>
+              line?.clientId ? { ...line, clientName: byId.get(line.clientId) || '' } : line,
+            );
+          })()
+        : lines;
+    res.status(201).json(
+      logSpend({ vendorName, purchaseDate, channel, expenseCategory, lines: taggedLines, notes }),
+    );
+  } catch (err) {
+    console.error('Error in POST /api/finance/purchase-log:', err);
+    res.status(err.status || 500).json({ error: err.message || String(err) });
+  }
+});
+
+// Puts a category on lines already logged — the backfill, and the standing
+// queue of ad hoc lines Weekly Purchasing leaves blank on purpose. PATCH
+// rather than POST because it edits rows that already exist, and it takes a
+// list because doing forty of them one request at a time is how a backfill
+// gets abandoned halfway.
+app.patch('/api/finance/purchase-log/categories', (req, res) => {
+  try {
+    const { purchaseIds, expenseCategory } = req.body || {};
+    res.json(categorisePurchases({ purchaseIds, expenseCategory }));
+  } catch (err) {
+    console.error('Error in PATCH /api/finance/purchase-log/categories:', err);
+    res.status(err.status || 500).json({ error: err.message || String(err) });
+  }
+});
+
+app.get('/api/finance/status', (req, res) => {
+  const { url, db, configured } = getOdooConfig();
+  res.json({ odoo: { url, db, configured }, defaultWeeks: DEFAULT_WEEKS });
 });
 
 const port = process.env.PORT || 4000;

@@ -48,6 +48,16 @@ type Client = {
   onboardingTotal: number;
   priceList: string;
   paymentTerms: string;
+  // The numeric half of the terms: how many days after delivery an invoice
+  // for this account falls due. Sales & Payments computes every due date off
+  // it, so a change here only affects invoices raised from now on — the ones
+  // already on the book keep the date they were written with.
+  paymentTermsDays: number;
+  // The Odoo pricelist this account's rates come from. Sales & Payments
+  // prices every invoice line off it; with none attached, lines fall back
+  // to Odoo's list prices.
+  odooPricelistId: string;
+  odooPricelistName: string;
   odooPartnerId: string;
   onboardedOn: string;
   lostReason: string;
@@ -133,8 +143,32 @@ const B2BClients: React.FC = () => {
 
   // Per-card drafts, only ever populated for the open card.
   const [details, setDetails] = useState<Partial<Client>>({});
+  // Odoo's pricelists, for the picker on the commercials panel. Fetched once
+  // — they change about as often as the price list itself does — and through
+  // the sales catalogue endpoint, which already returns them, rather than a
+  // route of its own.
+  const [pricelists, setPricelists] = useState<{ id: number; name: string }[]>([]);
   const [demandDraft, setDemandDraft] = useState<DemandDraft[]>([]);
   const [sample, setSample] = useState({ sampleSentOn: '', sampleItems: '', sampleOutcome: '', sampleFeedback: '' });
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const resp = await fetch('/api/b2b/sales/catalogue');
+        const json = (await resp.json()) as { pricelists?: { id: number; name: string }[] };
+        // Odoo being unreachable just means no picker — every other field on
+        // the card still saves, so this stays quiet rather than raising an
+        // error over the whole page.
+        if (!cancelled && resp.ok) setPricelists(json.pricelists || []);
+      } catch {
+        /* no picker, no problem */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const load = useCallback(async () => {
     setIsLoading(true);
@@ -187,6 +221,9 @@ const B2BClients: React.FC = () => {
       orderDay: client.orderDay,
       priceList: client.priceList,
       paymentTerms: client.paymentTerms,
+      paymentTermsDays: client.paymentTermsDays,
+      odooPricelistId: client.odooPricelistId,
+      odooPricelistName: client.odooPricelistName,
       odooPartnerId: client.odooPartnerId,
       notes: client.notes,
     });
@@ -576,7 +613,53 @@ const B2BClients: React.FC = () => {
                       <div className="b2b-form-row">
                         {detailField('Agreed pricing', 'priceList', '₹/kg or per-portion rate')}
                         {detailField('Payment terms', 'paymentTerms', 'Net 15 / on delivery')}
+                        <label className="b2b-field">
+                          <span>Payment cycle (days)</span>
+                          <input
+                            type="number"
+                            min={0}
+                            value={String(details.paymentTermsDays ?? '')}
+                            placeholder="15"
+                            onChange={(e) =>
+                              setDetails((d) => ({ ...d, paymentTermsDays: Number(e.target.value) }))
+                            }
+                          />
+                        </label>
                         {detailField('Odoo customer id', 'odooPartnerId')}
+                        <label className="b2b-field">
+                          <span>Odoo pricelist</span>
+                          <select
+                            value={String(details.odooPricelistId ?? '')}
+                            onChange={(e) => {
+                              const id = e.target.value;
+                              // The name rides along with the id so the sales
+                              // screen can say which pricelist it priced from
+                              // without asking Odoo again.
+                              const picked = pricelists.find((p) => String(p.id) === id);
+                              setDetails((d) => ({
+                                ...d,
+                                odooPricelistId: id,
+                                odooPricelistName: picked ? picked.name : '',
+                              }));
+                            }}
+                          >
+                            <option value="">None — use Odoo list prices</option>
+                            {pricelists.map((p) => (
+                              <option key={p.id} value={p.id}>
+                                {p.name}
+                              </option>
+                            ))}
+                            {/* A pricelist that has since been deleted in Odoo
+                                would otherwise vanish from the select and read
+                                as "None". */}
+                            {details.odooPricelistId &&
+                              !pricelists.some((p) => String(p.id) === String(details.odooPricelistId)) && (
+                                <option value={String(details.odooPricelistId)}>
+                                  {details.odooPricelistName || `Pricelist ${details.odooPricelistId}`} (not in Odoo)
+                                </option>
+                              )}
+                          </select>
+                        </label>
                       </div>
                       <label className="b2b-field b2b-field-wide">
                         <span>Notes</span>

@@ -116,6 +116,77 @@ function adjustInventory(adjustments, date) {
   return { applied, skipped };
 }
 
+// ---- Adding to the catalogue ----
+// Creates a raw material that wasn't in the catalogue yet, at zero stock.
+//
+// This exists for the ad hoc line: the coriander bunch, the tub of diced
+// cheese — something bought at the counter that nobody had ever written down.
+// The purchasing screen lets those be logged by name with no material_id,
+// which records the money correctly but leaves the buy with nowhere to move
+// stock to. This is the other half: it gives that name a row, and
+// purchasing.js's catalogPurchaseItem then links the buy to it and applies
+// the quantity.
+//
+// Zero stock, deliberately. The row starts at the same 'never_counted' any
+// other uncounted material sits at, and the purchase that prompted it moves
+// it from there — so the count is explained by an actual buy rather than
+// appearing out of the creation itself.
+//
+// Both rows in one transaction: a material with no item row is invisible to
+// every read in kbViews (they INNER JOIN), and an item row with no material
+// is a catalogue entry that cannot hold stock. Neither half is worth having
+// on its own.
+function addRawMaterial({ itemName, category, reorderLevel, standardCostInr, defaultVendorId, notes }) {
+  const name = (itemName || '').trim();
+  if (!name) {
+    const err = new Error('itemName is required.');
+    err.status = 400;
+    throw err;
+  }
+
+  // Same case-insensitive duplicate guard as addVendor, and for the same
+  // reason: two rows called "Coriander Bunch" would split that item's stock
+  // in half, and the screen offers no way to tell them apart afterwards.
+  const clash = readMaterials().find((m) => (m.item_name || '').trim().toLowerCase() === name.toLowerCase());
+  if (clash) {
+    const err = new Error(`"${clash.item_name}" is already in the catalogue (${clash.item_id}).`);
+    err.status = 409;
+    throw err;
+  }
+
+  const numberOrNull = (value) => {
+    if (value == null || value === '') return null;
+    const n = Number(value);
+    return Number.isFinite(n) && n >= 0 ? n : null;
+  };
+
+  const itemId = transaction(() => {
+    const id = nextId('item', 'item_id', 'RM');
+    insert('item', {
+      item_id: id,
+      kind: 'raw_material',
+      name,
+      is_active: 1,
+      notes: notes || null,
+    });
+    insert('material', {
+      item_id: id,
+      category: (category || '').trim() || null,
+      reorder_level: numberOrNull(reorderLevel),
+      standard_cost_inr: numberOrNull(standardCostInr),
+      default_vendor_id: defaultVendorId || null,
+      quantity_on_hand: 0,
+      stock_status: 'never_counted',
+    });
+    return id;
+  });
+
+  // Read back through the projection rather than returning what was written,
+  // so the caller gets the same blank-not-null shape every other read hands
+  // it — including the columns the schema defaulted in.
+  return { material: getRawMaterials().find((m) => m.material_id === itemId) };
+}
+
 // ---- Manual inventory additions (stock counts, initial stock, returns) ----
 // Adds stock outside of a vendor purchase — e.g. an opening stock count, a
 // return, or a correction found while counting the walk-in. Recorded in its
@@ -163,7 +234,6 @@ function addInventoryAdjustment({ materialId, quantity, reason, date }) {
     material_id: materialId,
     item_name: material.item_name,
     quantity: qty,
-    unit_of_measure: material.unit_of_measure || '',
     reason: reason || '',
     created_at: new Date().toISOString(),
   };
@@ -174,6 +244,7 @@ function addInventoryAdjustment({ materialId, quantity, reason, date }) {
 
 export {
   getRawMaterials,
+  addRawMaterial,
   getMeatMaterials,
   getInventory,
   getLowStock,

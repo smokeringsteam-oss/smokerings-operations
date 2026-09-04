@@ -18,7 +18,6 @@ type RawMaterial = {
   material_id: string;
   item_name: string;
   category: string;
-  unit_of_measure: string;
   reorder_level: string;
 };
 
@@ -28,7 +27,6 @@ type PurchaseRecord = {
   item_name: string;
   purchase_date: string;
   quantity_purchased: string;
-  unit_of_measure: string;
   // The piece-bought pair, blank on everything sold by weight: what one piece
   // weighs, and what the line comes to in kg (derived server-side from the
   // two beside it — see PURCHASE_SQL in server/core/kbViews.js).
@@ -51,6 +49,23 @@ type PurchaseRecord = {
   odoo_po_line_id?: string;
 };
 
+// One catalogue item the server thinks an ad hoc purchase line probably was,
+// as GET /api/purchasing/purchases/:id/match-suggestions returns it. `source`
+// says which pass produced it — Gemini reading the two names, or plain string
+// similarity when there's no key or the call failed — and the panel shows it,
+// because "similar name" and "same cut, butcher's abbreviation" are worth
+// different amounts of trust. See server/ops/shared/materialMatch.js.
+type MatchSuggestion = {
+  materialId: string;
+  itemName: string;
+  category: string;
+  quantityOnHand: number | null;
+  confidence: 'high' | 'medium' | 'low';
+  reason: string;
+  score: number;
+  source: 'gemini' | 'local';
+};
+
 // One wholesale/corporate account, as GET /api/b2b/clients returns it (see
 // toClient in server/ops/b2b/b2bClients.js). Only the two fields the picker needs.
 type B2BClient = { id: string; name: string; stage: string };
@@ -59,11 +74,10 @@ type CartLine = {
   key: string;
   materialId: string;
   itemName: string;
-  unit: string;
   quantity: number;
   unitPrice: number;
   // For an item bought by the piece, what one piece weighs — 0 when it
-  // doesn't apply or hasn't been weighed. See isWeighedByPiece below.
+  // doesn't apply or hasn't been weighed. See canBuyByPiece below.
   weightPerUnitKg: number;
   // Which B2B account this one line is for. Per line rather than per cart
   // because one butcher run routinely covers two accounts, and one cart
@@ -72,6 +86,39 @@ type CartLine = {
   // optional: an untagged line is general overhead, which is a real answer.
   clientId: string;
   clientName: string;
+  // Set only on lines a bill scan produced (see handleScanBill). `billText`
+  // is the vendor's own wording for the item, kept beside the catalog name so
+  // the review can be done against the paper without translating; `matched`
+  // says whether the catalog recognised the item at all, and `derivedPrice`
+  // that the unit price was worked out from a line total rather than read off
+  // the bill. All three exist to mark the lines worth a second look — they
+  // are display only and never sent to the server.
+  billText?: string;
+  matched?: boolean;
+  derivedPrice?: boolean;
+};
+
+// One bill read, as POST /api/purchasing/scan-bill returns it (see
+// normaliseScannedBill in server/ops/shared/purchaseScan.js). Nothing here is
+// saved anywhere — it's a draft to load into the cart and check.
+type ScannedBill = {
+  vendorName: string;
+  vendorText: string;
+  purchaseDate: string;
+  dateText: string;
+  notes: string;
+  lines: {
+    materialId: string;
+    itemName: string;
+    billText: string;
+    unit: string;
+    quantity: number;
+    unitPrice: number;
+    derivedPrice: boolean;
+    lineTotal: number;
+    matched: boolean;
+  }[];
+  skipped: { itemName: string; reason: string }[];
 };
 
 const CUSTOM_ITEM_VALUE = '__custom__';
@@ -84,13 +131,16 @@ const CUSTOM_ITEM_VALUE = '__custom__';
 // them. For these the line is entered as three numbers — how many, what one
 // weighs, what one costs — instead of the usual quantity/unit-price pair.
 //
-// Keyed on the catalogue rather than on the item's name, so a second whole
-// bird or a rack sold by the piece needs a materials row and nothing here.
-// Meat is the qualifier that keeps buns, sporks and containers out of it:
-// those are bought by the piece and used by the piece, and asking what one
-// spork weighs is noise.
-const isWeighedByPiece = (m?: RawMaterial) =>
-  !!m && m.unit_of_measure === 'pcs' && m.category === 'Meat';
+// Which materials may be bought this way. Meat is the qualifier that keeps
+// buns, sporks and containers out of it: those are bought by the piece and
+// used by the piece, and asking what one spork weighs is noise.
+//
+// It used to also require that the material was stocked in 'pcs', which made
+// the form switch itself over with no input from the buyer. Nothing records a
+// unit of measure any more, and "meat" alone would put the piece boxes in
+// front of every pork-shoulder line bought by weight — so the buyer says so
+// instead, with the tick box below, and it starts off.
+const canBuyByPiece = (m?: RawMaterial) => !!m && m.category === 'Meat';
 
 // Which materials.csv categories (and, for the two meat categories,
 // which item-name keyword) each vendor's `supplies_category` value is
@@ -119,7 +169,6 @@ type InventoryAdjustment = {
   material_id: string;
   item_name: string;
   quantity: string;
-  unit_of_measure: string;
   reason: string;
 };
 
@@ -169,11 +218,24 @@ const WeeklyPurchasing: React.FC<{ channel?: 'B2C' | 'B2B' }> = ({ channel = 'B2
 
   const [materialChoice, setMaterialChoice] = useState('');
   const [customName, setCustomName] = useState('');
-  const [customUnit, setCustomUnit] = useState('');
   const [quantity, setQuantity] = useState('');
   const [unitPrice, setUnitPrice] = useState('');
   const [weightPerPiece, setWeightPerPiece] = useState('');
+  // Ticked by the buyer for a meat line bought as birds/racks rather than by
+  // weight — see canBuyByPiece.
+  const [boughtByPiece, setBoughtByPiece] = useState(false);
   const [addLineError, setAddLineError] = useState('');
+
+  // Bill scanning. `scanReview` holds what the last read couldn't do for
+  // itself — an unknown vendor, an unusable date, lines it dropped — and
+  // stays on screen until the cart is logged or cleared, because that list is
+  // exactly what the pitmaster is checking the cart against.
+  const billInputRef = React.useRef<HTMLInputElement>(null);
+  const [isScanning, setIsScanning] = useState(false);
+  const [scanError, setScanError] = useState('');
+  const [scanReview, setScanReview] = useState<
+    { added: number; vendorText: string; vendorMatched: boolean; dateText: string; dateUsed: boolean; notes: string; skipped: ScannedBill['skipped'] } | null
+  >(null);
 
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitStatus, setSubmitStatus] = useState('');
@@ -188,6 +250,33 @@ const WeeklyPurchasing: React.FC<{ channel?: 'B2C' | 'B2B' }> = ({ channel = 'B2
 
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [deleteError, setDeleteError] = useState('');
+  // The ad hoc line being given a catalogue row, and the two fields that
+  // can't be read off the purchase itself. `catalogTarget` is a purchase_id,
+  // so only one row's form is open at a time — this is a correction made one
+  // item at a time while looking at what was actually bought, not a batch.
+  const [catalogTarget, setCatalogTarget] = useState<string | null>(null);
+  const [catalogCategory, setCatalogCategory] = useState('');
+  const [catalogReorder, setCatalogReorder] = useState('');
+  const [catalogBusyId, setCatalogBusyId] = useState<string | null>(null);
+  const [catalogError, setCatalogError] = useState('');
+  const [catalogStatus, setCatalogStatus] = useState('');
+
+  // Which of the two endings the open panel is offering. 'map' is the default
+  // because it is the commoner right answer by a distance — "PORK SHLDR B/L"
+  // is almost always an item the catalogue already has under other wording,
+  // and adding it as a new material would split that ingredient's stock in
+  // two. See linkPurchaseToMaterial in server/ops/shared/purchasing.js.
+  const [catalogMode, setCatalogMode] = useState<'map' | 'new'>('map');
+  const [matchSuggestions, setMatchSuggestions] = useState<MatchSuggestion[]>([]);
+  const [matchNote, setMatchNote] = useState('');
+  const [matchSource, setMatchSource] = useState<'gemini' | 'local' | ''>('');
+  const [isMatching, setIsMatching] = useState(false);
+  // The item the pitmaster has actually picked. Never pre-filled from the top
+  // suggestion, however confident it is: this click moves stock onto a real
+  // count, and a pre-selected answer is one someone can confirm without ever
+  // having read it.
+  const [matchChoice, setMatchChoice] = useState('');
+  const [isLinking, setIsLinking] = useState(false);
 
   const [showAddInventory, setShowAddInventory] = useState(false);
   const [invMaterialChoice, setInvMaterialChoice] = useState('');
@@ -319,7 +408,8 @@ const WeeklyPurchasing: React.FC<{ channel?: 'B2C' | 'B2B' }> = ({ channel = 'B2
 
   const selectedMaterial = materials.find((m) => m.material_id === materialChoice);
   const isCustom = materialChoice === CUSTOM_ITEM_VALUE;
-  const byPiece = isWeighedByPiece(selectedMaterial);
+  const pieceOffered = canBuyByPiece(selectedMaterial);
+  const byPiece = pieceOffered && boughtByPiece;
   // The running total the three piece boxes add up to, so the pitmaster can
   // see 4 × 1.6 kg = 6.4 kg before committing the line rather than after.
   const piecePreview = useMemo(() => {
@@ -346,17 +436,6 @@ const WeeklyPurchasing: React.FC<{ channel?: 'B2C' | 'B2B' }> = ({ channel = 'B2
       setAddLineError(isCustom ? 'Enter an item name.' : "Select an item from the list — it didn't register, try picking it again.");
       return;
     }
-    const unit = isCustom ? customUnit.trim() : selectedMaterial?.unit_of_measure || '';
-    // A unit of measure that's just digits is almost always a mis-click into
-    // the wrong box (this exact mistake once turned "Quantity 1" into
-    // "Quantity 1, Unit 1" — displayed as "1 1", easy to misread as "11").
-    // Catch it here instead of letting it into the CSV.
-    if (unit && /^\d+$/.test(unit)) {
-      setAddLineError(
-        `"${unit}" doesn't look like a unit (kg, pcs, plan…) — that number might belong in Quantity instead of Unit.`,
-      );
-      return;
-    }
     const price = Number(unitPrice) || 0;
     // Blank is allowed and means "not weighed yet" — the same answer the log
     // already accepts for a price that hasn't arrived. A number that isn't a
@@ -374,7 +453,6 @@ const WeeklyPurchasing: React.FC<{ channel?: 'B2C' | 'B2B' }> = ({ channel = 'B2
         key: `${Date.now()}-${Math.random()}`,
         materialId: isCustom ? '' : materialChoice,
         itemName,
-        unit,
         quantity: qty,
         unitPrice: price,
         weightPerUnitKg: perPiece,
@@ -385,14 +463,92 @@ const WeeklyPurchasing: React.FC<{ channel?: 'B2C' | 'B2B' }> = ({ channel = 'B2
 
     setMaterialChoice('');
     setCustomName('');
-    setCustomUnit('');
     setQuantity('');
     setUnitPrice('');
     setWeightPerPiece('');
+    setBoughtByPiece(false);
   };
 
   const handleRemoveLine = (key: string) => {
     setCart((current) => current.filter((line) => line.key !== key));
+  };
+
+  // The cart is editable in place rather than remove-and-retype, because the
+  // whole point of the scan is that most of a line is already right and one
+  // number needs fixing. It also serves the hand-typed lines: a price
+  // corrected here is one fewer line deleted and entered again.
+  const handleUpdateLine = (key: string, patch: Partial<CartLine>) => {
+    setCart((current) => current.map((line) => (line.key === key ? { ...line, ...patch } : line)));
+  };
+
+  // Reads a photo/PDF of the vendor's bill and loads what it found into the
+  // cart. Nothing is logged here — the lines land in the same cart a typed
+  // line lands in, editable, and the existing Log purchase button below is
+  // still the only thing that writes. A scan that reads six lines perfectly
+  // and one wrong should cost one correction, not a re-entry.
+  const handleScanBill = async (file: File) => {
+    setScanError('');
+    setScanReview(null);
+    setIsScanning(true);
+    try {
+      const body = new FormData();
+      body.append('bill', file);
+      const resp = await fetch('/api/purchasing/scan-bill', { method: 'POST', body });
+      const data = await readJson<ScannedBill & { error?: string }>(resp);
+      if (!resp.ok) throw new Error(data.error || 'Could not read that bill.');
+
+      const scanned = data.lines || [];
+      if (!scanned.length && !(data.skipped || []).length) {
+        throw new Error(
+          data.notes || 'Nothing on that image looked like bill line items. Try a straighter, better-lit photo.',
+        );
+      }
+
+      setCart((current) => [
+        ...current,
+        ...scanned.map((line, idx) => ({
+          key: `scan-${Date.now()}-${idx}`,
+          materialId: line.materialId,
+          itemName: line.itemName,
+          quantity: line.quantity,
+          unitPrice: line.unitPrice,
+          // A bill prices by whatever the vendor sells by, and never says what
+          // one piece weighs. Left blank for the pitmaster to fill in on the
+          // meat lines they weighed — the log takes blank as "unweighed".
+          weightPerUnitKg: 0,
+          clientId: channel === 'B2B' ? lineClientId : '',
+          clientName: channel === 'B2B' ? clients.find((c) => c.id === lineClientId)?.name || '' : '',
+          billText: line.billText,
+          matched: line.matched,
+          derivedPrice: line.derivedPrice,
+        })),
+      ]);
+
+      // A vendor is only filled in when the read matched one in the book and
+      // nothing is selected yet: a bill scanned into a cart already half
+      // typed against another vendor must not silently move that spend.
+      const vendorMatched = Boolean(data.vendorName);
+      if (vendorMatched && !vendorName) setVendorName(data.vendorName);
+      const dateUsed = Boolean(data.purchaseDate);
+      if (dateUsed) setPurchaseDate(data.purchaseDate);
+
+      setScanReview({
+        added: scanned.length,
+        vendorText: data.vendorText || '',
+        vendorMatched,
+        dateText: data.dateText || '',
+        dateUsed,
+        notes: data.notes || '',
+        skipped: data.skipped || [],
+      });
+    } catch (err) {
+      setScanError(String((err as Error).message || err));
+    } finally {
+      setIsScanning(false);
+      // Cleared so the same bill can be picked again after a failed read —
+      // an unchanged value fires no change event.
+      if (billInputRef.current) billInputRef.current.value = '';
+    }
   };
 
   const cartTotal = useMemo(() => cart.reduce((sum, line) => sum + line.quantity * line.unitPrice, 0), [cart]);
@@ -405,6 +561,18 @@ const WeeklyPurchasing: React.FC<{ channel?: 'B2C' | 'B2B' }> = ({ channel = 'B2
   // not rolled back, since the CSV log already succeeded.
   const handleLogPurchase = async () => {
     if (!vendorName || !cart.length || isSubmitting) return;
+    // The cart's numbers are editable now (a scanned line usually needs one
+    // fixing), so a line can be emptied here as well as filled. recordPurchases
+    // would quietly drop a 0-quantity line rather than fail, which on a
+    // scanned cart would mean silently logging five of the six lines on the
+    // bill — so it's caught here, by name, while the cart is still on screen.
+    const empty = cart.find((line) => !line.itemName.trim() || !(line.quantity > 0));
+    if (empty) {
+      setSubmitError(
+        `"${empty.itemName.trim() || 'One line'}" needs a name and a quantity above 0 — fix it or remove the line.`,
+      );
+      return;
+    }
     setIsSubmitting(true);
     setSubmitError('');
     setSubmitStatus('');
@@ -417,10 +585,9 @@ const WeeklyPurchasing: React.FC<{ channel?: 'B2C' | 'B2B' }> = ({ channel = 'B2
           vendorName,
           purchaseDate,
           channel,
-          lines: cart.map(({ materialId, itemName, unit, quantity: qty, unitPrice: price, weightPerUnitKg, clientId }) => ({
+          lines: cart.map(({ materialId, itemName, quantity: qty, unitPrice: price, weightPerUnitKg, clientId }) => ({
             materialId,
             itemName,
-            unit,
             quantity: qty,
             unitPrice: price,
             // Blank rather than 0 when it doesn't apply or wasn't weighed —
@@ -433,8 +600,15 @@ const WeeklyPurchasing: React.FC<{ channel?: 'B2C' | 'B2B' }> = ({ channel = 'B2
           })),
         }),
       });
-      const logData = await readJson<{ purchases?: PurchaseRecord[]; error?: string }>(logResp);
-      if (!logResp.ok) throw new Error(logData.error || 'Failed to log purchase to CSV.');
+      const logData = await readJson<{
+        purchases?: PurchaseRecord[];
+        // Lines that were logged but whose stock didn't move — almost always
+        // an item typed in by name that the catalogue has never heard of. See
+        // recordPurchases in server/ops/shared/purchasing.js.
+        inventorySkipped?: { purchase_id: string | null; item_name: string; reason: string }[];
+        error?: string;
+      }>(logResp);
+      if (!logResp.ok) throw new Error(logData.error || 'Failed to log the purchase.');
       const purchaseIds = (logData.purchases || []).map((p) => p.purchase_id);
 
       let poNote = '';
@@ -445,9 +619,8 @@ const WeeklyPurchasing: React.FC<{ channel?: 'B2C' | 'B2B' }> = ({ channel = 'B2
           body: JSON.stringify({
             vendorName,
             purchaseIds,
-            lines: cart.map(({ itemName, unit, quantity: qty, unitPrice: price }) => ({
+            lines: cart.map(({ itemName, quantity: qty, unitPrice: price }) => ({
               itemName,
-              unit,
               quantity: qty,
               unitPrice: price,
             })),
@@ -460,10 +633,24 @@ const WeeklyPurchasing: React.FC<{ channel?: 'B2C' | 'B2B' }> = ({ channel = 'B2
         poNote = ` Odoo PO failed: ${String((poErr as Error).message || poErr)}`;
       }
 
+      // The buy is logged either way — this says so, and then says which of
+      // its lines only made it half way, rather than letting a stock count
+      // that quietly didn't move read as a clean success.
+      const skipped = logData.inventorySkipped || [];
+      const skippedNote = skipped.length
+        ? ` ${skipped.length} line${skipped.length === 1 ? '' : 's'} (${skipped
+            .map((line) => line.item_name)
+            .join(', ')}) ${skipped.length === 1 ? "isn't" : "aren't"} in the materials catalogue, so stock wasn't updated — add ${
+            skipped.length === 1 ? 'it' : 'them'
+          } from the purchase table below.`
+        : '';
       setSubmitStatus(
-        `Logged ${cart.length} line item${cart.length === 1 ? '' : 's'} from ${vendorName} to the purchase log.${poNote}`,
+        `Logged ${cart.length} line item${cart.length === 1 ? '' : 's'} from ${vendorName} to the purchase log.${skippedNote}${poNote}`,
       );
       setCart([]);
+      // The scan's own review notes go with the cart they were about.
+      setScanReview(null);
+      setScanError('');
       await Promise.all([loadCatalog(), loadPurchases()]);
     } catch (err) {
       setSubmitError(String((err as Error).message || err));
@@ -498,6 +685,162 @@ const WeeklyPurchasing: React.FC<{ channel?: 'B2C' | 'B2B' }> = ({ channel = 'B2
       setDeletingId(null);
     }
   };
+
+  // Opens (or closes) the panel on one ad hoc line, and asks the server what
+  // that line probably was. The ask fires on open rather than behind a
+  // "suggest" button: the whole reason this correction doesn't get made is the
+  // sixty-row dropdown, and a suggestion that needs an extra click first is
+  // still a dropdown.
+  const openUncatalogued = (purchaseId: string) => {
+    const closing = catalogTarget === purchaseId;
+    setCatalogError('');
+    setCatalogStatus('');
+    setCatalogCategory('');
+    setCatalogReorder('');
+    setCatalogMode('map');
+    setMatchChoice('');
+    setMatchSuggestions([]);
+    setMatchNote('');
+    setMatchSource('');
+    setCatalogTarget(closing ? null : purchaseId);
+    if (!closing) void loadMatchSuggestions(purchaseId);
+  };
+
+  // Reads GET .../match-suggestions. A failure here is deliberately not shown
+  // as an error on the row: the dropdown below the suggestions is the whole
+  // catalogue and still works, so a dead suggestion list costs convenience,
+  // not the correction itself.
+  const loadMatchSuggestions = async (purchaseId: string) => {
+    setIsMatching(true);
+    try {
+      const resp = await fetch(`/api/purchasing/purchases/${purchaseId}/match-suggestions`);
+      const data = await readJson<{
+        suggestions?: MatchSuggestion[];
+        source?: 'gemini' | 'local';
+        note?: string;
+        error?: string;
+      }>(resp);
+      if (!resp.ok) throw new Error(data.error || 'Could not look for a match.');
+      setMatchSuggestions(data.suggestions || []);
+      setMatchSource(data.source || '');
+      setMatchNote(data.note || '');
+    } catch (err) {
+      setMatchSuggestions([]);
+      setMatchSource('');
+      setMatchNote(`Couldn't suggest a match (${String((err as Error).message || err)}) — pick the item below.`);
+    } finally {
+      setIsMatching(false);
+    }
+  };
+
+  // Points the ad hoc line at an item the catalogue already has and lets the
+  // server apply its quantity to that item's running count — see
+  // linkPurchaseToMaterial in server/ops/shared/purchasing.js.
+  const handleLinkPurchase = async (purchaseId: string) => {
+    if (isLinking || !matchChoice) return;
+    setIsLinking(true);
+    setCatalogError('');
+    setCatalogStatus('');
+    try {
+      const resp = await fetch(`/api/purchasing/purchases/${purchaseId}/link`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ materialId: matchChoice }),
+      });
+      const data = await readJson<{
+        material?: RawMaterial;
+        inventoryUpdated?: { item_name: string; newQuantity: number } | null;
+        renamedFrom?: string | null;
+        error?: string;
+      }>(resp);
+      if (!resp.ok) throw new Error(data.error || 'Failed to map the line.');
+
+      const stocked = data.inventoryUpdated;
+      setCatalogStatus(
+        `Mapped ${data.renamedFrom ? `"${data.renamedFrom}"` : 'that line'} to ${data.material?.item_name} (${
+          data.material?.material_id
+        })${stocked ? ` — stock is now ${stocked.newQuantity}` : ''}.`,
+      );
+      setCatalogTarget(null);
+      setMatchChoice('');
+      setMatchSuggestions([]);
+      // The purchase reload is what makes the row stop reporting itself as
+      // uncatalogued; the catalog reload refreshes the on-hand numbers the
+      // suggestion panel shows beside each item.
+      await Promise.all([loadCatalog(), loadPurchases()]);
+    } catch (err) {
+      setCatalogError(String((err as Error).message || err));
+    } finally {
+      setIsLinking(false);
+    }
+  };
+
+  // Gives an already-logged ad hoc line the catalogue row it never had, then
+  // lets the server apply that line's quantity to stock — the second half of
+  // logging a purchase for an item nobody had written down yet. See
+  // catalogPurchaseItem in server/ops/shared/purchasing.js.
+  //
+  // Deliberately per line rather than a "catalogue all of these" button: the
+  // category is a judgement call about one item, and stocking several buys of
+  // the same untyped name in one go would claim stock for lines that may
+  // already have been counted by hand.
+  const handleCatalogItem = async (purchaseId: string) => {
+    if (catalogBusyId) return;
+    setCatalogBusyId(purchaseId);
+    setCatalogError('');
+    setCatalogStatus('');
+    try {
+      const resp = await fetch(`/api/purchasing/purchases/${purchaseId}/catalog`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          category: catalogCategory.trim(),
+          // Blank means "no reorder point set", which is a real answer — the
+          // low-stock banner simply skips a material with no level.
+          reorderLevel: catalogReorder.trim(),
+        }),
+      });
+      const data = await readJson<{
+        material?: RawMaterial;
+        inventoryUpdated?: { item_name: string; newQuantity: number } | null;
+        error?: string;
+      }>(resp);
+      if (!resp.ok) throw new Error(data.error || 'Failed to add the item to the catalogue.');
+
+      const stocked = data.inventoryUpdated;
+      setCatalogStatus(
+        `Added ${data.material?.item_name} (${data.material?.material_id}) to the catalogue${
+          stocked ? ` — stock is now ${stocked.newQuantity}` : ''
+        }.`,
+      );
+      setCatalogTarget(null);
+      setCatalogCategory('');
+      setCatalogReorder('');
+      // Both, and in this order for a reason: the catalog reload is what puts
+      // the new material in the item dropdown, and the purchase reload is
+      // what makes the row stop reporting itself as uncatalogued.
+      await Promise.all([loadCatalog(), loadPurchases()]);
+    } catch (err) {
+      setCatalogError(String((err as Error).message || err));
+    } finally {
+      setCatalogBusyId(null);
+    }
+  };
+
+  // Every category already in use, for the picker on that form. Existing
+  // values rather than a free text box for the same reason the vendor form
+  // suggests vendor_type: a typo makes a category of one, and the purchasing
+  // screen groups its item list by exactly this string.
+  const materialCategories = useMemo(
+    () => Array.from(new Set(materials.map((m) => m.category).filter(Boolean))).sort((a, b) => a.localeCompare(b)),
+    [materials],
+  );
+
+  // Logged buys whose stock never moved, because the item they name has no
+  // material row to move. Recomputed from the log rather than remembered from
+  // the last submit, so it still shows after a reload and still covers lines
+  // logged in an earlier session.
+  const uncatalogued = useMemo(() => purchases.filter((p) => !p.material_id), [purchases]);
 
   // Autocomplete suggestions drawn from existing vendors — vendor_type and
   // supplies_category both matter beyond cosmetics: vendor_type has to read
@@ -605,7 +948,7 @@ const WeeklyPurchasing: React.FC<{ channel?: 'B2C' | 'B2B' }> = ({ channel = 'B2
 
       setAddInventoryStatus(
         (updated
-          ? `Added ${data.adjustment?.quantity} ${data.adjustment?.unit_of_measure || ''} of ${data.adjustment?.item_name} — now ${updated.newQuantity} on hand.`
+          ? `Added ${data.adjustment?.quantity} of ${data.adjustment?.item_name} — now ${updated.newQuantity} on hand.`
           : `Logged the adjustment, but couldn't find that item in materials.csv to update on-hand quantity.`) + odooNote,
       );
       setInvMaterialChoice('');
@@ -772,6 +1115,68 @@ const WeeklyPurchasing: React.FC<{ channel?: 'B2C' | 'B2B' }> = ({ channel = 'B2
             </div>
           )}
 
+          {/* Scanning is offered before the manual form, because on a Friday
+              the bill is already in hand and typing it out is the slow path.
+              It only ever fills the cart in — every line is editable below
+              and nothing is written until Log purchase. */}
+          <div className="purch-scan">
+            <div className="purch-scan-head">
+              <div>
+                <strong>Scan a bill</strong>
+                <p className="inv-section-hint">
+                  Photo or PDF of the vendor's bill — the butcher's slip, a Bread Time Stories invoice, a Swiggy
+                  screenshot. Gemini reads it into the cart below for you to check, correct and then log.
+                </p>
+              </div>
+              <button
+                type="button"
+                className="secondary-button small"
+                onClick={() => billInputRef.current?.click()}
+                disabled={isScanning}
+              >
+                {isScanning ? 'Reading bill…' : '📷 Scan a bill'}
+              </button>
+            </div>
+            <input
+              ref={billInputRef}
+              type="file"
+              className="purch-scan-input"
+              accept="image/*,application/pdf"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) handleScanBill(file);
+              }}
+            />
+            {scanError && <p className="chat-error">{scanError}</p>}
+            {scanReview && (
+              <div className="purch-scan-review">
+                <strong>
+                  Read {scanReview.added} line{scanReview.added === 1 ? '' : 's'} off the bill — check them against the
+                  paper, then hit Log purchase.
+                </strong>
+                <ul>
+                  {scanReview.vendorText && !scanReview.vendorMatched && (
+                    <li>
+                      Bill says <em>{scanReview.vendorText}</em>, which isn't in the vendor book — pick the vendor above
+                      (or add it) before logging.
+                    </li>
+                  )}
+                  {scanReview.dateText && !scanReview.dateUsed && (
+                    <li>
+                      Couldn't read the bill date (<em>{scanReview.dateText}</em>) — the date above is unchanged.
+                    </li>
+                  )}
+                  {scanReview.notes && <li>{scanReview.notes}</li>}
+                  {scanReview.skipped.map((s, idx) => (
+                    <li key={`${s.itemName}-${idx}`}>
+                      Left out {s.itemName ? <em>{s.itemName}</em> : 'a line'} — {s.reason}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+
           <div className="purch-add-line">
             <label>
               Item
@@ -792,7 +1197,7 @@ const WeeklyPurchasing: React.FC<{ channel?: 'B2C' | 'B2B' }> = ({ channel = 'B2
                   <optgroup key={category} label={category}>
                     {items.map((m) => (
                       <option key={m.material_id} value={m.material_id}>
-                        {m.item_name} ({m.unit_of_measure})
+                        {m.item_name}
                       </option>
                     ))}
                   </optgroup>
@@ -806,14 +1211,21 @@ const WeeklyPurchasing: React.FC<{ channel?: 'B2C' | 'B2B' }> = ({ channel = 'B2
                   Item name
                   <input value={customName} onChange={(e) => setCustomName(e.target.value)} placeholder="e.g. Butcher paper" />
                 </label>
-                <label>
-                  Unit (optional — how it's measured, not how many)
-                  <input value={customUnit} onChange={(e) => setCustomUnit(e.target.value)} placeholder="kg / pcs / ml / plan — leave blank if none" />
-                </label>
               </div>
             )}
 
-            {/* Bought by the piece, used by the weight — see isWeighedByPiece.
+            {pieceOffered && (
+              <label className="purch-form-check">
+                <input
+                  type="checkbox"
+                  checked={boughtByPiece}
+                  onChange={(e) => setBoughtByPiece(e.target.checked)}
+                />
+                Bought by the piece (birds, racks) rather than by weight
+              </label>
+            )}
+
+            {/* Bought by the piece, used by the weight — see canBuyByPiece.
                 Same three underlying numbers as every other line (quantity,
                 unit price, plus the piece weight), relabelled to the words the
                 butcher actually uses so nobody has to work out whether
@@ -903,11 +1315,34 @@ const WeeklyPurchasing: React.FC<{ channel?: 'B2C' | 'B2B' }> = ({ channel = 'B2
                 </thead>
                 <tbody>
                   {cart.map((line) => (
-                    <tr key={line.key}>
-                      <td className="prep-item-col">{line.itemName}</td>
+                    <tr key={line.key} className={line.billText && !line.matched ? 'purch-cart-unmatched' : undefined}>
+                      <td className="prep-item-col">
+                        {/* Editable for the same reason the numbers are: a
+                            scanned line the catalog didn't recognise is
+                            logged under whatever name is here, so a mangled
+                            one should cost a retype, not a re-entry. */}
+                        <input
+                          className="purch-cart-name"
+                          value={line.itemName}
+                          onChange={(e) => handleUpdateLine(line.key, { itemName: e.target.value })}
+                        />
+                        {line.billText && (
+                          <small className="purch-cart-source">
+                            Bill: {line.billText}
+                            {!line.matched && ' · not in catalog, stock won’t move'}
+                          </small>
+                        )}
+                      </td>
                       {isB2B && <td>{line.clientName || '—'}</td>}
                       <td className="prep-total-cell">
-                        {line.quantity} {line.unit}
+                        <input
+                          type="number"
+                          min="0"
+                          step="any"
+                          className="purch-cart-num"
+                          value={line.quantity}
+                          onChange={(e) => handleUpdateLine(line.key, { quantity: Number(e.target.value) || 0 })}
+                        />
                         {line.weightPerUnitKg > 0 && (
                           <>
                             <br />
@@ -918,7 +1353,17 @@ const WeeklyPurchasing: React.FC<{ channel?: 'B2C' | 'B2B' }> = ({ channel = 'B2
                           </>
                         )}
                       </td>
-                      <td className="prep-total-cell">{inrFormat(line.unitPrice)}</td>
+                      <td className="prep-total-cell">
+                        <input
+                          type="number"
+                          min="0"
+                          step="any"
+                          className="purch-cart-num"
+                          value={line.unitPrice}
+                          onChange={(e) => handleUpdateLine(line.key, { unitPrice: Number(e.target.value) || 0 })}
+                        />
+                        {line.derivedPrice && <small className="purch-cart-source">from line total</small>}
+                      </td>
                       <td className="prep-total-cell">{inrFormat(line.quantity * line.unitPrice)}</td>
                       <td className="purch-remove-cell">
                         <button type="button" className="purch-remove-btn" onClick={() => handleRemoveLine(line.key)}>
@@ -993,7 +1438,7 @@ const WeeklyPurchasing: React.FC<{ channel?: 'B2C' | 'B2B' }> = ({ channel = 'B2
                       <optgroup key={category} label={category}>
                         {items.map((m) => (
                           <option key={m.material_id} value={m.material_id}>
-                            {m.item_name} ({m.unit_of_measure})
+                            {m.item_name}
                           </option>
                         ))}
                       </optgroup>
@@ -1086,6 +1531,18 @@ const WeeklyPurchasing: React.FC<{ channel?: 'B2C' | 'B2B' }> = ({ channel = 'B2
 
                 {deleteError && <p className="chat-error">{deleteError}</p>}
 
+                {uncatalogued.length > 0 && (
+                  <p className="purch-uncat-banner">
+                    {uncatalogued.length} line{uncatalogued.length === 1 ? '' : 's'} below{' '}
+                    {uncatalogued.length === 1 ? 'is' : 'are'} logged as spend but{' '}
+                    {uncatalogued.length === 1 ? "isn't" : "aren't"} in the materials catalogue, so{' '}
+                    {uncatalogued.length === 1 ? 'it' : 'they'} never moved stock. Add{' '}
+                    {uncatalogued.length === 1 ? 'it' : 'them'} to fix the count.
+                  </p>
+                )}
+                {catalogError && <p className="chat-error">{catalogError}</p>}
+                {catalogStatus && !catalogError && <p className="status-message">{catalogStatus}</p>}
+
                 <div className="prep-table-wrap">
                   <table className="prep-table">
                     <thead>
@@ -1102,8 +1559,27 @@ const WeeklyPurchasing: React.FC<{ channel?: 'B2C' | 'B2B' }> = ({ channel = 'B2
                     </thead>
                     <tbody>
                       {purchases.map((p) => (
-                        <tr key={p.purchase_id}>
-                          <td className="prep-item-col">{p.item_name}</td>
+                        <React.Fragment key={p.purchase_id}>
+                        <tr>
+                          <td className="prep-item-col">
+                            {p.item_name}
+                            {!p.material_id && (
+                              <>
+                                {' '}
+                                <span className="purch-uncat-pill" title="Logged as spend, but no stock was added">
+                                  not in stock
+                                </span>
+                                <br />
+                                <button
+                                  type="button"
+                                  className="purch-uncat-btn"
+                                  onClick={() => openUncatalogued(p.purchase_id)}
+                                >
+                                  {catalogTarget === p.purchase_id ? 'Cancel' : 'Fix this line'}
+                                </button>
+                              </>
+                            )}
+                          </td>
                           <td>{p.vendor_name || '—'}</td>
                           {isB2B && <td>{p.client_name || '—'}</td>}
                           {/* Read-only here: the cook tag is set at Start
@@ -1112,7 +1588,7 @@ const WeeklyPurchasing: React.FC<{ channel?: 'B2C' | 'B2B' }> = ({ channel = 'B2
                           {isB2B && <td>{p.smoking_session_id || '—'}</td>}
                           <td>{p.purchase_date}</td>
                           <td className="prep-total-cell">
-                            {p.quantity_purchased} {p.unit_of_measure}
+                            {p.quantity_purchased}
                             {p.total_weight_kg && (
                               <>
                                 <br />
@@ -1135,9 +1611,177 @@ const WeeklyPurchasing: React.FC<{ channel?: 'B2C' | 'B2B' }> = ({ channel = 'B2
                             </button>
                           </td>
                         </tr>
+                        {catalogTarget === p.purchase_id && (
+                          <tr className="purch-uncat-row">
+                            <td colSpan={isB2B ? 8 : 6}>
+                              {/* Two endings for the same line, and choosing
+                                  between them is the actual decision: mapping
+                                  moves this buy onto a count that already
+                                  exists, adding starts a new one. Getting it
+                                  wrong the "add" way is the costly direction —
+                                  one ingredient in two rows, neither of which
+                                  reads true. */}
+                              <div className="purch-uncat-modes">
+                                <button
+                                  type="button"
+                                  className={catalogMode === 'map' ? 'is-active' : ''}
+                                  onClick={() => setCatalogMode('map')}
+                                >
+                                  Map to an existing item
+                                </button>
+                                <button
+                                  type="button"
+                                  className={catalogMode === 'new' ? 'is-active' : ''}
+                                  onClick={() => setCatalogMode('new')}
+                                >
+                                  Add as a new item
+                                </button>
+                              </div>
+
+                              {catalogMode === 'map' && (
+                                <>
+                                  {isMatching && <p className="inv-note">Looking for the matching item…</p>}
+
+                                  {!isMatching && matchSuggestions.length > 0 && (
+                                    <>
+                                      {/* Where the ranking came from, because
+                                          it changes what a row is worth: one
+                                          pass read both names and judged them
+                                          the same ingredient, the other only
+                                          measured how alike the strings are. */}
+                                      <p className="purch-match-caption">
+                                        {matchSource === 'gemini'
+                                          ? 'Matched on what the names mean, then narrowed to the closest in the catalogue.'
+                                          : 'Ranked by name similarity alone.'}
+                                      </p>
+                                    <ul className="purch-match-list">
+                                      {matchSuggestions.map((sugg) => (
+                                        <li key={sugg.materialId}>
+                                          <button
+                                            type="button"
+                                            className={`purch-match-option${
+                                              matchChoice === sugg.materialId ? ' is-chosen' : ''
+                                            }`}
+                                            onClick={() => setMatchChoice(sugg.materialId)}
+                                          >
+                                            <span className="purch-match-name">
+                                              {sugg.itemName}
+                                              <span className={`purch-match-conf purch-match-conf-${sugg.confidence}`}>
+                                                {sugg.confidence}
+                                              </span>
+                                            </span>
+                                            <span className="purch-match-meta">
+                                              {[
+                                                sugg.category,
+                                                sugg.quantityOnHand != null ? `${sugg.quantityOnHand} on hand` : '',
+                                                sugg.reason,
+                                              ]
+                                                .filter(Boolean)
+                                                .join(' · ')}
+                                            </span>
+                                          </button>
+                                        </li>
+                                      ))}
+                                    </ul>
+                                    </>
+                                  )}
+
+                                  {/* Always present, never only the suggestions:
+                                      the model gets to narrow the list, not to
+                                      decide what the pitmaster is allowed to
+                                      pick. */}
+                                  <div className="purch-uncat-form">
+                                    <span>
+                                      {matchSuggestions.length ? 'Or pick any item' : 'Item'}
+                                      <select value={matchChoice} onChange={(e) => setMatchChoice(e.target.value)}>
+                                        <option value="">Select an item…</option>
+                                        {allMaterialsByCategory.map(([category, items]) => (
+                                          <optgroup key={category} label={category}>
+                                            {items.map((m) => (
+                                              <option key={m.material_id} value={m.material_id}>
+                                                {m.item_name}
+                                              </option>
+                                            ))}
+                                          </optgroup>
+                                        ))}
+                                      </select>
+                                    </span>
+                                    <button
+                                      type="button"
+                                      className="secondary-button small"
+                                      onClick={() => handleLinkPurchase(p.purchase_id)}
+                                      disabled={!matchChoice || isLinking}
+                                    >
+                                      {isLinking ? 'Mapping…' : `Map and stock ${p.quantity_purchased}`}
+                                    </button>
+                                  </div>
+
+                                  {matchNote && <p className="inv-note">{matchNote}</p>}
+                                  <p className="inv-note">
+                                    Adds {p.quantity_purchased} to the chosen item&apos;s count, dated {p.purchase_date},
+                                    and re-words this line to the catalogue&apos;s name for it — what was typed at the
+                                    counter is kept in the purchase&apos;s notes.
+                                  </p>
+                                </>
+                              )}
+
+                              {catalogMode === 'new' && (
+                                <>
+                              <div className="purch-uncat-form">
+                                <span>
+                                  Category
+                                  <input
+                                    list="purch-material-categories"
+                                    value={catalogCategory}
+                                    onChange={(e) => setCatalogCategory(e.target.value)}
+                                    placeholder="e.g. Produce"
+                                  />
+                                </span>
+                                <span>
+                                  Reorder level
+                                  <input
+                                    type="number"
+                                    min="0"
+                                    step="any"
+                                    value={catalogReorder}
+                                    onChange={(e) => setCatalogReorder(e.target.value)}
+                                    placeholder="optional"
+                                  />
+                                </span>
+                                <button
+                                  type="button"
+                                  className="secondary-button small"
+                                  onClick={() => handleCatalogItem(p.purchase_id)}
+                                  disabled={catalogBusyId === p.purchase_id}
+                                >
+                                  {catalogBusyId === p.purchase_id
+                                    ? 'Adding…'
+                                    : `Add "${p.item_name}" and stock ${p.quantity_purchased}`}
+                                </button>
+                              </div>
+                              {/* The buy's own unit price becomes the standing
+                                  cost and its vendor the default supplier —
+                                  both server-side, both editable later, and
+                                  neither worth a form field at the counter. */}
+                              <p className="inv-note">
+                                Creates a new RM- item at zero stock, links this purchase to it, and adds{' '}
+                                {p.quantity_purchased} to the count, dated {p.purchase_date}. Check the map tab first — a
+                                second row for an item the catalogue already has splits that item&apos;s stock in two.
+                              </p>
+                                </>
+                              )}
+                            </td>
+                          </tr>
+                        )}
+                        </React.Fragment>
                       ))}
                     </tbody>
                   </table>
+                  <datalist id="purch-material-categories">
+                    {materialCategories.map((c) => (
+                      <option key={c} value={c} />
+                    ))}
+                  </datalist>
                 </div>
               </>
             )}

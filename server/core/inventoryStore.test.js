@@ -11,14 +11,14 @@ import { describe, it, expect, beforeEach, afterAll } from 'vitest';
 import { createTestDb, removeTestDb } from './testDb.js';
 
 const MATERIALS = [
-  { item_id: 'RM-001', item_name: 'Pork shoulder', category: 'Meat', unit_of_measure: 'kg', quantity_on_hand: 10, reorder_level: 5 },
-  { item_id: 'RM-002', item_name: 'Brioche bun', category: 'Bakery', unit_of_measure: 'pcs', quantity_on_hand: 2, reorder_level: 20 },
+  { item_id: 'RM-001', item_name: 'Pork shoulder', category: 'Meat', quantity_on_hand: 10, reorder_level: 5 },
+  { item_id: 'RM-002', item_name: 'Brioche bun', category: 'Bakery', quantity_on_hand: 2, reorder_level: 20 },
   // Never counted: quantity_on_hand NULL, which is the case that catches a
   // bare `quantity + delta` (NULL + 5 is NULL in SQL, not 5).
-  { item_id: 'RM-003', item_name: 'Smoked paprika', category: 'Spices & Seasonings', unit_of_measure: 'g', quantity_on_hand: null },
+  { item_id: 'RM-003', item_name: 'Smoked paprika', category: 'Spices & Seasonings', quantity_on_hand: null },
   // An intermediate product: carries stock but is not part of the buyable
   // catalogue, so getRawMaterials must leave it out and getInventory must not.
-  { item_id: 'IP-001', item_name: 'Pulled pork', kind: 'intermediate', category: 'Meat', unit_of_measure: 'kg', quantity_on_hand: 3 },
+  { item_id: 'IP-001', item_name: 'Pulled pork', kind: 'intermediate', category: 'Meat', quantity_on_hand: 3 },
 ];
 
 const { dir } = createTestDb({ materials: MATERIALS });
@@ -50,7 +50,7 @@ describe('the materials catalogue', () => {
 
   it('aliases item_id to material_id, the name callers were written against', () => {
     const pork = store.getRawMaterials().find((m) => m.material_id === 'RM-001');
-    expect(pork).toMatchObject({ material_id: 'RM-001', item_name: 'Pork shoulder', unit_of_measure: 'kg' });
+    expect(pork).toMatchObject({ material_id: 'RM-001', item_name: 'Pork shoulder' });
   });
 
   it('counts only what is genuinely below its reorder level', () => {
@@ -126,7 +126,6 @@ describe('addInventoryAdjustment', () => {
       material_id: 'RM-001',
       item_name: 'Pork shoulder',
       quantity: 4,
-      unit_of_measure: 'kg',
       reason: 'Opening count',
     });
     expect(result.inventoryUpdated).toMatchObject({ material_id: 'RM-001', newQuantity: 14 });

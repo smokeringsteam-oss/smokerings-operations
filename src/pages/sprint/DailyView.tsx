@@ -6,8 +6,11 @@ import {
   getAssigneeNames,
   getEffectiveTaskState,
   getIsoWeekKey,
+  isMarketingTask,
   saveTaskState,
   type RecurringDay,
+  type RecurringTaskDef,
+  type RecurringTaskState,
   type RecurringWeekState,
 } from './recurringSchedule';
 
@@ -128,6 +131,12 @@ const DailyView: React.FC = () => {
         selectedAssignee === 'all' || state.assignedTo.toLowerCase() === selectedAssignee.toLowerCase(),
     );
 
+  // The content cadence runs on its own rhythm and usually its own person, so it
+  // gets its own card rather than sitting between the kitchen and procurement
+  // tasks — a posting day is easy to lose in a list you scan for what to cook.
+  const opsTasks = visibleTasks.filter(({ task }) => !isMarketingTask(task));
+  const marketingTasks = visibleTasks.filter(({ task }) => isMarketingTask(task));
+
   const sprintItemsForDay = sprintItems
     .filter((item) => item.day === selectedDay)
     .filter(
@@ -136,6 +145,43 @@ const DailyView: React.FC = () => {
         assignedTo.toLowerCase() === selectedAssignee.toLowerCase() ||
         assignees.some((a) => a.toLowerCase() === selectedAssignee.toLowerCase()),
     );
+
+  // Both cards render the same row; only the empty-state wording differs.
+  const renderTaskList = (
+    entries: { task: RecurringTaskDef; state: RecurringTaskState }[],
+    kind: 'recurring' | 'marketing',
+  ) => {
+    if (entries.length === 0) {
+      const what = kind === 'marketing' ? 'marketing tasks' : 'recurring tasks';
+      return (
+        <div className="empty-state">
+          <div className="empty-state-icon">{kind === 'marketing' ? '📣' : '🗓️'}</div>
+          <h3>Nothing scheduled</h3>
+          <p>
+            {selectedAssignee === 'all'
+              ? `No ${what} for ${selectedDay}.`
+              : `${selectedAssignee} has no ${what} for ${selectedDay}.`}
+          </p>
+        </div>
+      );
+    }
+    return (
+      <div className="group-list">
+        {entries.map(({ task, state }) => (
+          <div className="group-item-row" key={task.id}>
+            <div className="group-item">
+              <input type="checkbox" checked={state.done} onChange={() => toggleDone(task.id)} />
+              <label className={state.done ? 'daily-view-task-done' : ''}>{task.label}</label>
+            </div>
+            <div className="daily-view-meta">
+              <span className="daily-view-badge daily-view-badge-time">{state.time || '—'}</span>
+              <span className="daily-view-badge">{state.assignedTo || 'Unassigned'}</span>
+            </div>
+          </div>
+        ))}
+      </div>
+    );
+  };
 
   return (
     <div className="wizard-page">
@@ -178,32 +224,19 @@ const DailyView: React.FC = () => {
 
           {taskStatusError && <p className="chat-error">{taskStatusError}</p>}
 
-          {visibleTasks.length === 0 ? (
-            <div className="empty-state">
-              <div className="empty-state-icon">🗓️</div>
-              <h3>Nothing scheduled</h3>
-              <p>
-                {selectedAssignee === 'all'
-                  ? `No recurring tasks for ${selectedDay}.`
-                  : `${selectedAssignee} has no recurring tasks for ${selectedDay}.`}
-              </p>
-            </div>
-          ) : (
-            <div className="group-list">
-              {visibleTasks.map(({ task, state }) => (
-                <div className="group-item-row" key={task.id}>
-                  <div className="group-item">
-                    <input type="checkbox" checked={state.done} onChange={() => toggleDone(task.id)} />
-                    <label className={state.done ? 'daily-view-task-done' : ''}>{task.label}</label>
-                  </div>
-                  <div className="daily-view-meta">
-                    <span className="daily-view-badge daily-view-badge-time">{state.time || '—'}</span>
-                    <span className="daily-view-badge">{state.assignedTo || 'Unassigned'}</span>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
+          {renderTaskList(opsTasks, 'recurring')}
+        </div>
+
+        <div className="wizard-card">
+          <div className="daily-view-section-header">
+            <h2>Marketing — {selectedDay}</h2>
+          </div>
+          <p className="inv-section-hint">
+            The weekly content cadence: what goes out today and where. Same checklist as the rest — ticking
+            it here ticks it off in This Week's Tasks too.
+          </p>
+
+          {renderTaskList(marketingTasks, 'marketing')}
         </div>
 
         {githubConfigured && (

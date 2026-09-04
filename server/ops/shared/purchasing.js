@@ -25,8 +25,10 @@
 import { all, getDbConfig } from '../../core/db.js';
 import { insert, nextId, remove, selectOne, transaction, update } from '../../core/repo.js';
 import { readPurchases, readVendors } from '../../core/kbViews.js';
+import { DEFAULT_MATERIAL_CATEGORY, normaliseExpenseCategory } from '../../core/expenseCategories.js';
 import {
   getRawMaterials,
+  addRawMaterial,
   getInventory,
   getLowStock,
   adjustInventory,
@@ -48,6 +50,11 @@ const PURCHASE_CHANNELS = ['B2C', 'B2B'];
 //     money side of the book can be totalled per account. Set on the buy
 //     itself for things that never reach a smoker (packaging, bread), or
 //     inherited from the session when a line is tagged to a cook.
+//   expense_category         — what the money was FOR, as against which side
+//     of the business it was for. A dimension inside the channel, not an
+//     alternative to it: B2B + Equipment and B2C + Marketing collateral are
+//     both ordinary answers. The vocabulary and the reasoning live in
+//     server/core/expenseCategories.js.
 //   smoking_session_id       — which cook this line was bought for. Written
 //     at Start Smoking (see tagPurchasesToSession), NOT here: at buying time
 //     the session usually doesn't exist yet, since a session row is only
@@ -143,10 +150,9 @@ function getPurchases({ from, to, channel } = {}) {
 // all. Four birds at ₹450 each is what the butcher charges; 6.4 kg is what
 // the cook, the client's kg/week demand and the meat plan are all in. The
 // quantity stays the count, because that is what the vendor invoices and what
-// moves stock (RM-047's unit of measure is pcs), so the weight rides
-// alongside. Total weight is derived on read — see kbViews' PURCHASE_SQL —
+// moves stock, so the weight rides alongside. Total weight is derived on read — see kbViews' PURCHASE_SQL —
 // rather than stored, so it cannot drift from the piece weight beside it.
-function recordPurchases({ vendorName, purchaseDate, channel, lines }) {
+function recordPurchases({ vendorName, purchaseDate, channel, expenseCategory, lines }) {
   if (!vendorName) {
     const err = new Error('vendorName is required.');
     err.status = 400;
@@ -199,8 +205,35 @@ function recordPurchases({ vendorName, purchaseDate, channel, lines }) {
     throw err;
   }
 
+  // What each line was FOR. Validated here, before anything is written, for
+  // the same reason the weight is: a typo on line three must not leave lines
+  // one and two behind under a category nobody meant. The rollback would
+  // catch it, but the message a CHECK-less TEXT column gives is no message
+  // at all — normaliseExpenseCategory names the twelve it will accept.
+  //
+  // Three places a category can come from, most specific first:
+  //   line.expenseCategory  — the mixed cart, where the charcoal and the pork
+  //                           on one bill are two different kinds of cost.
+  //   expenseCategory       — the whole cart, which is how the Purchase
+  //                           Logger sends it: one trip, one purpose.
+  //   the material fallback — a catalogue line logged from Weekly Purchasing
+  //                           with nobody saying anything is raw materials,
+  //                           because that is what that screen is for.
+  //
+  // An ad hoc line with no category stays null on purpose. It is the one case
+  // where a guess would be wrong often enough to matter — the off-catalogue
+  // buying is exactly where the posters and the gas refills live — so it goes
+  // uncategorised into the Purchase Logger's queue instead.
+  const cartCategory = normaliseExpenseCategory(expenseCategory);
+  const lineCategories = usable.map(
+    (line) =>
+      normaliseExpenseCategory(line.expenseCategory) ||
+      cartCategory ||
+      (line.materialId ? DEFAULT_MATERIAL_CATEGORY : null),
+  );
+
   const created = transaction(() =>
-    usable.map((line) => {
+    usable.map((line, index) => {
       const quantity = Number(line.quantity) || 0;
       const unitPrice = line.unitPrice != null && line.unitPrice !== '' ? Number(line.unitPrice) : null;
       const totalCost = unitPrice != null ? Math.round(quantity * unitPrice * 100) / 100 : null;
@@ -231,11 +264,15 @@ function recordPurchases({ vendorName, purchaseDate, channel, lines }) {
         material_id: line.materialId || null,
         item_name: line.itemName,
         quantity_purchased: quantity,
-        unit_of_measure: line.unit || null,
         unit_price: unitPrice,
         total_cost: totalCost,
         currency: 'INR',
         weight_per_unit_kg: weightPerUnitKg,
+        expense_category: lineCategories[index],
+        // Free text, and the only record of why this particular buy happened
+        // — "A3, Diwali menu, 50 off" is not derivable from the category or
+        // the item name.
+        notes: line.notes ? String(line.notes).trim() || null : null,
       });
       return purchaseId;
     }),
@@ -252,9 +289,220 @@ function recordPurchases({ vendorName, purchaseDate, channel, lines }) {
   const adjustments = purchases
     .filter((row) => row.material_id)
     .map((row) => ({ materialId: row.material_id, deltaQty: row.quantity_purchased, itemName: row.item_name }));
-  const { applied: inventoryUpdated } = adjustInventory(adjustments, date);
+  const { applied: inventoryUpdated, skipped } = adjustInventory(adjustments, date);
 
-  return { purchases, inventoryUpdated };
+  // The lines that were logged but moved no stock, reported rather than left
+  // silent. A buy landing in one table and not the other is the one failure
+  // this module can produce that looks exactly like success from the screen:
+  // the purchase log fills in, the money is right, and the walk-in count
+  // quietly doesn't match what's on the shelf.
+  //
+  // Almost always this is the ad hoc line — an item typed in by name because
+  // it isn't in the catalogue, which has no material row to move. That is a
+  // legitimate thing to buy, so it isn't rejected; it comes back here as
+  // something to finish, and catalogPurchaseItem below is how it's finished.
+  const inventorySkipped = [
+    ...purchases
+      .filter((row) => !row.material_id)
+      .map((row) => ({
+        purchase_id: row.purchase_id,
+        item_name: row.item_name,
+        quantity: row.quantity_purchased,
+        reason: 'not in the materials catalogue',
+      })),
+    // A materialId that no longer resolves — rarer, and not something the
+    // screen can fix by adding a catalogue entry, but it belongs in the same
+    // list because it has the same consequence.
+    ...skipped.map((row) => ({
+      purchase_id: purchases.find((p) => p.material_id === row.materialId)?.purchase_id || null,
+      item_name: row.itemName,
+      quantity: null,
+      reason: row.reason,
+    })),
+  ];
+
+  return { purchases, inventoryUpdated, inventorySkipped };
+}
+
+// Gives an ad hoc purchase line the catalogue row it never had, and then
+// lets the buy do what it couldn't at logging time: move stock.
+//
+// Three steps, in this order and for these reasons:
+//   1. Create the material (inventoryStore owns that table).
+//   2. Point the purchase row at it, so the log stops reading as ad hoc and
+//      a later delete reverses the stock the same way any other line's does.
+//   3. Apply this line's quantity, dated to the purchase, not to today.
+//
+// Only the one line named is stocked, even when the log holds several buys of
+// the same untyped name. Linking the others would be a guess about which of
+// them were already counted by hand, and a wrong guess is stock claimed that
+// isn't on the shelf — the worst direction for this number to be wrong in.
+// They keep their own prompt, and adding the material a second time is
+// refused by name, so the second one is a link rather than a duplicate.
+function catalogPurchaseItem({ purchaseId, category, reorderLevel, standardCostInr }) {
+  if (!purchaseId) {
+    const err = new Error('purchaseId is required.');
+    err.status = 400;
+    throw err;
+  }
+
+  const purchase = readPurchases().find((row) => row.purchase_id === purchaseId);
+  if (!purchase) {
+    const err = new Error(`No purchase found with id ${purchaseId}.`);
+    err.status = 404;
+    throw err;
+  }
+  if (purchase.material_id) {
+    const err = new Error(
+      `${purchaseId} is already linked to ${purchase.material_id} — its stock was updated when it was logged.`,
+    );
+    err.status = 409;
+    throw err;
+  }
+
+  // The unit price paid is the best standing cost estimate available for
+  // something nobody has ever costed, and it is only a default — an explicit
+  // one passed in wins.
+  const cost =
+    standardCostInr != null && standardCostInr !== ''
+      ? standardCostInr
+      : purchase.unit_price !== '' && purchase.unit_price != null
+        ? purchase.unit_price
+        : null;
+
+  const { material } = addRawMaterial({
+    itemName: purchase.item_name,
+    category,
+    reorderLevel,
+    standardCostInr: cost,
+    // Whoever it was bought from is the obvious first guess at who to reorder
+    // it from, and it is the only vendor this row has ever been associated
+    // with.
+    defaultVendorId: purchase.vendor_id || null,
+    notes: `Added to the catalogue from purchase ${purchaseId}.`,
+  });
+
+  update('purchase', { purchase_id: purchaseId }, { material_id: material.material_id, item_type: 'material' });
+
+  // Dated to the buy rather than to now: last_updated is meant to say when
+  // this count last moved in the real world, and it moved on the day the
+  // thing was carried in.
+  const { applied } = adjustInventory(
+    [
+      {
+        materialId: material.material_id,
+        deltaQty: Number(purchase.quantity_purchased) || 0,
+        itemName: purchase.item_name,
+      },
+    ],
+    purchase.purchase_date || new Date().toISOString().slice(0, 10),
+  );
+
+  return {
+    material,
+    purchase: readPurchases().find((row) => row.purchase_id === purchaseId),
+    inventoryUpdated: applied[0] || null,
+  };
+}
+
+// The other way to finish an ad hoc line: point it at a catalogue item that
+// already exists, instead of creating a new one for it.
+//
+// This is the commoner case by a distance. "PORK SHLDR B/L", "amul butter
+// 500g" and "coriander 100g" are not three ingredients the kitchen has never
+// bought before — they are three items already in the catalogue, typed at the
+// counter the way the bill spelt them. Cataloguing each of those as a NEW
+// material is the expensive mistake: it splits one ingredient's stock across
+// two rows, so neither reads true and the reorder level on the original stops
+// firing. Which is why the screen offers this first and suggests candidates
+// (see ./materialMatch.js) rather than making someone find the row by eye.
+//
+// Same three effects as catalogPurchaseItem, minus the creation: link, rename
+// to the catalogue's wording, apply the quantity dated to the buy. Renaming
+// is deliberate — the log, the cart and the stock count should all call the
+// item the same thing — and the wording it was logged under goes into the
+// purchase's notes rather than being lost, since that string is the only
+// record of what the bill actually said.
+//
+// It does NOT touch the material's standard cost or default vendor. Those are
+// this item's own settled facts across every buy ever made of it, and one ad
+// hoc line is not the reason to overwrite them (catalogPurchaseItem seeds them
+// only because the row it creates has nothing at all).
+function linkPurchaseToMaterial({ purchaseId, materialId }) {
+  if (!purchaseId) {
+    const err = new Error('purchaseId is required.');
+    err.status = 400;
+    throw err;
+  }
+  const wantedId = (materialId || '').trim();
+  if (!wantedId) {
+    const err = new Error('materialId is required.');
+    err.status = 400;
+    throw err;
+  }
+
+  const purchase = readPurchases().find((row) => row.purchase_id === purchaseId);
+  if (!purchase) {
+    const err = new Error(`No purchase found with id ${purchaseId}.`);
+    err.status = 404;
+    throw err;
+  }
+  if (purchase.material_id) {
+    const err = new Error(
+      `${purchaseId} is already linked to ${purchase.material_id} — its stock was updated when it was logged.`,
+    );
+    err.status = 409;
+    throw err;
+  }
+
+  // The buyable catalogue only: the IP-xxx intermediate products carry stock
+  // too, but nobody buys a batch of smoked pork from a vendor, and linking a
+  // purchase to one would add raw weight to a cooked count.
+  const material = getRawMaterials().find((m) => m.material_id === wantedId);
+  if (!material) {
+    const err = new Error(`No catalogue item found with id ${wantedId}.`);
+    err.status = 404;
+    throw err;
+  }
+
+  const loggedAs = purchase.item_name;
+  const renamed = loggedAs.trim().toLowerCase() !== material.item_name.trim().toLowerCase();
+  const trail = renamed
+    ? `Mapped to ${material.material_id}; logged at the counter as "${loggedAs}".`
+    : `Mapped to ${material.material_id}.`;
+
+  update(
+    'purchase',
+    { purchase_id: purchaseId },
+    {
+      material_id: material.material_id,
+      item_type: 'material',
+      item_name: material.item_name,
+      notes: [purchase.notes, trail].filter(Boolean).join(' '),
+    },
+  );
+
+  // Dated to the buy, not to now — same reasoning as catalogPurchaseItem:
+  // last_updated says when this count moved in the real world.
+  const { applied } = adjustInventory(
+    [
+      {
+        materialId: material.material_id,
+        deltaQty: Number(purchase.quantity_purchased) || 0,
+        itemName: material.item_name,
+      },
+    ],
+    purchase.purchase_date || new Date().toISOString().slice(0, 10),
+  );
+
+  return {
+    material: getRawMaterials().find((m) => m.material_id === material.material_id),
+    purchase: readPurchases().find((row) => row.purchase_id === purchaseId),
+    inventoryUpdated: applied[0] || null,
+    // Non-null only when the line was actually re-worded, so the screen can
+    // say "logged as X, now counted as Y" instead of a confusing no-op.
+    renamedFrom: renamed ? loggedAs : null,
+  };
 }
 
 // Writes the Odoo draft-PO id + line id back onto the purchase rows created
@@ -420,6 +668,8 @@ export {
   getLowStock,
   getPurchases,
   recordPurchases,
+  catalogPurchaseItem,
+  linkPurchaseToMaterial,
   linkPurchasesToOdoo,
   tagPurchasesToSession,
   clearSessionPurchaseTags,

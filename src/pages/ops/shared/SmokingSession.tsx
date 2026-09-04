@@ -11,7 +11,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 // in the Brining step) — everything else (whole chicken served bone-in,
 // ribs, burnt ends, ...) completes straight off of Resting.
 
-type MeatItem = { material_id: string; item_name: string; unit_of_measure: string };
+type MeatItem = { material_id: string; item_name: string };
 type Recipe = { recipe_id: string; recipe_name: string; kind: string };
 
 type Session = {
@@ -60,13 +60,12 @@ type Purchase = {
   purchase_date: string;
   vendor_name: string;
   quantity_purchased: number;
-  unit_of_measure: string;
   // `remaining` is in kg for a lot bought by the piece that recorded what a
   // piece weighs (four whole chickens minus a 1.6 kg cook is 4.8 kg left, not
-  // 2.4 birds), and in the bought unit otherwise. `remaining_unit` says
-  // which, so the picker never has to guess.
+  // 2.4 birds), and a bare count otherwise. `remaining_in_kg` says which, so
+  // the picker never has to guess — and never labels a count as kilos.
   remaining: number;
-  remaining_unit: string;
+  remaining_in_kg: number;
   weight_per_unit_kg?: number | null;
 };
 
@@ -82,7 +81,6 @@ type TaggablePurchase = {
   vendor_name: string;
   item_name: string;
   quantity_purchased: number;
-  unit_of_measure: string;
   total_cost: number | null;
   client_name: string;
   tagged: boolean;
@@ -1215,7 +1213,7 @@ const SmokingSession: React.FC<{ channel?: Channel }> = ({ channel: defaultChann
                         {availablePurchases.map((p) => (
                           <option key={p.purchase_id} value={p.purchase_id}>
                             {p.purchase_id} — {p.vendor_name || 'unknown vendor'} — {p.purchase_date} ({p.remaining}
-                            {p.remaining_unit || p.unit_of_measure || 'kg'} left
+                            {p.remaining_in_kg ? 'kg' : ''} left
                             {p.weight_per_unit_kg
                               ? `, bought as ${p.quantity_purchased} × ${p.weight_per_unit_kg} kg`
                               : ''}
@@ -1265,8 +1263,8 @@ const SmokingSession: React.FC<{ channel?: Channel }> = ({ channel: defaultChann
                                   }
                                 />
                                 <span>
-                                  {p.item_name} — {p.quantity_purchased}
-                                  {p.unit_of_measure} · {p.vendor_name || 'unknown vendor'} · {p.purchase_date}
+                                  {p.item_name} — {p.quantity_purchased} · {p.vendor_name || 'unknown vendor'} ·{' '}
+                                  {p.purchase_date}
                                   {p.total_cost != null ? ` · ₹${p.total_cost.toLocaleString('en-IN')}` : ''}
                                   {p.client_name ? ` · ${p.client_name}` : ''}
                                   {p.isSessionMaterial ? ' · this cook’s meat' : ''}

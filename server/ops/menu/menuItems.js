@@ -423,6 +423,15 @@ const DETAIL_BLOCKED = new Set([
   'warehouse_id',
   'import_attribute_values',
   'serial_prefix_format',
+  // Odoo's unit of measure, and the list of extra ones a product can be sold
+  // in. Odoo still keeps these on its own products and this app still reads
+  // its order lines' product_uom_qty; what it no longer does is put a unit of
+  // measure on a screen or in a database of its own, so these are not offered
+  // for editing here either. Blocked rather than left out of DETAIL_GROUPS
+  // below, since anything merely absent from that list still shows up under
+  // "Other".
+  'uom_id',
+  'uom_ids',
 ]);
 
 // Odoo's mail/website mixins bolt dozens of plumbing fields onto every
@@ -437,7 +446,7 @@ const DETAIL_BLOCKED_PREFIXES = /^(image_|message_|activity_|website_message|rat
 const DETAIL_GROUPS = [
   [
     'General',
-    ['default_code', 'type', 'categ_id', 'uom_id', 'uom_ids', 'barcode', 'l10n_in_hsn_code', 'product_tag_ids', 'responsible_id', 'company_id', 'sequence', 'color', 'is_favorite'],
+    ['default_code', 'type', 'categ_id', 'barcode', 'l10n_in_hsn_code', 'product_tag_ids', 'responsible_id', 'company_id', 'sequence', 'color', 'is_favorite'],
   ],
   [
     'Sales',

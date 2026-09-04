@@ -1,12 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import {
+  SMOKER_LOADS,
   buildOrderSideGroups,
   containersNeeded,
   describeBoxes,
   describePacking,
   portionSplit,
+  orderMeatCategories,
+  orderNeedsLoad,
   sideBoxTotals,
+  smokerDays,
   sideBoxTotalsFromCounts,
+  type MeatByItem,
+  type PackGroup,
   type PackOrder,
   type SidesByItem,
 } from './packing';
@@ -22,16 +28,16 @@ const FOIL = { materialId: 'RM-043', name: 'aluminium foil sheet', capacity: nul
 
 const SIDES: SidesByItem = {
   'chicken-bbq-burger': [
-    { key: 'SR-015', name: 'BBQ sauce', qty: 30, unit: 'ml', baseQty: 30, baseUnit: 'ml', container: CUP },
-    { key: 'SR-017', name: 'Salad mix', qty: 100, unit: 'g', baseQty: 100, baseUnit: 'g', container: TRAY },
-    { key: 'SR-018', name: 'Salad dressing', qty: 15, unit: 'g', baseQty: 15, baseUnit: 'g', container: CUP },
+    { key: 'SR-015', name: 'BBQ sauce', qty: 30, baseQty: 30, container: CUP },
+    { key: 'SR-017', name: 'Salad mix', qty: 100, baseQty: 100, container: TRAY },
+    { key: 'SR-018', name: 'Salad dressing', qty: 15, baseQty: 15, container: CUP },
     // Counted in portions, not millilitres — one tub each.
-    { key: 'SR-019', name: 'Chopped onion', qty: 1, unit: 'portion', baseQty: 1, baseUnit: 'portion', container: TUB },
-    { key: 'RM-037', name: 'Chips', qty: 20, unit: 'g', baseQty: 20, baseUnit: 'g', container: FOIL },
+    { key: 'SR-019', name: 'Chopped onion', qty: 1, baseQty: 1, container: TUB },
+    { key: 'RM-037', name: 'Chips', qty: 20, baseQty: 20, container: FOIL },
   ],
   'bbq-ribs-250g': [
-    { key: 'SR-015', name: 'BBQ sauce', qty: 30, unit: 'ml', baseQty: 30, baseUnit: 'ml', container: CUP },
-    { key: 'SR-017', name: 'Salad mix', qty: 100, unit: 'g', baseQty: 100, baseUnit: 'g', container: TRAY },
+    { key: 'SR-015', name: 'BBQ sauce', qty: 30, baseQty: 30, container: CUP },
+    { key: 'SR-017', name: 'Salad mix', qty: 100, baseQty: 100, container: TRAY },
   ],
 };
 
@@ -180,5 +186,102 @@ describe('weekend totals', () => {
     });
     // One box per plate when nothing can be combined.
     expect(fromCounts['SR-017'].boxes).toBe(8);
+  });
+});
+
+// Same shape GET /api/recipes/meat-by-item returns (server/ops/b2c/recipes.js
+// getMeatByItem) — the dish's smoked-meat components, category keys from
+// server/core/meatConfig.js.
+const MEAT: MeatByItem = {
+  'chicken-bbq-burger': [{ category: 'chicken', label: 'Shredded Chicken', productName: 'Pulled chicken' }],
+  'pork-bbq-burger': [{ category: 'pulledPork', label: 'Pulled Pork', productName: 'Pulled pork' }],
+  'bbq-ribs-250g': [{ category: 'ribs', label: 'Pork Ribs', productName: 'Smoked pork ribs' }],
+  'jackfruit-burger': [{ category: 'jackfruit', label: 'Pulled Jackfruit', productName: 'Pulled jackfruit' }],
+  // A dish carrying both — one order of it belongs to both smoker loads.
+  'combo-platter': [
+    { category: 'chicken', label: 'Shredded Chicken', productName: 'Pulled chicken' },
+    { category: 'porkBelly', label: 'Pork Belly', productName: 'Pork belly burnt ends' },
+  ],
+};
+
+const PORK = SMOKER_LOADS.find((l) => l.id === 'pork')!;
+const CHICKEN = SMOKER_LOADS.find((l) => l.id === 'chicken')!;
+
+describe('smoker loads', () => {
+  it('reads every meat an order carries, deduped across its line items', () => {
+    const both = order(1, [
+      { itemId: 'chicken-bbq-burger', qty: 2 },
+      { itemId: 'bbq-ribs-250g', qty: 1 },
+      { itemId: 'combo-platter', qty: 1 },
+    ]);
+    expect([...orderMeatCategories(both, MEAT)].sort()).toEqual(['chicken', 'porkBelly', 'ribs']);
+  });
+
+  it('puts every pork cut behind the one pork switch', () => {
+    expect(orderNeedsLoad(order(1, [{ itemId: 'pork-bbq-burger', qty: 1 }]), MEAT, PORK)).toBe(true);
+    expect(orderNeedsLoad(order(2, [{ itemId: 'bbq-ribs-250g', qty: 1 }]), MEAT, PORK)).toBe(true);
+    expect(orderNeedsLoad(order(3, [{ itemId: 'combo-platter', qty: 1 }]), MEAT, PORK)).toBe(true);
+  });
+
+  it('counts an order in both loads when it carries both meats', () => {
+    const combo = order(1, [{ itemId: 'combo-platter', qty: 1 }]);
+    expect(orderNeedsLoad(combo, MEAT, PORK)).toBe(true);
+    expect(orderNeedsLoad(combo, MEAT, CHICKEN)).toBe(true);
+  });
+
+  it('leaves out orders with none of that load, and meats with no switch', () => {
+    const chickenOnly = order(1, [{ itemId: 'chicken-bbq-burger', qty: 3 }]);
+    expect(orderNeedsLoad(chickenOnly, MEAT, PORK)).toBe(false);
+    // Jackfruit has no switch — it belongs to neither load, so it's driven
+    // from the per-order dropdown instead of being swept into one.
+    const jackfruit = order(2, [{ itemId: 'jackfruit-burger', qty: 1 }]);
+    expect(orderNeedsLoad(jackfruit, MEAT, PORK)).toBe(false);
+    expect(orderNeedsLoad(jackfruit, MEAT, CHICKEN)).toBe(false);
+  });
+
+  it('matches nothing rather than guessing while the reference data is missing', () => {
+    const pork = order(1, [{ itemId: 'pork-bbq-burger', qty: 1 }]);
+    expect(orderNeedsLoad(pork, null, PORK)).toBe(false);
+    // An item with no recipe line for a smoked meat isn't in the map at all.
+    expect(orderNeedsLoad(order(2, [{ itemId: 'side-of-chips', qty: 1 }]), MEAT, PORK)).toBe(false);
+  });
+});
+
+const group = (id: string, label: string, orders: PackOrder[]): PackGroup => ({
+  id,
+  label,
+  sublabel: label,
+  emoji: '🌤️',
+  orders,
+});
+
+describe('smokerDays', () => {
+  it('collapses the four B2C services into Saturday and Sunday', () => {
+    const days = smokerDays([
+      group('satLunch', 'Saturday Lunch', [order(1, [{ itemId: 'pork-bbq-burger', qty: 1 }])]),
+      group('satEvening', 'Saturday Dinner', [order(2, [{ itemId: 'chicken-bbq-burger', qty: 1 }])]),
+      group('sunLunch', 'Sunday Lunch', [order(3, [{ itemId: 'bbq-ribs-250g', qty: 1 }])]),
+      group('sunEvening', 'Sunday Dinner', []),
+    ]);
+    expect(days.map((d) => d.id)).toEqual(['sat', 'sun']);
+    expect(days.map((d) => d.label)).toEqual(['Saturday', 'Sunday']);
+    // Lighting Saturday must not sweep up Sunday's order.
+    expect(days[0].orders.map((o) => o.orderId)).toEqual([1, 2]);
+    expect(days[1].orders.map((o) => o.orderId)).toEqual([3]);
+  });
+
+  it('keeps an empty day so it still shows as having nothing on the smoker', () => {
+    const days = smokerDays([group('satLunch', 'Saturday Lunch', []), group('sunLunch', 'Sunday Lunch', [])]);
+    expect(days).toHaveLength(2);
+    expect(days.every((d) => d.orders.length === 0)).toBe(true);
+  });
+
+  it('leaves B2B delivery days as their own buckets, in the order the server sent them', () => {
+    const days = smokerDays([
+      group('2026-09-03', 'Thu 3 Sep', [order(1, [{ itemId: 'pork-bbq-burger', qty: 1 }])]),
+      group('2026-09-05', 'Sat 5 Sep', [order(2, [{ itemId: 'chicken-bbq-burger', qty: 1 }])]),
+    ]);
+    expect(days.map((d) => d.id)).toEqual(['2026-09-03', '2026-09-05']);
+    expect(days.map((d) => d.label)).toEqual(['Thu 3 Sep', 'Sat 5 Sep']);
   });
 });

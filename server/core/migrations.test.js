@@ -22,6 +22,15 @@ CREATE TABLE item (
   item_id TEXT PRIMARY KEY, kind TEXT NOT NULL, name TEXT NOT NULL,
   uom_code TEXT, is_active INTEGER, notes TEXT
 );
+CREATE TABLE uom (code TEXT PRIMARY KEY, description TEXT);
+CREATE TABLE uom_conversion (
+  conversion_id TEXT PRIMARY KEY,
+  from_unit TEXT NOT NULL REFERENCES uom(code),
+  to_unit   TEXT NOT NULL REFERENCES uom(code),
+  factor REAL, applies_to_material_id TEXT, applies_to_item TEXT,
+  confidence TEXT NOT NULL DEFAULT 'estimate', notes TEXT
+);
+CREATE INDEX uom_conv_lookup_idx ON uom_conversion(from_unit, to_unit, applies_to_material_id);
 CREATE TABLE vendor (vendor_id TEXT PRIMARY KEY, vendor_name TEXT NOT NULL);
 CREATE TABLE b2b_client (client_id TEXT PRIMARY KEY, name TEXT NOT NULL);
 CREATE TABLE recipe (item_id TEXT PRIMARY KEY REFERENCES item(item_id), kind TEXT NOT NULL);
@@ -80,6 +89,9 @@ CREATE TABLE side_prep_status (
   PRIMARY KEY (weekend_start, recipe_id)
 );
 
+INSERT INTO uom VALUES ('kg',NULL);
+INSERT INTO uom VALUES ('ml',NULL);
+INSERT INTO uom_conversion VALUES ('UC-001','kg','ml',1000,NULL,'Any liquid','standard',NULL);
 INSERT INTO item VALUES ('RM-001','raw_material','Pork shoulder','kg',1,NULL);
 INSERT INTO item VALUES ('SR-015','sub_recipe','BBQ sauce',NULL,1,NULL);
 INSERT INTO recipe VALUES ('SR-015','Sauce');
@@ -142,17 +154,53 @@ describe('migrate', () => {
     // stub parents — just enough of item/vendor/recipe for the foreign keys
     // to have something to point at — and comparing those would only be
     // comparing the fixture against itself.
-    ['purchase', 'smoking_session', 'side_prep_status', 'smoking_stage_log', 'side_prep_log'].forEach(
+    [
+      'purchase',
+      'smoking_session',
+      'side_prep_status',
+      'smoking_stage_log',
+      'side_prep_log',
+      'b2b_sale',
+      'b2b_sale_line',
+      'marketing_budget',
+    ].forEach(
       (table) => {
         expect(migrated[table], `${table} after migrating`).toEqual(target[table]);
       },
     );
   });
 
+  it('leaves nothing holding a unit of measure', () => {
+    const shape = shapeOf(legacy);
+    // The tables themselves, and the two columns the fixture carried.
+    expect(Object.keys(shape)).not.toContain('uom');
+    expect(Object.keys(shape)).not.toContain('uom_conversion');
+    expect(shape.item.join(' ')).not.toMatch(/uom_code/);
+    expect(shape.purchase.join(' ')).not.toMatch(/unit_of_measure/);
+    // Dropping a column must not have taken the row with it, nor reordered
+    // what is left — the surviving columns stay where schema.sql has them.
+    // Names only: the fixture's stub item is deliberately looser about NOT
+    // NULL than the real one, and that is not what this is checking.
+    const names = (cols) => cols.map((c) => c.split(':')[0]);
+    expect(names(shape.item)).toEqual(names(shapeOf(fresh).item));
+    expect(legacy.prepare('SELECT * FROM item').get()).toMatchObject({
+      item_id: 'RM-001',
+      name: 'Pork shoulder',
+    });
+  });
+
   it('creates the two tables that were still CSVs', () => {
     expect(Object.keys(shapeOf(legacy))).toEqual(
       expect.arrayContaining(['smoking_stage_log', 'side_prep_log']),
     );
+  });
+
+  it('gives every account already on the book the house 15-day payment cycle', () => {
+    // The column arrives NOT NULL on a table that already has rows, so the
+    // default is not decoration -- it is the only thing that can fill them,
+    // and 15 is what those accounts were already being invoiced on.
+    legacy.prepare("INSERT INTO b2b_client (client_id, name) VALUES ('B2B-0001','Toit')").run();
+    expect(legacy.prepare('SELECT * FROM b2b_client').get()).toMatchObject({ payment_terms_days: 15 });
   });
 
   it('carries every row across the table rebuilds', () => {
@@ -185,7 +233,7 @@ describe('migrate', () => {
   });
 
   it('says what it changed the first time and nothing the second', () => {
-    expect(firstRun.length).toBe(5);
+    expect(firstRun.length).toBe(10);
     // Idempotence is what makes it safe to run on every open: the server
     // opens the database on the first request of every restart.
     expect(migrate(legacy)).toEqual([]);

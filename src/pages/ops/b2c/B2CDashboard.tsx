@@ -2,7 +2,7 @@ import { Fragment, useState } from 'react';
 import WeekendPrepPlanner from './WeekendPrepPlanner';
 import WeeklyPurchasing from '../shared/WeeklyPurchasing';
 import SmokingSession from '../shared/SmokingSession';
-import OrderPacking from '../shared/OrderPacking';
+import OrderManagement from '../shared/OrderManagement';
 import ServiceWeeks from './ServiceWeeks';
 import MenuItems from '../menu/MenuItems';
 
@@ -17,7 +17,7 @@ import MenuItems from '../menu/MenuItems';
 // the same box grid the flow steps use, so the three things you can start
 // from the B2C dashboard read as one set.
 type SetupView = 'serviceWeeks' | 'menu';
-type FlowModule = 'weekendPrep' | 'weeklyPurchasing' | 'smoking' | 'orderPacking';
+type FlowModule = 'weekendPrep' | 'weeklyPurchasing' | 'smoking' | 'orderManagement';
 type B2CView = 'home' | SetupView | 'prep' | FlowModule;
 
 // The three ways into the B2C dashboard. The first two are setup — which
@@ -77,11 +77,11 @@ const MODULES: { id: FlowModule; label: string; icon: string; day: string; descr
     description: 'Start a session with raw weight, rub and pitmaster, then complete it with finished weight and quality notes.',
   },
   {
-    id: 'orderPacking',
-    label: 'Order Packing',
+    id: 'orderManagement',
+    label: 'Order Management',
     icon: '📦',
     day: 'Sat–Sun (serve)',
-    description: 'Sat/Sun Lunch & Dinner orders, what to pack for each item, pack order, and which orders to combine.',
+    description: 'Sat/Sun Lunch & Dinner orders and their fulfilment status, the pre-packing guidelines for each slot, and one switch per meat to put the weekend in the smoker.',
   },
 ];
 
@@ -95,7 +95,7 @@ const BACK_TO: Record<Exclude<B2CView, 'home'>, { view: B2CView; label: string }
   weekendPrep: { view: 'prep', label: '← Back to Prep steps' },
   weeklyPurchasing: { view: 'prep', label: '← Back to Prep steps' },
   smoking: { view: 'prep', label: '← Back to Prep steps' },
-  orderPacking: { view: 'prep', label: '← Back to Prep steps' },
+  orderManagement: { view: 'prep', label: '← Back to Prep steps' },
 };
 
 const B2CDashboard = () => {
@@ -140,8 +140,8 @@ const B2CDashboard = () => {
         return <WeeklyPurchasing />;
       case 'smoking':
         return <SmokingSession />;
-      case 'orderPacking':
-        return <OrderPacking />;
+      case 'orderManagement':
+        return <OrderManagement />;
       default:
         return null;
     }

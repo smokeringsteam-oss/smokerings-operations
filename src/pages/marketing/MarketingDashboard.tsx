@@ -1,17 +1,16 @@
-import LinkedInAutomation from './LinkedInAutomation';
 import RedditPostingPage from './RedditPostingPage';
-import RedditContentFeeder from './RedditContentFeeder';
-import AISEO from './AISEO';
+import MarketingROI from './MarketingROI';
+import QRLinkBuilder from './QRLinkBuilder';
+import InstaReelGenerator from './InstaReelGenerator';
 
-export type MarketingSub = 'linkedin' | 'redditPosting' | 'redditFeeder' | 'insta' | 'meta' | 'aiseo';
+export type MarketingSub = 'roi' | 'qrLinks' | 'redditPosting' | 'insta' | 'meta';
 
 export const marketingTools: { id: MarketingSub; label: string; icon: string }[] = [
-  { id: 'linkedin', label: 'LinkedIn Automation', icon: '💼' },
+  { id: 'roi', label: 'Marketing ROI', icon: '📈' },
+  { id: 'qrLinks', label: 'QR & Link Builder', icon: '🔗' },
   { id: 'redditPosting', label: 'Reddit Posting', icon: '📮' },
-  { id: 'redditFeeder', label: 'Reddit Content Feeder', icon: '🗂️' },
   { id: 'insta', label: 'Insta Reel Generator', icon: '🎬' },
   { id: 'meta', label: 'Meta Ad Creator', icon: '📢' },
-  { id: 'aiseo', label: 'AI SEO', icon: '🔍' },
 ];
 
 const ComingSoon = ({ label, icon }: { label: string; icon: string }) => (
@@ -26,16 +25,14 @@ const ComingSoon = ({ label, icon }: { label: string; icon: string }) => (
 const MarketingDashboard = ({ activeTool }: { activeTool: MarketingSub }) => {
   const renderTool = () => {
     switch (activeTool) {
-      case 'linkedin':
-        return <LinkedInAutomation />;
+      case 'roi':
+        return <MarketingROI />;
+      case 'qrLinks':
+        return <QRLinkBuilder />;
       case 'redditPosting':
         return <RedditPostingPage />;
-      case 'redditFeeder':
-        return <RedditContentFeeder />;
-      case 'aiseo':
-        return <AISEO />;
       case 'insta':
-        return <ComingSoon label="Insta Reel Generator" icon="🎬" />;
+        return <InstaReelGenerator />;
       case 'meta':
         return <ComingSoon label="Meta Ad Creator" icon="📢" />;
       default:
@@ -47,7 +44,11 @@ const MarketingDashboard = ({ activeTool }: { activeTool: MarketingSub }) => {
     <div className="marketing-dashboard">
       <header>
         <h2>Marketing & Digital Presence</h2>
-        <p>Choose a tool from the panel to open LinkedIn, Instagram, Reddit, Ads, or SEO automation.</p>
+        <p>
+          Choose a tool from the panel — Marketing ROI for what each channel earned against what it cost, the QR &
+          Link Builder for tagging what we publish so it can be counted, or the Instagram, Reddit and Ads
+          automation.
+        </p>
       </header>
 
       <div className="marketing-content">{renderTool()}</div>

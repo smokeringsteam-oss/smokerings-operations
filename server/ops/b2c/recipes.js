@@ -30,13 +30,14 @@
 //                      component ("Pulled chicken/pork", "Smoked pork ribs",
 //                      …) and is excluded from the Swiggy list — that's the
 //                      Smoking module's concern.
-//                      quantity/unit is the human amount; base_quantity/
-//                      base_unit is the same amount normalised to the
-//                      child's own stock unit (g, ml, roll, …) via units.csv
-//                      — that's the column this module sums, so mixed units
-//                      across recipes (Lemon in g vs pcs, Garlic in g vs
-//                      cloves, …) no longer need to match by hand to be
-//                      added together.
+//                      quantity is the amount a cook would say; the
+//                      base_quantity beside it is the figure the planners
+//                      multiply out, and it is the column this module sums.
+//                      The two used to be told apart by a unit each (2
+//                      sheets of foil, 0.0667 of a roll); units of measure
+//                      are no longer recorded, so where the two differ it is
+//                      simply because someone entered a separate planner
+//                      figure, and base_quantity still wins.
 //                      is_to_taste="yes" marks a qualitative line ("to
 //                      taste", "pinch") that has no reliable quantity to
 //                      extrapolate — skipped here and reported rather than
@@ -47,8 +48,8 @@
 //   recipes.csv      — everything we make: SR-xxx sub-recipes (rubs, brines,
 //                      preps, sauces, sides — was sub_recipes.csv) and
 //                      IP-xxx smoked products (was meat_yield_params.csv),
-//                      told apart by `kind`. output_quantity/output_unit
-//                      hold the batch yield where known.
+//                      told apart by `kind`. output_quantity holds the
+//                      batch yield where known.
 // Read from SQLite as of phase 1, not from the three CSVs described above.
 // The column names below are unchanged — kbViews re-flattens the normalized
 // menu_item / recipe / bom_line rows back into exactly the shape these files
@@ -253,12 +254,10 @@ function computeSwiggyPlan({ orderCounts }) {
     // is one Swiggy actually covers (excludes Bakery/Meat/Packaging/Fuel).
     if (materialId && !(material && SWIGGY_CATEGORIES.has(material.category))) return;
 
-    // base_quantity/base_unit is the amount normalised to the material's own
-    // stock unit — sum that, not the human quantity/unit, so the same
-    // ingredient recorded in different units across dishes still accumulates
-    // correctly instead of silently mixing g with pcs.
+    // base_quantity is the planner's figure where one was entered — sum
+    // that, not the human quantity, since it is what every other downstream
+    // number is built from.
     const qty = parseQty(line.base_quantity ?? line.quantity);
-    const unit = line.base_unit || line.unit;
     const subRecipeId = isSubRecipe ? line.child_id : null;
     // Group by sub-recipe id when there is one — the same prep gets typed
     // inconsistently across recipe rows (e.g. "Salad (Salad mix)" vs "Veg
@@ -272,12 +271,11 @@ function computeSwiggyPlan({ orderCounts }) {
       name: displayName,
       materialId,
       subRecipeId,
-      unit,
       portions: 0,
       totalQty: 0,
       hasUnparsedQty: false,
       notes: line.notes || '',
-      container: getSideContainer(key, unit),
+      container: getSideContainer(key),
       boxes: 0,
     };
     bucket.portions += count;
@@ -296,24 +294,24 @@ function computeSwiggyPlan({ orderCounts }) {
   // Two buckets: swiggyIngredients (buy fresh) and inventoryIngredients
   // (already-stocked pantry staples — SOURCE_FROM_INVENTORY_MATERIAL_IDS —
   // that get drawn from inventory instead, so they never inflate the buy list).
-  const swiggyIngredients = new Map(); // key: material_id or ingredient name -> { name, unit, qty, materialId }
+  const swiggyIngredients = new Map(); // key: material_id or ingredient name -> { name, qty, materialId }
   const inventoryIngredients = new Map(); // same shape, for pantry staples
-  const addQtyToMap = (map, name, materialId, unit, qty) => {
+  // Everything under one key simply adds up. This used to check that the
+  // running total and the incoming amount were in the same unit and split the
+  // bucket in two when they weren't (Lemon in g on one recipe and pcs on
+  // another). With units no longer recorded there is nothing left to compare,
+  // so an ingredient that two recipes state on different scales now totals to
+  // a number that is wrong without saying so — the one thing lost here that
+  // was not just a label.
+  const addQtyToMap = (map, name, materialId, qty) => {
     const key = materialId || name;
     const existing = map.get(key);
-    if (existing && existing.unit === unit) {
-      existing.qty += qty;
-    } else if (!existing) {
-      map.set(key, { name, materialId, unit, qty });
-    } else {
-      // Same ingredient, different unit than what's already accumulated — rare, flag rather than silently mis-add.
-      gaps.push(`${name}: mixed units (${existing.unit} vs ${unit}) across recipes — totals shown separately, please reconcile.`);
-      map.set(`${key}|${unit}`, { name, materialId, unit, qty });
-    }
+    if (existing) existing.qty += qty;
+    else map.set(key, { name, materialId, qty });
   };
-  const addToSwiggyList = (name, materialId, unit, qty) => {
+  const addToSwiggyList = (name, materialId, qty) => {
     const map = materialId && SOURCE_FROM_INVENTORY_MATERIAL_IDS.has(materialId) ? inventoryIngredients : swiggyIngredients;
-    addQtyToMap(map, name, materialId, unit, qty);
+    addQtyToMap(map, name, materialId, qty);
   };
 
   const sideRows = Array.from(sides.values()).map((side) => {
@@ -321,21 +319,23 @@ function computeSwiggyPlan({ orderCounts }) {
 
     if (side.materialId) {
       // Already a purchasable raw material — it IS the buy item.
-      if (side.totalQty > 0) addToSwiggyList(side.name, side.materialId, side.unit, side.totalQty);
+      if (side.totalQty > 0) addToSwiggyList(side.name, side.materialId, side.totalQty);
     } else if (side.subRecipeId) {
       const subRecipe = subRecipeById.get(side.subRecipeId);
       const outputQty = parseQty(subRecipe?.output_quantity);
       if (!subRecipe) {
         gaps.push(`${side.name} references ${side.subRecipeId}, which isn't in recipes.csv.`);
-      } else if (outputQty == null || !subRecipe.output_unit) {
+      } else if (outputQty == null) {
         gaps.push(`${side.name} (${side.subRecipeId}) has no batch yield recorded in recipes.csv — can't work out how many batches to make.`);
-      } else if (subRecipe.output_unit.toLowerCase() !== (side.unit || '').toLowerCase()) {
-        gaps.push(
-          `${side.name} (${side.subRecipeId}): recipe is consumed in ${side.unit} per order but its batch yield is recorded in ${subRecipe.output_unit} — can't convert without a unit match.`,
-        );
       } else {
+        // The batch count used to be gated on the recipe's yield and the
+        // per-order amount being stated in the same unit, and reported a gap
+        // when they weren't. Nothing records a unit any more, so the division
+        // is done on the two numbers as given: it is right wherever they were
+        // already on the same scale (every side on file today) and silently
+        // wrong if a future recipe states its yield on another.
         const batches = Math.ceil(side.totalQty / outputQty);
-        batchInfo = { batches, batchYield: outputQty, batchUnit: subRecipe.output_unit };
+        batchInfo = { batches, batchYield: outputQty };
 
         const ingredientRows = subRecipeLines.filter((r) => r.parent_id === side.subRecipeId);
         ingredientRows.forEach((row) => {
@@ -355,7 +355,6 @@ function computeSwiggyPlan({ orderCounts }) {
             return;
           }
           const rowQty = parseQty(row.base_quantity ?? row.quantity);
-          const rowUnit = row.base_unit || row.unit;
           if (rowQty == null) {
             gaps.push(
               `${side.subRecipeId} (${side.name}) has a non-numeric ingredient quantity for "${row.child_name}" (${row.quantity || '(blank)'}) — skipped rather than guessed at. Worth fixing in recipe_lines.csv.`,
@@ -365,7 +364,7 @@ function computeSwiggyPlan({ orderCounts }) {
           if (row.status === 'needs_confirmation' && row.notes) {
             gaps.push(`${side.subRecipeId} (${side.name}) ${row.child_name}: ${row.notes}`);
           }
-          addToSwiggyList(row.child_name, row.child_id || null, rowUnit, rowQty * batches);
+          addToSwiggyList(row.child_name, row.child_id || null, rowQty * batches);
         });
       }
     } else if (side.notes) {
@@ -391,7 +390,6 @@ function computeSwiggyPlan({ orderCounts }) {
       name: side.name,
       portions: side.portions,
       totalQty: Math.round(side.totalQty * 100) / 100,
-      unit: side.unit,
       hasUnparsedQty: side.hasUnparsedQty,
       subRecipeId: side.subRecipeId,
       batchInfo,
@@ -511,7 +509,7 @@ function computeMeatPlan({ orderCounts }) {
 // buns/taco shells/garlic bread, while Tortilla (RM-056) is a Bakery item
 // bought on the Swiggy run (VEN-002, noted 2026-08-18). So each row carries
 // its own default_vendor_id/vendor name and the Weekend Prep Planner groups
-// the buy tables by vendor; the Order Packing prep tile ignores the vendor
+// the buy tables by vendor; the Order Management prep tile ignores the vendor
 // and shows every Bakery line, since it's all warmed the same way whoever
 // sold it.
 const PREP_CATEGORY = 'Bakery';
@@ -532,12 +530,10 @@ function computePrepPlan({ orderCounts }) {
     if (!material || material.category !== PREP_CATEGORY) return;
 
     const qty = parseQty(line.base_quantity ?? line.quantity);
-    const unit = line.base_unit || line.unit;
     const key = line.child_id;
     const bucket = prep.get(key) || {
       name: line.child_name,
       materialId: line.child_id,
-      unit,
       portions: 0,
       totalQty: 0,
       hasUnparsedQty: false,
@@ -576,12 +572,11 @@ function computePrepPlan({ orderCounts }) {
 // (excludes the meat component, excludes non-packable-side rows like cheese/
 // tortilla, excludes non-Swiggy categories like Bakery/Packaging), just kept
 // per-item instead of pre-aggregated across an order/slot — this is what the
-// Order Packing tile's per-order "pack these together" grouping is built
+// Order Management's per-order "pack these together" grouping is built
 // from: look up each ordered item's sides, then group same-side lines within
-// one order to see what can share a container. Uses the human quantity/unit
-// (not base_quantity/base_unit) since this is a kitchen-facing display, not
-// a purchasing total — every raw-material line here already carries the same
-// unit across every dish that uses it, so there's no accumulation risk.
+// one order to see what can share a container. Shows the human `quantity`
+// rather than base_quantity, since this is a kitchen-facing display and not
+// a purchasing total.
 function getPackableSidesByItem() {
   const recipeLines = getMenuRecipeLines();
   const rawMaterialsById = new Map(getRawMaterials().map((m) => [m.material_id, m]));
@@ -602,23 +597,48 @@ function getPackableSidesByItem() {
     const key = subRecipeId || materialId || line.child_name;
     const displayName = subRecipeId ? subRecipeById.get(subRecipeId)?.recipe_name || line.child_name : line.child_name;
 
-    // qty/unit stays the human amount the packing boards already show ("1
-    // pcs" of lettuce); baseQty/baseUnit is the same amount normalised to
-    // the material's stock unit (80 g), which is the only one a container
-    // capacity can be divided into. Both travel so the display doesn't
-    // change while the box maths gets a number it can use.
+    // qty stays the amount the packing boards already show; baseQty is the
+    // planner's figure for the same line, which is what a container capacity
+    // is divided into. Both travel so the display doesn't change while the
+    // box maths gets the number it needs.
     const baseQty = parseQty(line.base_quantity ?? line.quantity);
-    const baseUnit = line.base_unit || line.unit;
 
     if (!byItem[line.parent_id]) byItem[line.parent_id] = [];
     byItem[line.parent_id].push({
       key,
       name: displayName,
       qty,
-      unit: line.unit,
       baseQty,
-      baseUnit,
-      container: getSideContainer(key, baseUnit),
+      container: getSideContainer(key),
+    });
+  });
+  return byItem;
+}
+
+// Which smoked meats each menu item carries — the static reference behind
+// Order Management's "pork is in the smoker / chicken is in the smoker"
+// switches. Same walk computeMeatPlan does over the IP-xxx child lines, but
+// with no order counts involved: it answers "does this dish contain pulled
+// pork?", not "how much".
+//
+// Items whose IP-xxx child isn't mapped to a category in
+// server/core/meatConfig.js are simply left out (computeMeatPlan reports that
+// as a gap on the planner, so it's already surfaced somewhere staff look);
+// an item with no meat at all has no entry.
+function getMeatByItem() {
+  const recipeLines = getMenuRecipeLines().filter((line) => isProductId(line.child_id));
+
+  const byItem = {};
+  recipeLines.forEach((line) => {
+    const category = CATEGORY_BY_PRODUCT_ID[line.child_id];
+    if (!category) return;
+    const config = getMeatCategory(category);
+    if (!byItem[line.parent_id]) byItem[line.parent_id] = [];
+    if (byItem[line.parent_id].some((entry) => entry.category === category)) return;
+    byItem[line.parent_id].push({
+      category,
+      label: config?.label || category,
+      productName: config?.productName || line.child_name || category,
     });
   });
   return byItem;
@@ -634,4 +654,5 @@ export {
   computeMeatPlan,
   computePrepPlan,
   getPackableSidesByItem,
+  getMeatByItem,
 };

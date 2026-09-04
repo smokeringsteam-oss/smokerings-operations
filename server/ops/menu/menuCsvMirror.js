@@ -4,9 +4,9 @@
 // and copies the read-back record onto the matching CSV row, so the two can't
 // drift the moment someone reprices a dish. menu.csv isn't decorative —
 // server/ops/b2c/recipes.js reads it to turn weekend order counts into a prep plan
-// (item names, and the menu_id every recipe line hangs off), and the AI SEO /
-// content prompts quote its descriptions. A price or name changed only in
-// Odoo would leave the prep sheet and the copy quoting last month's menu.
+// (item names, and the menu_id every recipe line hangs off), and the content
+// prompts quote its descriptions. A price or name changed only in Odoo would
+// leave the prep sheet and the copy quoting last month's menu.
 //
 // A failed mirror never fails the request. The Odoo write has already
 // happened and can't be rolled back honestly, and the knowledge-base repo

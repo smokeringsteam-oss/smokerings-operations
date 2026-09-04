@@ -1,12 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 
-// Per-order fulfilment pipeline — the one implementation shared by the two
-// places that show individual weekend orders: the Weekend Prep Planner's
-// Step 3 (Pre-packing guidelines, planning ahead) and the Order Packing tile
-// (packing day itself). Both need the same dropdown writing the same field to
-// the same Odoo record, so unlike the presentational bits those two pages
-// deliberately keep separate, this one lives in a single module — two copies
-// of a pipeline that posts to Odoo is two things to keep in step.
+// Per-order fulfilment pipeline — the one implementation behind everything
+// that moves an order along: Order Management's per-order dropdown, its bulk
+// bar, and its Step 3 smoker switches, on both the B2C and B2B boards. All of
+// them write the same field to the same Odoo record, so this lives in a
+// single module — two copies of a pipeline that posts to Odoo is two things
+// to keep in step.
 //
 // Odoo's own "Fulfilment Status" selection field is the truth for which stage
 // an order is at — that's the record staff and Odoo-side reporting read, so

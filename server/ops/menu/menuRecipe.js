@@ -16,14 +16,23 @@
 // and knowing the one non-obvious rule below.
 //
 // THE RULE, enforced here so nobody has to remember it: a row carries the
-// amount twice — quantity/unit (as a human would say it) and base_quantity/
-// base_unit (normalised to the material's own stock unit). Every calculation
-// reads `base_quantity ?? quantity`, so base_quantity silently wins. Editing
-// only the quantity column changes nothing downstream. When the two units
-// match, a save here writes both columns, which is the case for every meat
-// and side line. When they differ — "2 sheets" of foil stocked as 0.0667 of a
-// roll — the conversion isn't ours to guess, so both numbers are editable
-// side by side and the caller is told which one the planner uses.
+// amount twice — `quantity` as a human would say it, and `base_quantity`,
+// which is the figure the planners multiply out. Every calculation reads
+// `base_quantity ?? quantity`, so base_quantity silently wins, and editing
+// only the quantity column changes nothing downstream.
+//
+// Whether a save writes one number into both columns is decided by the row's
+// `base_is_separate` flag. Where it is off, the two are one amount said twice:
+// the editor shows a single input and the save writes both columns, which
+// re-links a base_quantity that has drifted (110 against a planner's 120).
+// Where it is on, they are two deliberate figures — foil entered as 2, planned
+// as 0.0667 — so both stay editable side by side and the caller is told which
+// one the planner uses.
+//
+// That flag used to be read off a unit column beside each amount. Units of
+// measure are no longer recorded and the numbers alone cannot tell the two
+// cases apart, so it is stored on the row; see the note on bom_line in
+// server/core/schema.sql.
 //
 // Moved onto the database with server/ops/b2c/recipes.js rather than after it,
 // deliberately. That module reads the BoM to build the shopping list; this one
@@ -47,7 +56,6 @@ const groupOf = (childId) => (isProductId(childId) ? 'meat' : isSubRecipeId(chil
 const GROUP_ORDER = { meat: 0, side: 1, material: 2 };
 
 const clean = (value) => String(value == null ? '' : value).trim();
-const sameUnit = (a, b) => clean(a).toLowerCase() === clean(b).toLowerCase();
 
 // A finite number, or null for a blank/non-numeric cell — an is_to_taste row
 // deliberately has no quantity, and that has to survive a round-trip through
@@ -70,11 +78,14 @@ function badRequest(message) {
 }
 
 
+// True when one number covers both columns, which is what lets the editor
+// show a single input; false for a row carrying two deliberately different
+// figures. See THE RULE at the top of the file.
+const amountsLinked = (row) => !Number(row.base_is_separate);
+
 function toLine(row) {
   const quantity = parseQty(row.quantity);
   const baseQuantity = parseQty(row.base_quantity);
-  const unit = clean(row.unit);
-  const baseUnit = clean(row.base_unit) || unit;
   return {
     lineId: row.line_id,
     childId: row.child_id,
@@ -82,17 +93,12 @@ function toLine(row) {
     childType: row.child_type,
     group: groupOf(row.child_id),
     quantity,
-    unit,
     baseQuantity,
-    baseUnit,
-    // True when one number covers both columns, which is what lets the editor
-    // show a single input. False for a genuine unit conversion (sheets/roll).
-    unitsMatch: sameUnit(unit, baseUnit),
+    amountsLinked: amountsLinked(row),
     // The number every planner actually multiplies by the order count. Shown
     // on the row so a stale base_quantity is visible instead of surprising
     // someone on Friday morning.
     plannerQuantity: baseQuantity ?? quantity,
-    plannerUnit: baseUnit,
     isToTaste: clean(row.is_to_taste).toLowerCase() === 'yes',
     status: clean(row.status),
     notes: clean(row.notes),
@@ -123,19 +129,22 @@ function getMenuItemRecipe({ menuId }) {
 // meat weight in every row that has one. It isn't what the planner computes
 // from — that's the recipe line we just wrote — but leaving it behind means
 // the menu advertises a portion the kitchen no longer plates, so a meat edit
-// carries it along and says so. Only when the units already agree: a portion
-// written in a different unit is a judgement call, not a copy.
-function mirrorPortionToMenuItem({ menuId, grams, unit }) {
+// carries it along and says so.
+//
+// This used to copy the number across only where the menu's portion unit and
+// the recipe line's agreed, and to say so instead of copying where they did
+// not. Neither carries a unit any more, so the copy is unconditional: both
+// numbers are meat weights on the same scale for every dish on file, and a
+// menu portion that was written on some other scale would now be overwritten
+// rather than flagged.
+function mirrorPortionToMenuItem({ menuId, grams }) {
   try {
     const row = selectOne('menu_item', { item_id: menuId });
     if (!row) return null;
-    if (!sameUnit(row.portion_unit, unit)) {
-      return `The menu still lists a portion of ${clean(row.portion_size)} ${clean(row.portion_unit)} — left alone, since it isn't in ${unit}.`;
-    }
     if (parseQty(row.portion_size) === grams) return null;
     const was = clean(row.portion_size);
     update('menu_item', { item_id: menuId }, { portion_size: grams });
-    return `Menu portion size updated ${was} → ${toCell(grams)} ${unit} to match.`;
+    return `Menu portion size updated ${was} → ${toCell(grams)} to match.`;
   } catch (err) {
     // The recipe write already succeeded and can't be rolled back honestly,
     // so this degrades to a note exactly like the Odoo -> menu mirror.
@@ -145,9 +154,10 @@ function mirrorPortionToMenuItem({ menuId, grams, unit }) {
 
 // edits: [{ lineId, quantity, baseQuantity? }]
 //   quantity      — the human number; '' or null clears the cell (to taste)
-//   baseQuantity  — only meaningful for a unit-converting line, where the
-//                   caller has to state both halves; ignored otherwise, since
-//                   a matching-unit line derives it from quantity
+//   baseQuantity  — only meaningful for a line whose two amounts already
+//                   differ, where the caller has to state both halves;
+//                   ignored otherwise, since a linked line derives it from
+//                   quantity
 //
 // Every edit is validated before anything is written, so a typo in the third
 // row can't leave the first two saved and the rest not.
@@ -177,14 +187,17 @@ function updateMenuItemRecipe({ menuId, edits }) {
     };
 
     const quantity = readAmount(edit.quantity, 'Quantity');
-    const unitsMatch = sameUnit(row.unit, row.base_unit || row.unit);
-    const baseQuantity = unitsMatch
+    // Read off the row on file, not off the edit: a line flagged as carrying
+    // two figures keeps carrying two, so a save that only touches the quantity
+    // can't collapse the planner's number onto it.
+    const linked = amountsLinked(row);
+    const baseQuantity = linked
       ? quantity
       : edit.baseQuantity === undefined
         ? parseQty(row.base_quantity)
-        : readAmount(edit.baseQuantity, 'Stock quantity');
+        : readAmount(edit.baseQuantity, 'Planner quantity');
 
-    planned.push({ row, lineId, quantity, baseQuantity, unitsMatch });
+    planned.push({ row, lineId, quantity, baseQuantity, linked });
   });
 
   const changed = planned.filter(
@@ -209,18 +222,14 @@ function updateMenuItemRecipe({ menuId, edits }) {
   const notes = [];
   const meat = planned.find(({ row }) => isProductId(row.child_id) && changedIds.includes(row.line_id));
   if (meat) {
-    const note = mirrorPortionToMenuItem({
-      menuId: id,
-      grams: meat.baseQuantity,
-      unit: clean(meat.row.base_unit) || clean(meat.row.unit),
-    });
+    const note = mirrorPortionToMenuItem({ menuId: id, grams: meat.baseQuantity });
     if (note) notes.push(note);
   }
   planned
-    .filter(({ unitsMatch }) => !unitsMatch)
-    .forEach(({ row }) => {
+    .filter(({ linked }) => !linked)
+    .forEach(({ row, baseQuantity }) => {
       notes.push(
-        `${row.child_name || row.line_id} is stocked in ${clean(row.base_unit)} rather than ${clean(row.unit)}, so the planner uses the ${clean(row.base_unit)} figure.`,
+        `${row.child_name || row.line_id} carries a separate planner figure — the buy list uses ${toCell(baseQuantity)}, not the ${clean(row.quantity)} beside it.`,
       );
     });
 

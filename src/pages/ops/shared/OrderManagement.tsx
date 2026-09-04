@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   BulkStatusBar,
   FulfilmentBadge,
@@ -9,21 +9,19 @@ import {
   type PackingStatus,
 } from './orderFulfilment';
 import {
-  boxesSaved,
-  buildOrderSideGroups,
-  describePacking,
-  sideBoxTotals,
+  type OrderTimePreference,
+  type OrderTimePreferences,
   type PackOrder,
   type PackingResponse,
-  type SidesByItem,
   type PackGroup,
 } from './packing';
 
-// Order Packing — shows individual orders (not the aggregated totals the
-// Weekend Prep Planner works with) on a picker strip of groups, where picking
-// one shows that group's dashboard underneath: what to toast/warm, how many
-// side boxes, what to batch, then its orders in pack-first order with the
-// full page width to spread across instead of a quarter of it.
+// Order Management — the whole service-day board for individual orders (not
+// the aggregated totals the Weekend Prep Planner works with), off one fetch:
+// the range's orders on a picker strip of groups, each with its Odoo
+// Fulfilment Status dropdown and the bulk bar. Pre-packing guidelines and the
+// smoker-status switches used to live here as extra steps; they were taken
+// out, leaving this page to do one thing — move orders through the pipeline.
 //
 // Both dashboards run this same board; `channel` decides whose orders and how
 // they group (server/integrations/odoo.js fetchOrderPackingList):
@@ -33,44 +31,16 @@ import {
 //   B2B — company accounts, grouped by delivery DAY. Wholesale accounts have
 //         an order day (see server/ops/b2b/b2bClients.js), not a lunch/dinner sitting,
 //         so the groups are discovered from the orders rather than fixed.
-// Everything downstream — the pack cards, the side-box maths, and the whole
-// IN_SMOKER → DELIVERED pipeline in orderFulfilment.tsx (which stamps every
-// stage onto Kitchen/order_lifecycle_log.csv) — is channel-agnostic and shared.
-
-// Sides breakdown — same shape server/ops/b2c/recipes.js's computeSwiggyPlan returns
-// (already used by the Weekend Prep Planner's "Sides needed" table), reused
-// here scoped to just the selected slot's orders instead of the whole weekend.
-type SideRow = {
-  key: string;
-  name: string;
-  portions: number; // how many orders/dish-instances need this side
-  totalQty: number;
-  unit: string;
-  hasUnparsedQty: boolean;
-  // The box this side goes in and how many of them the portions above need
-  // once its capacity is respected (server/core/packagingConfig.js). Counted one
-  // plate at a time here, since this endpoint only sees slot totals — the
-  // per-order numbers on the cards below are what actually combine.
-  container: { materialId: string; name: string; capacity: number | null; portionCapacity: number | null } | null;
-  boxes: number;
-};
-type SwiggyPlan = { sides: SideRow[]; gaps: string[] };
-
-// Prep-before-packing breakdown — buns, taco shells, tortillas, garlic bread
-// (server/ops/b2c/recipes.js computePrepPlan). Same shape as SideRow minus gaps and
-// containers, since these are always direct raw-material quantities that go
-// into the dish itself rather than a side box.
-type PrepRow = { name: string; portions: number; totalQty: number; unit: string; hasUnparsedQty: boolean };
-type PrepPlan = { prep: PrepRow[] };
-
-// Quantities are summed from CSV decimals (0.1 of a baguette, 15 g of
-// dressing) — trim the float dust before they hit a pack card.
-const roundQty = (n: number) => Math.round(n * 100) / 100;
+// The IN_SMOKER → DELIVERED pipeline in orderFulfilment.tsx (which stamps every
+// stage onto Kitchen/order_lifecycle_log.csv) is channel-agnostic and shared.
 
 type PackChannel = 'B2C' | 'B2B';
 
 // Wording that differs per channel — the board itself is identical.
-const CHANNEL_COPY: Record<PackChannel, { groupNoun: string; fetchHint: string; intro: string }> = {
+const CHANNEL_COPY: Record<
+  PackChannel,
+  { groupNoun: string; fetchHint: string; intro: string }
+> = {
   B2C: {
     groupNoun: 'delivery slot',
     fetchHint: 'Pulls confirmed, individual-customer Sales Orders — B2B/corporate orders are excluded.',
@@ -134,252 +104,58 @@ const formatPackBy = (iso: string | null) => {
   });
 };
 
-// Pre-packing guidelines for whichever slot is selected. Worked out from just
-// that slot's orders, so what's on screen is what this slot alone needs — the
-// endpoints are the same order-counts-driven ones the Weekend Prep Planner
-// uses, called again with the slot's own counts.
-function useSlotPlan<T>(endpoint: string, orderCounts: Record<string, number>, hasOrders: boolean) {
-  const [plan, setPlan] = useState<T | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState('');
-  const countsKey = JSON.stringify(orderCounts);
+// What the customer asked for about timing, read out of the order's Odoo note
+// by Gemini (server/integrations/geminiContent.js readOrderTimePreferences). Rendered as a
+// callout rather than a chip because the customer's own words are the point —
+// "by 1PM if possible" and "MUST be there by 1" are the same badge and very
+// different kitchen decisions, so the quote is shown, not just a paraphrase.
+// Nothing renders for the orders that asked for nothing, which is most of them.
+const TimePreferenceCallout: React.FC<{ preference: OrderTimePreference | undefined }> = ({ preference }) => {
+  if (!preference?.hasPreference) return null;
+  return (
+    <div className={`pack-time-pref pack-time-pref-${preference.confidence}`}>
+      <span className="pack-time-pref-label">⏰ {preference.label || 'Time preference'}</span>
+      {preference.quote && <span className="pack-time-pref-quote">“{preference.quote}”</span>}
+      {preference.confidence !== 'high' && (
+        <span className="pack-time-pref-hint">Read from a vague note — worth a look before you promise it.</span>
+      )}
+    </div>
+  );
+};
 
-  useEffect(() => {
-    if (!hasOrders) {
-      setPlan(null);
-      return;
-    }
-    let cancelled = false;
-    setIsLoading(true);
-    setError('');
-
-    fetch(endpoint, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ orderCounts: JSON.parse(countsKey) }),
-    })
-      .then(async (resp) => {
-        let json: T & { error?: string };
-        try {
-          json = await resp.json();
-        } catch {
-          throw new Error('Got an empty response from the server. Is the backend running (npm run start-server)? Try again.');
-        }
-        if (!resp.ok) throw new Error(json.error || 'Failed to work this slot out.');
-        if (!cancelled) setPlan(json);
-      })
-      .catch((err) => {
-        if (!cancelled) setError(String((err as Error).message || err));
-      })
-      .finally(() => {
-        if (!cancelled) setIsLoading(false);
-      });
-
-    return () => {
-      cancelled = true;
-    };
-    // countsKey is a stable stringified snapshot of orderCounts — re-fetches
-    // only when the counts actually change, not on every re-render.
-  }, [endpoint, countsKey, hasOrders]);
-
-  return { plan, isLoading, error };
-}
-
-type SlotDashboardProps = {
+// ---- Step 1: the orders, and where each one is ---------------------------
+type OrdersBoardProps = {
   orders: PackOrder[];
-  sidesByItem: SidesByItem | null;
   statuses: Record<string, PackingStatus>;
   busy: Record<string, boolean>;
   errors: Record<string, string>;
   isBulkBusy: boolean;
+  timePreferences: OrderTimePreferences;
   onSetStatus: (order: FulfilmentOrder, status: Exclude<PackStatusValue, 'pending'>, deliveryPerson?: string) => void;
   onBulkApply: (orders: FulfilmentOrder[], status: Exclude<PackStatusValue, 'pending'>) => void;
   onRetryInvoice: (order: FulfilmentOrder) => void;
 };
 
-const SlotDashboard: React.FC<SlotDashboardProps> = ({
+const OrdersBoard: React.FC<OrdersBoardProps> = ({
   orders,
-  sidesByItem,
   statuses,
   busy,
   errors,
   isBulkBusy,
+  timePreferences,
   onSetStatus,
   onBulkApply,
   onRetryInvoice,
 }) => {
-  // { menuItemId -> total ordered } for just this slot — the same input shape
-  // the Weekend Prep Planner sends, scoped down to one slot.
-  const orderCounts = useMemo(() => {
-    const counts: Record<string, number> = {};
-    orders.forEach((order) => {
-      order.items.forEach((item) => {
-        counts[item.itemId] = (counts[item.itemId] || 0) + item.qty;
-      });
-    });
-    return counts;
-  }, [orders]);
-
-  // Per-item totals across every order in this slot — "how much of each item
-  // to pack", plus which items are worth batching because 2+ orders need them.
-  const { itemTotals, combineItems } = useMemo(() => {
-    const totals = new Map<string, { name: string; qty: number; orderCount: number }>();
-    orders.forEach((order) => {
-      order.items.forEach((item) => {
-        if (!totals.has(item.itemId)) totals.set(item.itemId, { name: item.name, qty: 0, orderCount: 0 });
-        const entry = totals.get(item.itemId)!;
-        entry.qty += item.qty;
-        entry.orderCount += 1;
-      });
-    });
-    const sorted = Array.from(totals.values()).sort((a, b) => b.qty - a.qty);
-    return { itemTotals: sorted, combineItems: sorted.filter((t) => t.orderCount >= 2) };
-  }, [orders]);
-
-  const hasOrders = orders.length > 0;
-  const { plan: prepPlan, isLoading: isLoadingPrep, error: prepError } = useSlotPlan<PrepPlan>(
-    '/api/recipes/prep-plan',
-    orderCounts,
-    hasOrders,
-  );
-  const { plan: sidesPlan, isLoading: isLoadingSides, error: sidesError } = useSlotPlan<SwiggyPlan>(
-    '/api/recipes/swiggy-plan',
-    orderCounts,
-    hasOrders,
-  );
-
-  // Box counts for the slot, summed order by order so sides that share a
-  // container inside one order only count once — the "Sides to box" tile
-  // reads these instead of the plate-by-plate number the endpoint above can
-  // work out from slot totals alone. Keyed the same way both sides key.
-  const slotSideBoxes = useMemo(
-    () => new Map(sideBoxTotals(orders, sidesByItem).map((row) => [row.key, row])),
-    [orders, sidesByItem],
-  );
-
-  if (!hasOrders) return <p className="pack-slot-empty">Nothing for this slot.</p>;
+  if (orders.length === 0) return <p className="pack-slot-empty">Nothing for this slot.</p>;
 
   return (
     <>
-      <div className="pack-guides">
-        <div className="pack-guide">
-          <h4>📋 What to pack</h4>
-          <ul className="pack-guide-list">
-            {itemTotals.map((t) => (
-              <li key={t.name}>
-                <span>{t.name}</span>
-                <strong>{t.qty}</strong>
-              </li>
-            ))}
-          </ul>
-        </div>
-
-        <div className="pack-guide">
-          <h4>🍞 Prep before packing</h4>
-          {isLoadingPrep && <p className="pack-guide-note">Working it out…</p>}
-          {prepError && <p className="chat-error">{prepError}</p>}
-          {prepPlan && prepPlan.prep.length > 0 && (
-            <ul className="pack-guide-list">
-              {prepPlan.prep.map((p) => (
-                <li key={p.name}>
-                  <span>
-                    {p.name}
-                    {p.hasUnparsedQty && <span className="inv-assumed">partial</span>}
-                  </span>
-                  <strong>
-                    {p.totalQty} <span className="pack-prep-unit">{p.unit}</span>
-                  </strong>
-                </li>
-              ))}
-            </ul>
-          )}
-          {prepPlan && prepPlan.prep.length === 0 && !isLoadingPrep && (
-            <p className="pack-guide-note">Nothing to toast/warm for this slot.</p>
-          )}
-        </div>
-
-        <div className="pack-guide">
-          <h4>🥡 Sides to pack</h4>
-          {isLoadingSides && <p className="pack-guide-note">Working it out…</p>}
-          {sidesError && <p className="chat-error">{sidesError}</p>}
-          {sidesPlan && sidesPlan.sides.length > 0 && (
-            <ul className="pack-guide-list">
-              {sidesPlan.sides.map((side) => {
-                // The server row counts a box per plate (it only sees slot
-                // totals); this slot's individual orders are right here, so
-                // prefer the number that accounts for combining within each
-                // order and falls back to the server's only if a side has no
-                // matching row (a menu item with no sides-by-item entry yet).
-                const exact = slotSideBoxes.get(side.key);
-                const boxes = exact ? exact.boxes : side.boxes;
-                return (
-                  <li key={side.key} className="pack-guide-stacked">
-                    <span>
-                      {side.name}
-                      {side.hasUnparsedQty && <span className="inv-assumed">partial</span>}
-                    </span>
-                    <strong>
-                      {side.portions}
-                      <span className="pack-prep-unit"> portion{side.portions === 1 ? '' : 's'}</span>
-                      {/* How many portions to make leads; how they're boxed is
-                          the subtext under it — the kitchen counts servings,
-                          then packs them. */}
-                      <span className="pack-guide-sub">
-                        {describePacking(side.portions, boxes, side.container)} · {side.totalQty} {side.unit}
-                      </span>
-                    </strong>
-                  </li>
-                );
-              })}
-            </ul>
-          )}
-          {sidesPlan && sidesPlan.sides.length === 0 && !isLoadingSides && (
-            <p className="pack-guide-note">No sides on file for this slot's items yet.</p>
-          )}
-          {sidesPlan && sidesPlan.gaps.length > 0 && (
-            <div className="prep-unmatched">
-              <strong>Data gaps:</strong>
-              <ul>
-                {sidesPlan.gaps.map((gap, i) => (
-                  <li key={i}>{gap}</li>
-                ))}
-              </ul>
-            </div>
-          )}
-        </div>
-
-        {combineItems.length > 0 && (
-          <div className="pack-guide">
-            <h4>🔗 Batch together</h4>
-            <div className="pack-combine-box">
-              {combineItems.map((t) => (
-                <div key={t.name} className="pack-combine-item">
-                  <span className="pack-combine-name">{t.name}</span>
-                  <span className="pack-combine-count">
-                    {t.qty} / {t.orderCount} orders
-                  </span>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-      </div>
-
-      <h4 className="pack-orders-title">📦 Orders — pack in this order</h4>
       <BulkStatusBar orders={orders} statuses={statuses} busy={isBulkBusy} onApply={onBulkApply} />
 
       <div className="pack-order-grid">
         {orders.map((order, index) => {
-          const sideGroups = buildOrderSideGroups(order, sidesByItem);
-          // "Combinable" now means the container capacity actually lets the
-          // portions share a box — 4 salads fit one 30 oz tray, but 4 BBQ
-          // sauces are 4 full 30 ml cups and combine into nothing.
-          const combinable = sideGroups.filter((g) => g.boxes < g.portions);
-          const singles = sideGroups.filter((g) => g.boxes >= g.portions);
-          const containersSaved = sideGroups.reduce((sum, g) => sum + boxesSaved(g), 0);
-          const orderBoxes = sideGroups.reduce((sum, g) => sum + g.boxes, 0);
           const key = String(order.orderId);
-
           return (
             <div key={order.orderId} className="pack-order-card">
               <div className="pack-order-header">
@@ -391,6 +167,8 @@ const SlotDashboard: React.FC<SlotDashboardProps> = ({
                 <span>{order.customer}</span>
                 <span className="pack-order-time">{formatPackBy(order.packBy)}</span>
               </div>
+
+              <TimePreferenceCallout preference={timePreferences[key]} />
 
               <FulfilmentControl
                 order={order}
@@ -409,61 +187,6 @@ const SlotDashboard: React.FC<SlotDashboardProps> = ({
                   </li>
                 ))}
               </ul>
-
-              {sideGroups.length > 0 && (
-                <div className="pack-order-smart">
-                  <div className="pack-order-smart-title">
-                    📦 Pack smart
-                    <span className="pack-order-boxes">
-                      {orderBoxes} box{orderBoxes === 1 ? '' : 'es'}
-                    </span>
-                    {containersSaved > 0 && (
-                      <span className="pack-order-savings">
-                        saves {containersSaved} container{containersSaved === 1 ? '' : 's'}
-                      </span>
-                    )}
-                  </div>
-                  {combinable.length > 0 ? (
-                    <ul className="pack-order-smart-list">
-                      {combinable.map((g) => (
-                        <li key={g.key} className="pack-order-smart-combine">
-                          <span className="pack-smart-line">
-                            <span className="pack-smart-main">
-                              {g.portions}× <strong>{g.name}</strong>
-                              {g.baseQty != null ? ` (${roundQty(g.baseQty)} ${g.baseUnit})` : ''}
-                            </span>
-                            <span className="pack-smart-sub">
-                              Combine into {describePacking(g.portions, g.boxes, g.container)}
-                            </span>
-                          </span>
-                        </li>
-                      ))}
-                    </ul>
-                  ) : (
-                    <p className="inv-note">Nothing combines here — every side already fills its own box.</p>
-                  )}
-                  {singles.length > 0 && (
-                    <ul className="pack-order-smart-list">
-                      {singles.map((g) => (
-                        <li key={g.key} className="pack-order-smart-single">
-                          <span className="pack-smart-line">
-                            <span className="pack-smart-main">
-                              {g.portions}× <strong>{g.name}</strong>
-                              {g.baseQty != null ? ` (${roundQty(g.baseQty)} ${g.baseUnit})` : ''}
-                            </span>
-                            <span className="pack-smart-sub">
-                              {describePacking(g.portions, g.boxes, g.container)}
-                              {g.boxes === g.portions && g.portions > 1 && !g.container?.portionCapacity
-                                ? ' — one each, they won’t share'
-                                : ''}
-                            </span>
-                          </span>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </div>
-              )}
             </div>
           );
         })}
@@ -472,7 +195,7 @@ const SlotDashboard: React.FC<SlotDashboardProps> = ({
   );
 };
 
-const OrderPacking: React.FC<{ channel?: PackChannel }> = ({ channel = 'B2C' }) => {
+const OrderManagement: React.FC<{ channel?: PackChannel }> = ({ channel = 'B2C' }) => {
   const defaultRange = channel === 'B2B' ? DEFAULT_B2B_RANGE : DEFAULT_ODOO_RANGE;
   const copy = CHANNEL_COPY[channel];
   const [odooFrom, setOdooFrom] = useState(defaultRange.from);
@@ -485,16 +208,6 @@ const OrderPacking: React.FC<{ channel?: PackChannel }> = ({ channel = 'B2C' }) 
   // delivery day doesn't silently slide whoever's packing onto another day;
   // an id that's gone falls back to the first group instead.
   const [activeGroupId, setActiveGroupId] = useState('');
-
-  // Static reference data (which sides each menu item needs) — same for
-  // every order, so fetched once rather than per-order or per-slot.
-  const [sidesByItem, setSidesByItem] = useState<SidesByItem | null>(null);
-  useEffect(() => {
-    fetch('/api/recipes/sides-by-item')
-      .then((resp) => resp.json())
-      .then((json: { sidesByItem?: SidesByItem }) => setSidesByItem(json.sidesByItem || {}))
-      .catch(() => setSidesByItem({})); // non-fatal — per-order combine hints just won't show
-  }, []);
 
   const handleFetch = async () => {
     if (!odooFrom || !odooTo || isFetching) return;
@@ -519,8 +232,22 @@ const OrderPacking: React.FC<{ channel?: PackChannel }> = ({ channel = 'B2C' }) 
     }
   };
 
+  // Nobody should have to press a button to see the range's orders — the
+  // fetch is part of loading the board. Runs on mount and again whenever the
+  // range (or channel) changes; the ref keeps StrictMode's double-mount (and
+  // a re-render with the same dates) from firing a second request. Safe to
+  // re-run because the fetch replaces the board rather than adding to it.
+  const autoFetchedRange = useRef('');
+  useEffect(() => {
+    if (!odooFrom || !odooTo) return;
+    const key = `${channel}|${odooFrom}|${odooTo}`;
+    if (autoFetchedRange.current === key) return;
+    autoFetchedRange.current = key;
+    void handleFetch();
+  }, [channel, odooFrom, odooTo]);
+
   const groups = useMemo<PackGroup[]>(() => data?.groups || [], [data]);
-  // The group being packed: whatever's selected, else the first one with
+  // The group being worked: whatever's selected, else the first one with
   // orders in it (an empty Saturday Lunch shouldn't be what the board opens
   // on), else just the first.
   const activeGroup = useMemo(
@@ -536,6 +263,74 @@ const OrderPacking: React.FC<{ channel?: PackChannel }> = ({ channel = 'B2C' }) 
     channel,
   );
 
+  // ---- What time did the customer actually ask for? ----------------------
+  // Odoo carries the request as free text at the end of the order note, so
+  // reading it is a Gemini pass rather than a match (see
+  // server/integrations/geminiContent.js readOrderTimePreferences). Kicked off once the
+  // orders have landed instead of as part of that fetch, so the board draws
+  // straight away and the callouts fill in behind it; the server caches per
+  // note, so re-fetching the same range re-reads nothing.
+  //
+  // Failing is non-fatal by design: no GEMINI_API_KEY, or a quota 503, costs
+  // the highlights and nothing else. The note itself is still on the order.
+  const [timePreferences, setTimePreferences] = useState<OrderTimePreferences>({});
+  const [isReadingNotes, setIsReadingNotes] = useState(false);
+  const [notesError, setNotesError] = useState('');
+
+  const ordersWithNotes = useMemo(
+    () =>
+      allOrders
+        .filter((order): order is PackOrder & { note: string } => Boolean(order.note))
+        .map((order) => ({ orderId: order.orderId, note: order.note })),
+    [allOrders],
+  );
+
+  // Which orders, and which notes — an order whose note was edited in Odoo
+  // re-reads, one that only moved slots does not.
+  const notesKey = useMemo(
+    () => ordersWithNotes.map((order) => `${order.orderId}:${order.note.length}`).join('|'),
+    [ordersWithNotes],
+  );
+
+  useEffect(() => {
+    if (!notesKey) {
+      setTimePreferences({});
+      return;
+    }
+    let cancelled = false;
+    setIsReadingNotes(true);
+    setNotesError('');
+
+    fetch('/api/orders/time-preferences', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ orders: ordersWithNotes }),
+    })
+      .then(async (resp) => {
+        const json: { preferences?: OrderTimePreferences; error?: string } = await resp.json();
+        if (!resp.ok) throw new Error(json.error || 'Could not read the order notes.');
+        if (!cancelled) setTimePreferences(json.preferences || {});
+      })
+      .catch((err) => {
+        if (!cancelled) setNotesError(String((err as Error).message || err));
+      })
+      .finally(() => {
+        if (!cancelled) setIsReadingNotes(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+    // notesKey is the stable summary of ordersWithNotes: this re-reads when
+    // the orders or their notes change, not on every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [notesKey]);
+
+  const timePreferenceCount = useMemo(
+    () => Object.values(timePreferences).filter((preference) => preference.hasPreference).length,
+    [timePreferences],
+  );
+
   // Bulk apply walks the orders one at a time (see setStatusBulk), so the bar
   // needs its own busy flag rather than reading any single order's.
   const [isBulkBusy, setIsBulkBusy] = useState(false);
@@ -548,18 +343,17 @@ const OrderPacking: React.FC<{ channel?: PackChannel }> = ({ channel = 'B2C' }) 
     }
   };
 
+
   const hasResult = data != null;
 
   return (
     <div className="wizard-page">
       <div className="wizard-header">
-        <h1>Order Packing{channel === 'B2B' ? ' — B2B' : ''}</h1>
+        <h1>Order Management{channel === 'B2B' ? ' — B2B' : ''}</h1>
         <p>
-          {copy.intro}: what to toast/warm, how many side boxes, what's worth batching, then each order in
-          promised-time order, earliest first. Each order's Fulfilment Status dropdown writes straight to Odoo
-          (IN_SMOKER → PREPPING → PACKED → PARTNER_ASGN → OUT_FOR_DEL → DELIVERED) and is logged with its timestamp,
-          or start the whole {copy.groupNoun} at once from the bulk bar. Marking Delivered also creates and posts the
-          invoice, moving Odoo on to INVOICED.
+          {copy.intro} — every order with its Odoo Fulfilment Status dropdown (IN_SMOKER → PREPPING → PACKED →
+          PARTNER_ASGN → OUT_FOR_DEL → DELIVERED), written straight to the sale order and logged with its
+          timestamp. Marking Delivered also creates and posts the invoice, moving Odoo on to INVOICED.
         </p>
       </div>
 
@@ -586,7 +380,7 @@ const OrderPacking: React.FC<{ channel?: PackChannel }> = ({ channel = 'B2C' }) 
                 onClick={handleFetch}
                 disabled={!odooFrom || !odooTo || isFetching}
               >
-                {isFetching ? 'Fetching…' : 'Fetch orders'}
+                {isFetching ? 'Fetching…' : 'Refresh orders'}
               </button>
               <span className="prep-paste-hint">{copy.fetchHint}</span>
             </div>
@@ -614,7 +408,7 @@ const OrderPacking: React.FC<{ channel?: PackChannel }> = ({ channel = 'B2C' }) 
               <div className="empty-state-icon">📦</div>
               <h3>No orders fetched yet</h3>
               <p>Pick a date range above and fetch — the {copy.groupNoun}s build themselves from confirmed Odoo orders.</p>
-              <span className="badge-soon">Nothing to pack</span>
+              <span className="badge-soon">Nothing to manage</span>
             </div>
           )}
 
@@ -626,10 +420,11 @@ const OrderPacking: React.FC<{ channel?: PackChannel }> = ({ channel = 'B2C' }) 
 
           {hasResult && groups.length > 0 && (
             <>
-              {/* Empty B2C slots stay on the strip — the weekend has a fixed
-                  four, and an empty one is part of its shape at a glance. B2B
-                  days only exist where there's something to deliver, so the
-                  strip is however many the range turned up. */}
+              {/* The strip picks which group the board below is looking at.
+                  Empty B2C slots stay on it — the weekend has a fixed four,
+                  and an empty one is part of its shape at a glance. B2B days
+                  only exist where there's something to deliver, so the strip
+                  is however many the range turned up. */}
               <div className="slot-picker">
                 {groups.map((group) => (
                   <button
@@ -651,13 +446,35 @@ const OrderPacking: React.FC<{ channel?: PackChannel }> = ({ channel = 'B2C' }) 
                 ))}
               </div>
 
-              <SlotDashboard
+              {/* The note read is a background pass over the orders, so it
+                  reports itself here rather than blocking anything. A
+                  failure says so plainly instead of silently showing no
+                  callouts, which would be indistinguishable from "nobody
+                  asked for a time". */}
+              {isReadingNotes && (
+                <p className="pack-guide-note">⏰ Reading the customer notes for delivery-time requests…</p>
+              )}
+              {notesError && (
+                <p className="chat-error">
+                  ⏰ Could not read the order notes, so any time requests in them are not flagged below:{' '}
+                  {notesError}
+                </p>
+              )}
+              {!isReadingNotes && !notesError && timePreferenceCount > 0 && (
+                <p className="pack-guide-note">
+                  ⏰ {timePreferenceCount} order{timePreferenceCount === 1 ? '' : 's'} asked for a specific
+                  {' '}delivery time — flagged on the card{timePreferenceCount === 1 ? '' : 's'} below.
+                </p>
+              )}
+
+              <h4 className="pack-orders-title">📦 Orders — earliest promised time first</h4>
+              <OrdersBoard
                 orders={activeGroup?.orders || []}
-                sidesByItem={sidesByItem}
                 statuses={fulfilment.statuses}
                 busy={fulfilment.busy}
                 errors={fulfilment.errors}
                 isBulkBusy={isBulkBusy}
+                timePreferences={timePreferences}
                 onSetStatus={fulfilment.setStatus}
                 onBulkApply={handleBulkApply}
                 onRetryInvoice={fulfilment.retryInvoice}
@@ -670,4 +487,4 @@ const OrderPacking: React.FC<{ channel?: PackChannel }> = ({ channel = 'B2C' }) 
   );
 };
 
-export default OrderPacking;
+export default OrderManagement;

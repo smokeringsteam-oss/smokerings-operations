@@ -1,7 +1,7 @@
 // CSV-shaped reads over the normalized SQLite schema.
 //
 // The database the knowledge-base loader builds is normalized in a way the
-// CSVs never were: the name, unit, active flag and notes every file repeated
+// CSVs never were: the name, active flag and notes every file repeated
 // per row live once on `item`, and the subject tables (`material`,
 // `menu_item`, `recipe`) carry only what is specific to that kind of thing.
 // bom_line likewise stores the parent/child ids and looks their names up.
@@ -46,7 +46,6 @@ const MATERIAL_SQL = `
          i.name AS item_name,
          CASE i.kind WHEN 'intermediate' THEN 'intermediate_product' ELSE i.kind END AS item_type,
          m.category,
-         i.uom_code AS unit_of_measure,
          m.reorder_level,
          m.default_vendor_id,
          m.standard_cost_inr,
@@ -76,7 +75,6 @@ const MENU_SQL = `
          mi.protein,
          mi.main_product_id,
          mi.portion_size,
-         mi.portion_unit,
          mi.price_inr,
          mi.currency,
          ${activeText('i.is_active')} AS is_active,
@@ -105,9 +103,7 @@ const RECIPE_SQL = `
                    ORDER BY item_id) a) AS applies_to,
          r.source_material_id,
          r.output_quantity,
-         r.output_unit,
          r.portion_size,
-         r.portion_unit,
          r.portions_per_batch,
          r.yield_pct,
          r.raw_weight_per_piece_g,
@@ -144,9 +140,8 @@ const RECIPE_LINE_SQL = `
          b.child_id,
          c.name AS child_name,
          b.quantity,
-         b.unit,
          b.base_quantity,
-         b.base_unit,
+         b.base_is_separate,
          CASE b.is_to_taste WHEN 1 THEN 'yes' ELSE 'no' END AS is_to_taste,
          b.status,
          b.notes
@@ -218,7 +213,6 @@ const PURCHASE_SQL = `
          p.material_id,
          p.item_name,
          p.quantity_purchased,
-         p.unit_of_measure,
          -- The piece-bought pair: what one of them weighs, and what the line
          -- comes to in kg. Derived rather than stored, so a corrected piece
          -- weight can never disagree with the total sitting beside it. Null

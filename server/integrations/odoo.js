@@ -237,6 +237,16 @@ function istDayStartAsOdooUtc(dateStr, dayOffset = 0) {
   return new Date(utcMs).toISOString().slice(0, 19).replace('T', ' ');
 }
 
+// An Odoo UTC timestamp as the IST calendar day it falls on, 'YYYY-MM-DD'.
+// The read-side counterpart of istDayStartAsOdooUtc above: a 20:00 UTC order
+// on the 5th is the 6th in the kitchen, and filing it under the 5th would put
+// a Saturday night's trade in Friday's week.
+function istDayOf(value) {
+  const utc = parseOdooUtc(value);
+  if (!utc) return null;
+  return new Date(utc.getTime() + IST_OFFSET_MINUTES * 60000).toISOString().slice(0, 10);
+}
+
 // -> 'satLunch' | 'satEvening' | 'sunLunch' | 'sunEvening', or null when
 // there's no promised time or it doesn't fall on a Sat/Sun (a weekday promised
 // time isn't a weekend slot, so it falls through to the tag like a blank one).
@@ -587,8 +597,8 @@ function htmlToText(value) {
   return text || null;
 }
 
-// ---- Order Packing: per-order breakdown for the Ops Dashboard's Order
-// Packing tile ----------------------------------------------------------
+// ---- Order Management: per-order breakdown for the Ops Dashboard's Order
+// Management tile -------------------------------------------------------
 // Same confirmed/B2C/promised-time fetch as fetchWeekendOrders above, but
 // kept at per-order granularity instead of tallying into one number per
 // item+slot — the packing view needs to show each individual order (so
@@ -838,7 +848,100 @@ async function fetchRecentOrders({ fromDate, toDate, isCompany }) {
   return { orders: resultOrders, ordersFound: orders.length };
 }
 
-// ---- Order Packing: status tags + invoice sync -----------------------------
+// ---- Item-level sales — one row per sold line ------------------------------
+// Every line of every confirmed order in an IST day range, flattened so the
+// Sales by Item screen (server/finance/itemSales.js) can count dishes rather
+// than orders. It is the same sale.order.line read fetchWeekendOrders does,
+// with none of the weekend-slot machinery: this asks what sold over months,
+// not what to cook on Saturday.
+//
+// Dated by date_order — the day the customer placed the order — and NOT by
+// commitment_date, which is what the packing board and the prep planner use.
+// The difference is deliberate and it is the difference between the two
+// questions: the board asks "what am I handing over on Saturday", so it dates
+// an order by when it is promised; this asks "what were people ordering in
+// week N", which is the day they chose the dish. Spending vs Sales dates its
+// B2C revenue by date_order too, so the two money screens agree week for week.
+//
+// Company orders are read and then dropped rather than never fetched, because
+// the count of what was dropped is worth reporting: the wholesale half of that
+// screen comes from this app's own invoice book (b2b_sale_line), so an Odoo
+// order for a company is a second copy of a row that is already counted.
+// `is_company` is the same B2C/B2B split weekendOrderDomain uses — see the
+// note there about company_type not being filterable on this instance.
+async function fetchSoldItems({ fromDate, toDate }) {
+  requireDateRange(fromDate, toDate);
+
+  const orders = await execute('sale.order', 'search_read', [
+    [
+      ['state', 'in', CONFIRMED_STATES],
+      ['date_order', '>=', istDayStartAsOdooUtc(fromDate)],
+      ['date_order', '<', istDayStartAsOdooUtc(toDate, 1)],
+    ],
+    ['id', 'name', 'date_order', 'partner_id', 'state'],
+  ]);
+  if (!orders.length) return { lines: [], ordersFound: 0, companyOrdersSkipped: 0 };
+
+  // is_company can be filtered on through a dotted domain but not read back
+  // through sale.order, and the flag is needed per order here rather than as a
+  // filter, so the partners are read once and joined on.
+  const partnerIdOf = (order) => (Array.isArray(order.partner_id) ? order.partner_id[0] : null);
+  const partnerIds = Array.from(new Set(orders.map(partnerIdOf).filter(Boolean)));
+  const companyIds = new Set();
+  if (partnerIds.length) {
+    const partners = await execute('res.partner', 'read', [partnerIds, ['id', 'is_company']]);
+    for (const partner of partners) if (partner.is_company) companyIds.add(partner.id);
+  }
+
+  const b2cOrders = orders.filter((order) => !companyIds.has(partnerIdOf(order)));
+  if (!b2cOrders.length) {
+    return { lines: [], ordersFound: 0, companyOrdersSkipped: orders.length };
+  }
+
+  const orderById = new Map(b2cOrders.map((order) => [order.id, order]));
+  const lines = await execute('sale.order.line', 'search_read', [
+    [
+      ['order_id', 'in', b2cOrders.map((order) => order.id)],
+      ['display_type', '=', false], // section and note lines carry no product
+    ],
+    ['order_id', 'product_id', 'product_uom_qty', 'price_total', 'name'],
+  ]);
+
+  const sold = [];
+  for (const line of lines) {
+    const orderId = Array.isArray(line.order_id) ? line.order_id[0] : line.order_id;
+    const order = orderById.get(orderId);
+    if (!order) continue;
+
+    const quantity = Number(line.product_uom_qty) || 0;
+    // A zero-quantity line is a line somebody left behind on the order. It
+    // has no place in a count of what sold, and it would otherwise show up as
+    // a dish with orders against it and nothing sold.
+    if (quantity <= 0) continue;
+
+    const productName = (line.product_id ? line.product_id[1] : line.name) || 'Unnamed line';
+    sold.push({
+      orderId,
+      orderName: order.name,
+      day: istDayOf(order.date_order),
+      productId: line.product_id ? line.product_id[0] : null,
+      productName,
+      // null when nothing in the menu table matches — the caller keeps the
+      // line under its Odoo product name rather than dropping it, and counts
+      // how many landed that way.
+      itemId: matchProduct(productName, line.product_id ? line.product_id[0] : null),
+      quantity,
+      // price_total, not price_subtotal: the tax-inclusive figure, so revenue
+      // here adds up to the same money Spending vs Sales reads off
+      // amount_total rather than being quietly short by the tax.
+      revenue: Number(line.price_total) || 0,
+    });
+  }
+
+  return { lines: sold, ordersFound: b2cOrders.length, companyOrdersSkipped: orders.length - b2cOrders.length };
+}
+
+// ---- Order Management: status tags + invoice sync --------------------------
 // The In Smoker -> ... -> Delivered pipeline is tracked locally
 // (server/ops/shared/orderPackingStatus.js) as the source of truth — these two helpers
 // are its best-effort mirror into Odoo: a visible tag on the order, and
@@ -886,7 +989,7 @@ async function tagSaleOrderStatus({ orderId, status }) {
   await execute('sale.order', 'write', [[Number(orderId)], { tag_ids: commands }]);
 }
 
-// ---- Order Packing: Odoo's own "Fulfilment Status" field ------------------
+// ---- Order Management: Odoo's own "Fulfilment Status" field ---------------
 // Separate from the crm.tag mirror above: Odoo carries a real selection field
 // on sale.order (Studio-added "Fulfilment Status" — ORDER_CONFIRMED /
 // IN_SMOKER / PREPPING / PACKED / PARTNER_ASGN / OUT_FOR_DEL / DELIVERED /
@@ -1281,6 +1384,393 @@ async function addStockOnHand({ materialId, itemName, quantity }) {
   return { productId, locationId, newQuantity: newQty };
 }
 
+// ---- B2B invoicing: sellable products, invoice creation, PDF -------------
+// Used by the B2B Dashboard's Sales & Payments module. Unlike
+// createAndPostInvoice above, which asks a sale.order to invoice itself,
+// these build an account.move out of lines this app holds — because a
+// wholesale delivery does not necessarily have an Odoo sale order behind it.
+
+// Everything the invoice line picker can offer, straight from Odoo's own
+// catalogue rather than the knowledge base's menu. That is the point: the
+// wholesale SKUs ("Pulled Pork (Bulk 1kg)", "Smoked Pork Belly (Bulk 1kg)")
+// live in Odoo with the rate and the unit already on them, and an invoice
+// billed against a product Odoo does not know about is one nobody can
+// reorder from or report on.
+//
+// `list_price` is the rate before any client's pricelist has had a say.
+// What a given account actually pays comes from the pricelist attached to it
+// — see fetchPricelistRules and priceFromRules below — and the resolved
+// figure is pushed onto the invoice line as an explicit price_unit rather
+// than left for Odoo to derive. That is not a preference: Odoo's own
+// evaluation methods are private and cannot be called remotely, and an
+// account.move carries no pricelist to derive from in the first place. Doing
+// it here also means the rate is on screen, attributed, before anything is
+// sent.
+//
+// `product_tmpl_id` and `categ_id` come back because pricelist rules are
+// written against them rather than against the variant — a rule for "Pulled
+// Pork (Bulk 1kg)" is a rule on its template.
+async function fetchSellableProducts() {
+  const rows = await execute(
+    'product.product',
+    'search_read',
+    [
+      [
+        ['sale_ok', '=', true],
+        ['active', '=', true],
+      ],
+      ['id', 'name', 'list_price', 'uom_id', 'default_code', 'product_tmpl_id', 'categ_id'],
+    ],
+    { order: 'name' },
+  );
+
+  const idOf = (value) => (Array.isArray(value) ? value[0] : value || null);
+  return rows.map((p) => ({
+    id: p.id,
+    templateId: idOf(p.product_tmpl_id),
+    categoryId: idOf(p.categ_id),
+    name: p.name,
+    code: p.default_code || '',
+    listPrice: p.list_price || 0,
+    // 'Units', 'kg', 'g' — shown beside the quantity box so nobody bills 5
+    // when they meant 5 kg.
+    unit: Array.isArray(p.uom_id) ? p.uom_id[1] : '',
+  }));
+}
+
+// The catalogue names for a set of product ids.
+//
+// Used when a consolidated invoice line covers delivery rows that were
+// described differently. "Half chicken" and "Smoked Whole Chicken (Bulk 1kg)"
+// are one product weighed twice, and the line billing both should carry the
+// name the product actually has in Odoo rather than whichever of the two was
+// typed first — see consolidateLines in server/ops/b2b/b2bSales.js.
+//
+// A read rather than a search_read: the ids come from our own invoice lines,
+// so they are already known. An id Odoo no longer has simply doesn't come
+// back, and the caller keeps the description it had.
+async function fetchProductNames(ids) {
+  const wanted = [...new Set((ids || []).map(Number))].filter((id) => Number.isInteger(id) && id > 0);
+  if (!wanted.length) return {};
+  const rows = await execute('product.product', 'read', [wanted, ['name']]);
+  return Object.fromEntries(rows.map((p) => [p.id, p.name]));
+}
+
+// Finds the Odoo customer for a B2B account, creating one if it isn't there.
+//
+// Separate from findOrCreatePartner above, which is the vendor version and
+// stamps supplier_rank. A customer needs customer_rank instead, and matching
+// on name alone would happily hand back a supplier record that happens to
+// share a name with a client — which would then be the one receiving the
+// invoice.
+async function findOrCreateCustomer(name, extraFields = {}) {
+  const clean = String(name || '').trim();
+  if (!clean) {
+    const err = new Error('A client name is required to create the Odoo customer.');
+    err.status = 400;
+    throw err;
+  }
+  const found = await execute(
+    'res.partner',
+    'search_read',
+    [
+      [
+        ['name', '=', clean],
+        ['customer_rank', '>', 0],
+      ],
+      ['id', 'name'],
+    ],
+    { limit: 1 },
+  );
+  if (found.length) return { id: found[0].id, created: false };
+
+  const id = await execute('res.partner', 'create', [
+    { name: clean, company_type: 'company', customer_rank: 1, ...extraFields },
+  ]);
+  return { id, created: true };
+}
+
+// Creates a customer invoice from our lines and posts it in one call.
+//
+// Posted rather than left as a draft on purpose: a draft has no invoice
+// number and its PDF is watermarked, so it is not a document anybody can send
+// to a client — and sending it is the whole reason this exists. The cost is
+// real and worth knowing: a posted invoice is an entry in the books, and
+// undoing one means a credit note in Odoo rather than a delete here.
+//
+// `access_token` is set at creation rather than patched on afterwards. Same
+// end state, one fewer write, and the invoice is never briefly in a state
+// where this app has no way to fetch its PDF.
+async function createCustomerInvoice({ partnerName, partnerId, invoiceDate, dueDate, reference, narration, lines }) {
+  if (!Array.isArray(lines) || !lines.length) {
+    const err = new Error('An invoice needs at least one line.');
+    err.status = 400;
+    throw err;
+  }
+
+  let customerId = Number(partnerId) || null;
+  let customerCreated = false;
+  if (!customerId) {
+    const found = await findOrCreateCustomer(partnerName);
+    customerId = found.id;
+    customerCreated = found.created;
+  }
+
+  // Odoo's own tokens are uuid4s, so ours look like every other one in the
+  // database. randomUUID is on Node's global crypto from 19 on.
+  const accessToken = crypto.randomUUID();
+
+  const invoiceId = await execute('account.move', 'create', [
+    {
+      move_type: 'out_invoice',
+      partner_id: customerId,
+      invoice_date: invoiceDate,
+      // The date the money is owed by, computed on our side from the client's
+      // payment cycle. Set explicitly rather than left to Odoo's own payment
+      // terms so the date the client reads on the PDF is the same one this
+      // app chases them on — two systems disagreeing about when an invoice
+      // fell due is the failure mode that costs an actual argument.
+      invoice_date_due: dueDate,
+      ref: reference || '',
+      narration: narration || '',
+      access_token: accessToken,
+      // 0 = create, so every line is built inline with the invoice rather
+      // than in a second round trip that could half-fail.
+      invoice_line_ids: lines.map((line) => {
+        const values = {
+          name: line.description,
+          quantity: line.quantity,
+          price_unit: line.unitPrice,
+        };
+        // A line with no product is legal in Odoo and is how a free-text item
+        // (a delivery charge, something not yet in the catalogue) is billed.
+        if (line.productId) values.product_id = Number(line.productId);
+        return [0, 0, values];
+      }),
+    },
+  ]);
+
+  await execute('account.move', 'action_post', [[invoiceId]]);
+
+  const [posted] = await execute('account.move', 'read', [
+    [invoiceId],
+    ['name', 'state', 'amount_total', 'invoice_date_due', 'access_token'],
+  ]);
+
+  const { url } = getConfig();
+  return {
+    invoiceId,
+    invoiceNumber: posted.name,
+    state: posted.state,
+    amountTotal: posted.amount_total,
+    dueDate: posted.invoice_date_due,
+    // Read back rather than assumed: if Odoo replaced the token, the one
+    // stored here has to be the one the portal will actually accept.
+    accessToken: posted.access_token || accessToken,
+    customerId,
+    customerCreated,
+    invoiceUrl: url ? `${url}/web#id=${invoiceId}&model=account.move&view_type=form` : null,
+  };
+}
+
+// The invoice PDF, as bytes.
+//
+// Fetched through the customer portal — the same link Odoo emails to a client
+// — rather than through /report/pdf/..., which needs a logged-in web session.
+// Odoo Online will not open one for an API key (/web/session/authenticate
+// answers "Access Denied"), so the portal route with the record's own access
+// token is the only way to the file from here. It needs no session at all,
+// which is exactly why the token must never leave the server.
+async function fetchInvoicePdf({ invoiceId, accessToken }) {
+  const { url, configured } = getConfig();
+  if (!configured) {
+    const err = new Error("Odoo isn't configured yet.");
+    err.status = 503;
+    throw err;
+  }
+  if (!invoiceId || !accessToken) {
+    const err = new Error('This sale has no Odoo invoice to download yet.');
+    err.status = 404;
+    throw err;
+  }
+
+  const resp = await fetch(
+    `${url}/my/invoices/${Number(invoiceId)}?access_token=${encodeURIComponent(accessToken)}&report_type=pdf&download=true`,
+    { redirect: 'follow' },
+  );
+  const buffer = Buffer.from(await resp.arrayBuffer());
+
+  // A wrong or revoked token doesn't 404 — Odoo answers 200 with its login
+  // page — so it is the content that has to be checked, not the status.
+  if (!resp.ok || buffer.subarray(0, 5).toString() !== '%PDF-') {
+    const err = new Error(
+      'Odoo returned a page instead of the invoice PDF. The invoice may have been deleted, or its portal access revoked.',
+    );
+    err.status = 502;
+    throw err;
+  }
+  return buffer;
+}
+
+// ---- Pricelists: what a particular client pays ----------------------------
+// Rates are kept in Odoo as one pricelist per B2B account — "Jango — B2B
+// Wholesale" and its eight fixed per-product rules — and b2b_client.
+// odoo_pricelist_id is the link.
+//
+// The rules are read and applied HERE rather than asked of Odoo, because Odoo
+// will not answer: every method that evaluates a pricelist
+// (`_get_products_price` and its siblings) is private, and a private method
+// cannot be called remotely. The rule *records* are ordinary rows, though, so
+// `product.pricelist.item` reads back over RPC like anything else — which
+// means the rates themselves still live in exactly one place, Odoo, and a
+// price changed there takes effect here on the next page load with nothing to
+// re-sync.
+//
+// What is reimplemented below is Odoo's own precedence: the most specific
+// rule that matches wins, and specificity runs variant > template > category
+// > global. Rules outside their date window, or below their minimum quantity,
+// do not match at all.
+
+async function fetchPricelists() {
+  const rows = await execute('product.pricelist', 'search_read', [[], ['id', 'name', 'currency_id']], {
+    order: 'name',
+  });
+  return rows.map((p) => ({
+    id: p.id,
+    name: p.name,
+    currency: Array.isArray(p.currency_id) ? p.currency_id[1] : '',
+  }));
+}
+
+// One pricelist's rules, in the shape priceFromRules expects.
+async function fetchPricelistRules(pricelistId) {
+  const rows = await execute(
+    'product.pricelist.item',
+    'search_read',
+    [
+      [['pricelist_id', '=', Number(pricelistId)]],
+      [
+        'applied_on',
+        'product_id',
+        'product_tmpl_id',
+        'categ_id',
+        'compute_price',
+        'fixed_price',
+        'percent_price',
+        'price_discount',
+        'price_surcharge',
+        'price_round',
+        'price_min_margin',
+        'price_max_margin',
+        'base',
+        'min_quantity',
+        'date_start',
+        'date_end',
+      ],
+    ],
+    {},
+  );
+
+  const idOf = (value) => (Array.isArray(value) ? value[0] : value || null);
+  return rows.map((r) => ({
+    appliedOn: r.applied_on,
+    productId: idOf(r.product_id),
+    templateId: idOf(r.product_tmpl_id),
+    categoryId: idOf(r.categ_id),
+    computePrice: r.compute_price,
+    fixedPrice: r.fixed_price || 0,
+    percentPrice: r.percent_price || 0,
+    discount: r.price_discount || 0,
+    surcharge: r.price_surcharge || 0,
+    round: r.price_round || 0,
+    minMargin: r.price_min_margin || 0,
+    maxMargin: r.price_max_margin || 0,
+    base: r.base,
+    minQuantity: r.min_quantity || 0,
+    dateStart: r.date_start || null,
+    dateEnd: r.date_end || null,
+  }));
+}
+
+// Odoo's specificity order, most specific first. A variant rule beats a
+// template rule beats a category rule beats a global one — which is what makes
+// "everything at -10%, except this product at a fixed rate" work.
+const RULE_SPECIFICITY = { '0_product_variant': 0, '1_product': 1, '2_product_category': 2, '3_global': 3 };
+
+function ruleMatches(rule, product, quantity, onDate) {
+  if (rule.minQuantity && quantity < rule.minQuantity) return false;
+  if (rule.dateStart && onDate < rule.dateStart.slice(0, 10)) return false;
+  if (rule.dateEnd && onDate > rule.dateEnd.slice(0, 10)) return false;
+
+  switch (rule.appliedOn) {
+    case '0_product_variant':
+      return rule.productId === product.id;
+    case '1_product':
+      return rule.templateId === product.templateId;
+    case '2_product_category':
+      // Odoo walks the category tree upward here; this only compares the
+      // product's own category, so a rule set on a PARENT category is
+      // reported as not understood (below) rather than silently skipped.
+      return rule.categoryId != null && rule.categoryId === product.categoryId;
+    case '3_global':
+      return true;
+    default:
+      return false;
+  }
+}
+
+// The rate one rule produces for one product, or null when this code cannot
+// work out what Odoo would do.
+//
+// Null is the important return. Guessing a price for a rule shape that isn't
+// handled would put a number on an invoice that Odoo itself would disagree
+// with — so the caller falls back to the list price AND says the rule was not
+// understood, which is a thing somebody can act on.
+function applyRule(rule, listPrice) {
+  switch (rule.computePrice) {
+    case 'fixed':
+      return rule.fixedPrice;
+    case 'percentage':
+      // Odoo's percent_price is a discount off the base.
+      return listPrice * (1 - rule.percentPrice / 100);
+    case 'formula': {
+      // Only the list-price base is reimplemented. 'standard_price' is cost,
+      // which this app does not read, and 'pricelist' chains to another
+      // pricelist — both are answered with null rather than a wrong number.
+      if (rule.base !== 'list_price') return null;
+      let price = listPrice * (1 - rule.discount / 100) + rule.surcharge;
+      if (rule.round) price = Math.round(price / rule.round) * rule.round;
+      // Margins are expressed against the base, matching Odoo's own formula.
+      if (rule.minMargin) price = Math.max(price, listPrice + rule.minMargin);
+      if (rule.maxMargin) price = Math.min(price, listPrice + rule.maxMargin);
+      return price;
+    }
+    default:
+      return null;
+  }
+}
+
+// The price this pricelist gives for one product, with the reasoning attached.
+//
+// `source` is what the UI shows beside the rate so a pre-filled number is
+// never mistaken for one somebody chose: 'pricelist' when a rule decided it,
+// 'list' when none applied, 'unsupported' when one matched but this code will
+// not pretend to evaluate it.
+function priceFromRules(rules, product, { quantity = 1, onDate } = {}) {
+  const date = onDate || new Date().toISOString().slice(0, 10);
+  const matching = rules
+    .filter((rule) => ruleMatches(rule, product, quantity, date))
+    .sort((a, b) => (RULE_SPECIFICITY[a.appliedOn] ?? 9) - (RULE_SPECIFICITY[b.appliedOn] ?? 9));
+
+  const rule = matching[0];
+  if (!rule) return { price: product.listPrice, source: 'list' };
+
+  const price = applyRule(rule, product.listPrice);
+  if (price == null) return { price: product.listPrice, source: 'unsupported', rule: rule.computePrice };
+  // Odoo never prices below zero, and neither does this.
+  return { price: Math.max(0, Math.round(price * 100) / 100), source: 'pricelist' };
+}
+
 export {
   // Raw model-level call, for Odoo-backed features that live in their own
   // module rather than here (see server/ops/b2c/serviceWeeks.js). Everything to do
@@ -1295,6 +1785,9 @@ export {
   confirmSaleOrder,
   fetchOrderPackingList,
   fetchRecentOrders,
+  // Line-grain sales for the Sales by Item screen. B2C only by construction —
+  // see the note on the function.
+  fetchSoldItems,
   createPurchaseOrder,
   removePurchaseOrderLine,
   createVendorInOdoo,
@@ -1304,4 +1797,11 @@ export {
   resolveFulfilmentField,
   createAndPostInvoice,
   addStockOnHand,
+  fetchSellableProducts,
+  fetchProductNames,
+  createCustomerInvoice,
+  fetchInvoicePdf,
+  fetchPricelists,
+  fetchPricelistRules,
+  priceFromRules,
 };

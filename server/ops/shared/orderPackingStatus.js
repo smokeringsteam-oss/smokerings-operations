@@ -1,4 +1,4 @@
-// Order Packing tile's per-order kitchen+delivery pipeline state — In Smoker
+// Order Management's per-order kitchen+delivery pipeline state — In Smoker
 // -> Prepping -> Packed -> Finding Partner -> Partner Assigned -> Out for
 // Delivery -> Delivered (see STATUS_STEPS below) — one row per order in
 // `sales_order`, keyed by Odoo's sale.order id.

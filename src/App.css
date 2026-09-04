@@ -1150,7 +1150,7 @@ button.wizard-step:hover:not(.active) {
   font-weight: 800;
 }
 
-/* Order Packing (B2C Dashboard) */
+/* Order Management (B2C and B2B Dashboards) */
 
 /* The weekend's four delivery slots as a horizontal picker — Sat Lunch, Sat
    Dinner, Sun Lunch, Sun Dinner always all four, always on one row (equal
@@ -1331,6 +1331,178 @@ button.wizard-step:hover:not(.active) {
   color: var(--color-text-soft);
   text-transform: uppercase;
   letter-spacing: 0.03em;
+}
+
+/* ---- Order Management Step 3: what's on the smoker --------------------- */
+/* One card per smoker load (pork, chicken), each a switch plus the orders it
+   would move. Two up on a wide screen, stacked below that. */
+.smoker-loads {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 16px;
+  margin-top: 18px;
+}
+
+.smoker-load {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-sm);
+  padding: 16px 18px;
+}
+
+/* Lit: the meat is on and every order that needs it has moved. */
+.smoker-load.on {
+  border-color: var(--color-ember);
+  background: linear-gradient(180deg, var(--color-ember-light) 0%, var(--color-surface) 60%);
+}
+
+.smoker-load.empty {
+  opacity: 0.72;
+}
+
+.smoker-load-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+.smoker-load-name {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 1rem;
+}
+
+/* The switch itself — a checkbox with its box hidden, so keyboard focus and
+   the disabled state still come from the input rather than being faked. */
+.smoker-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.smoker-switch input {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.smoker-switch-track {
+  width: 42px;
+  height: 24px;
+  border-radius: 999px;
+  background: var(--color-border-strong);
+  border: 1px solid var(--color-border-strong);
+  position: relative;
+  transition: background 0.15s ease;
+  flex: none;
+}
+
+.smoker-switch-track::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--color-surface);
+  box-shadow: var(--shadow-sm);
+  transition: transform 0.15s ease;
+}
+
+.smoker-switch input:checked + .smoker-switch-track {
+  background: var(--color-ember);
+  border-color: var(--color-ember-dark);
+}
+
+.smoker-switch input:checked + .smoker-switch-track::after {
+  transform: translateX(18px);
+}
+
+.smoker-switch input:focus-visible + .smoker-switch-track {
+  outline: 2px solid var(--color-ember);
+  outline-offset: 2px;
+}
+
+/* Disabled covers two very different cases — nothing to move, and already
+   all moved — so it dims rather than reading as broken. */
+.smoker-switch input:disabled ~ .smoker-switch-track,
+.smoker-switch input:disabled ~ .smoker-switch-label {
+  opacity: 0.7;
+}
+
+.smoker-switch input:disabled {
+  cursor: default;
+}
+
+.smoker-switch-label {
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--color-text-muted);
+}
+
+.smoker-load.on .smoker-switch-label {
+  color: var(--color-ember-dark);
+}
+
+.smoker-load-count {
+  margin: 0 0 10px;
+  font-size: 0.85rem;
+  color: var(--color-text-muted);
+}
+
+.smoker-load-orders {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 4px;
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+.smoker-load-orders li {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 8px;
+  align-items: baseline;
+  padding: 5px 8px;
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-alt);
+  font-size: 0.82rem;
+}
+
+.smoker-load-orders li.moved {
+  background: var(--color-ember-light);
+}
+
+.smoker-order-name {
+  font-weight: 700;
+}
+
+.smoker-order-customer {
+  color: var(--color-text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.smoker-order-stage {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--color-text-soft);
+}
+
+.smoker-load-orders li.moved .smoker-order-stage {
+  color: var(--color-ember-dark);
 }
 
 /* Order cards for the selected slot — several across the full page width. */
@@ -2409,6 +2581,109 @@ button.wizard-step:hover:not(.active) {
 
 .purch-add-vendor-toggle {
   margin: 2px 0 16px;
+}
+
+/* Bill scanning — sits above the manual add-line form and is deliberately a
+   quieter box than it: the scan fills the cart in, the cart is still where
+   the buy is checked and logged. */
+.purch-scan {
+  padding: 14px 16px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-alt);
+  margin-bottom: 14px;
+}
+
+.purch-scan-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.purch-scan-head p {
+  margin: 4px 0 0;
+}
+
+.purch-scan-head button {
+  flex-shrink: 0;
+}
+
+/* The button above opens the picker; the input itself never needs to be seen,
+   but stays in the layout (rather than display:none) so the file dialog has
+   something to anchor to on mobile Safari. */
+.purch-scan-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.purch-scan-review {
+  margin-top: 12px;
+  padding: 12px 14px;
+  border-radius: var(--radius-sm);
+  background: #fff8e6;
+  border: 1px solid #f0d998;
+  color: #7a5b06;
+  font-size: 0.88rem;
+}
+
+.purch-scan-review ul {
+  margin: 8px 0 0;
+  padding-left: 18px;
+}
+
+.purch-scan-review ul:empty {
+  display: none;
+}
+
+.purch-scan-review li {
+  margin-bottom: 4px;
+}
+
+/* Cart rows are edited in place, so the inputs have to read as part of the
+   table rather than as a form dropped into it. */
+.purch-cart-name,
+.purch-cart-num {
+  width: 100%;
+  padding: 4px 6px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  font: inherit;
+  color: inherit;
+}
+
+.purch-cart-num {
+  max-width: 90px;
+  text-align: right;
+}
+
+.purch-cart-name:hover,
+.purch-cart-num:hover {
+  border-color: var(--color-border);
+}
+
+.purch-cart-name:focus,
+.purch-cart-num:focus {
+  border-color: var(--color-border-strong);
+  background: var(--color-surface);
+  outline: none;
+}
+
+.purch-cart-source {
+  display: block;
+  color: var(--color-text-muted);
+  font-size: 0.75rem;
+}
+
+/* A scanned line the catalog didn't recognise: it will be logged as an ad hoc
+   item and move no stock, which is a fine outcome but not one to discover
+   afterwards. */
+.purch-cart-unmatched td {
+  background: #fffaf0;
 }
 
 .purch-cart-wrap {
@@ -3509,523 +3784,6 @@ td.csv-rownum-col {
   flex: 0 0 auto;
 }
 
-/* ---------------------------------------------------------------------------
-   AI SEO tracker (src/pages/AISEO.tsx) — assistant-visibility dashboard.
-   Two colour meanings run through this block and nothing else: ember = us,
-   slate = everyone else. The competitor bars and the "not named" chips stay
-   deliberately quiet so a glance at the page reads as "how are WE doing"
-   rather than a rainbow of equally-weighted brands.
---------------------------------------------------------------------------- */
-.seo-page {
-  display: flex;
-  flex-direction: column;
-  gap: 18px;
-}
-
-.seo-head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-  flex-wrap: wrap;
-}
-
-.seo-head-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.seo-head-actions select,
-.seo-page .svc-week-field select,
-.seo-page .svc-week-field textarea {
-  padding: 9px 11px;
-  border: 1px solid var(--color-border-strong);
-  border-radius: var(--radius-sm);
-  background: var(--color-surface);
-  color: var(--color-text);
-  font: inherit;
-  font-size: 0.9rem;
-  text-transform: none;
-  letter-spacing: normal;
-}
-
-.seo-page .svc-week-field textarea {
-  resize: vertical;
-  line-height: 1.5;
-}
-
-/* Four headline numbers: are we named, how early, how loud versus the field,
-   and how stale the answer to all three is. */
-.seo-stat-row {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  gap: 12px;
-}
-
-.seo-stat {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 14px 16px;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  background: var(--color-surface);
-  box-shadow: var(--shadow-sm);
-}
-
-.seo-stat-label {
-  font-size: 0.72rem;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--color-text-soft);
-}
-
-.seo-stat-value {
-  font-family: var(--font-display);
-  font-size: 1.85rem;
-  font-weight: 700;
-  line-height: 1.15;
-  color: var(--color-ember-dark);
-}
-
-.seo-stat-value.is-small {
-  font-size: 1.25rem;
-  padding-top: 6px;
-}
-
-.seo-stat-sub {
-  font-size: 0.78rem;
-  color: var(--color-text-muted);
-}
-
-.seo-toolbar {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
-}
-
-.seo-sweep-current {
-  font-size: 0.82rem;
-  color: var(--color-text-muted);
-  font-style: italic;
-}
-
-.seo-form-panel {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  padding: 16px;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  background: var(--color-surface-alt);
-}
-
-.seo-form-row {
-  display: flex;
-  gap: 12px;
-  flex-wrap: wrap;
-}
-
-.seo-table td {
-  vertical-align: middle;
-}
-
-/* A paused prompt still shows its history — it just stops being counted in
-   "run all", so it fades rather than disappearing. */
-.seo-row-paused {
-  opacity: 0.55;
-}
-
-.seo-prompt-cell {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 0;
-  border: none;
-  background: none;
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-  color: inherit;
-}
-
-.seo-prompt-text {
-  font-weight: 600;
-  color: var(--color-text);
-}
-
-.seo-prompt-meta {
-  font-size: 0.74rem;
-  color: var(--color-text-soft);
-}
-
-.seo-prompt-cell:hover .seo-prompt-meta {
-  color: var(--color-ember);
-}
-
-.seo-intent {
-  display: inline-block;
-  padding: 2px 9px;
-  border-radius: 999px;
-  background: var(--color-bg-alt);
-  color: var(--color-text-muted);
-  font-size: 0.74rem;
-  font-weight: 700;
-}
-
-.seo-chip {
-  display: inline-block;
-  padding: 3px 10px;
-  border-radius: 999px;
-  font-size: 0.78rem;
-  font-weight: 700;
-  white-space: nowrap;
-}
-
-.seo-chip.is-hit {
-  background: #e3f5e6;
-  color: #1e6b32;
-}
-
-/* Named, but framed badly — worth reading the answer, so it cannot look like
-   a clean win. */
-.seo-chip.is-hit.is-negative {
-  background: #fdeacd;
-  color: #8a5300;
-}
-
-.seo-chip.is-miss {
-  background: #f2eee9;
-  color: var(--color-text-muted);
-}
-
-.seo-chip.is-idle {
-  background: transparent;
-  color: var(--color-text-soft);
-  border: 1px dashed var(--color-border-strong);
-}
-
-/* The action column. Clamped to two lines so one wordy suggestion cannot set
-   the height of every row in the table — the full text is on the title
-   attribute and in the expanded history. */
-.seo-advice {
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-  max-width: 300px;
-  font-size: 0.83rem;
-  line-height: 1.45;
-  color: var(--color-text);
-}
-
-.seo-advice.is-empty {
-  color: var(--color-text-soft);
-  font-style: italic;
-}
-
-.seo-visibility {
-  display: flex;
-  align-items: baseline;
-  gap: 6px;
-  font-weight: 700;
-  color: var(--color-text);
-}
-
-.seo-visibility em {
-  font-style: normal;
-  font-weight: 600;
-  font-size: 0.76rem;
-  color: var(--color-text-soft);
-}
-
-.seo-when {
-  font-size: 0.82rem;
-  color: var(--color-text-muted);
-  white-space: nowrap;
-}
-
-.seo-row-actions {
-  display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-}
-
-.seo-history-row td {
-  background: var(--color-surface-alt);
-}
-
-.seo-history {
-  list-style: none;
-  margin: 0;
-  padding: 4px 0;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.seo-history li {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  font-size: 0.85rem;
-}
-
-.seo-history-line {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
-}
-
-/* Indented to line up under the framing text it follows from, so a scan down
-   the history reads result-then-action, result-then-action. */
-.seo-history-advice {
-  margin: 0 0 4px 126px;
-  color: var(--color-ember-dark);
-  font-size: 0.83rem;
-  line-height: 1.45;
-}
-
-.seo-history-when {
-  min-width: 116px;
-  color: var(--color-text-muted);
-  font-size: 0.8rem;
-}
-
-.seo-history-framing {
-  flex: 1 1 260px;
-  color: var(--color-text-muted);
-}
-
-.seo-engine {
-  display: inline-block;
-  padding: 2px 9px;
-  border-radius: 999px;
-  background: var(--color-charcoal);
-  color: #fff;
-  font-size: 0.72rem;
-  font-weight: 700;
-  letter-spacing: 0.02em;
-}
-
-/* Auto-run engine gets the brand colour; the paste-in ones stay charcoal, so
-   at a glance you can see how much of the history is self-serve. */
-.seo-engine.is-gemini {
-  background: var(--color-ember);
-}
-
-.seo-panels {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-  gap: 14px;
-}
-
-.seo-panel {
-  padding: 16px 18px;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  background: var(--color-surface);
-  box-shadow: var(--shadow-sm);
-}
-
-.seo-panel h4 {
-  margin: 0 0 4px;
-  font-family: var(--font-display);
-  font-size: 1rem;
-  color: var(--color-charcoal);
-}
-
-.seo-panel .inv-section-hint {
-  margin-bottom: 12px;
-}
-
-.seo-empty-line {
-  margin: 8px 0 0;
-  font-size: 0.85rem;
-  color: var(--color-text-soft);
-}
-
-.seo-bars {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.seo-bars li {
-  display: grid;
-  grid-template-columns: minmax(90px, 1.2fr) 2fr auto;
-  align-items: center;
-  gap: 10px;
-  font-size: 0.85rem;
-}
-
-.seo-bar-label {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--color-text);
-  font-weight: 600;
-}
-
-.seo-tag {
-  margin-left: 6px;
-  padding: 1px 7px;
-  border-radius: 999px;
-  background: var(--color-ember-light);
-  color: var(--color-ember-dark);
-  font-size: 0.68rem;
-  font-style: normal;
-  font-weight: 700;
-}
-
-.seo-bar-track {
-  height: 8px;
-  border-radius: 999px;
-  background: var(--color-bg-alt);
-  overflow: hidden;
-}
-
-.seo-bar-fill {
-  display: block;
-  height: 100%;
-  border-radius: 999px;
-  background: linear-gradient(90deg, var(--color-ember) 0%, #ff7a3d 100%);
-}
-
-.seo-bar-fill.is-rival {
-  background: #b9a892;
-}
-
-.seo-bar-count {
-  font-weight: 700;
-  color: var(--color-text-muted);
-  font-variant-numeric: tabular-nums;
-}
-
-.seo-runs {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.seo-run {
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-sm);
-  background: var(--color-surface-alt);
-  overflow: hidden;
-}
-
-.seo-run-head {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  width: 100%;
-  padding: 9px 12px;
-  border: none;
-  background: none;
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-
-.seo-run-head:hover {
-  background: var(--color-bg-alt);
-}
-
-.seo-run-prompt {
-  flex: 1 1 auto;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 0.88rem;
-  color: var(--color-text);
-}
-
-.seo-run-when {
-  font-size: 0.78rem;
-  color: var(--color-text-soft);
-  white-space: nowrap;
-}
-
-.seo-run-body {
-  padding: 4px 14px 14px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  font-size: 0.85rem;
-}
-
-.seo-run-framing {
-  margin: 0;
-  color: var(--color-text);
-  font-style: italic;
-}
-
-.seo-run-advice {
-  margin: 0;
-  padding: 9px 12px;
-  border-radius: var(--radius-sm);
-  background: var(--color-ember-light);
-  color: var(--color-ember-dark);
-  line-height: 1.5;
-}
-
-.seo-run-line {
-  margin: 0;
-  color: var(--color-text-muted);
-}
-
-.seo-cite-list {
-  display: inline-flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-left: 6px;
-}
-
-.seo-cite-list a {
-  padding: 2px 9px;
-  border-radius: 999px;
-  background: var(--color-surface);
-  border: 1px solid var(--color-border-strong);
-  color: var(--color-ember-dark);
-  font-size: 0.76rem;
-  font-weight: 600;
-  text-decoration: none;
-}
-
-.seo-cite-list a:hover {
-  border-color: var(--color-ember);
-}
-
-/* The stored excerpt keeps the assistant's own line breaks — reading it as
-   the customer saw it is the point, so it is not reflowed into a paragraph. */
-.seo-run-answer {
-  margin: 0;
-  padding: 10px 12px;
-  border-radius: var(--radius-sm);
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  font-family: var(--font-body);
-  font-size: 0.82rem;
-  line-height: 1.55;
-  color: var(--color-text-muted);
-  white-space: pre-wrap;
-  max-height: 320px;
-  overflow-y: auto;
-}
-
 /* Step 3's delivery-time callout — the one thing on an order card that came
    from the customer's own mouth rather than from the order lines, so it reads
    as a note pinned to the card rather than another status chip. Warm amber
@@ -4637,6 +4395,494 @@ td.csv-rownum-col {
   background: #fbe3e3;
   font-size: 0.82rem;
   color: #96322f;
+}
+
+/* ---- B2B Sales & Payments -------------------------------------------------
+   Reuses the Clients tab's tiles, chips and panels; only what is specific to
+   money and to a payment cycle is new. The status colours are the whole point
+   of the list: a row that is late has to read as late from across the
+   kitchen, without anyone reading the date. */
+
+/* Amber for money still out, red for money late. Applied to the two
+   receivables tiles rather than to all five, so the range figures beside them
+   stay neutral and the eye lands on the two that need acting on. */
+.b2b-sales .b2b-stat.is-owed {
+  border-color: #e6c98f;
+  background: #fff9ec;
+}
+
+.b2b-sales .b2b-stat.is-overdue {
+  border-color: #e8b4b1;
+  background: #fdf1f0;
+}
+
+.b2b-sales .b2b-stat.is-overdue .b2b-stat-value {
+  color: #96322f;
+}
+
+.b2b-demand-tile-sub.is-owed {
+  color: #96322f;
+  font-weight: 600;
+}
+
+/* The per-client revenue tiles double as the client filter, so they have to
+   look pressable and show which one is on. */
+.b2b-client-tile {
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+}
+
+.b2b-client-tile:hover {
+  border-color: var(--color-ember);
+}
+
+.b2b-client-tile.is-active {
+  border-color: var(--color-charcoal);
+  box-shadow: inset 0 0 0 1px var(--color-charcoal);
+}
+
+.b2b-range-field {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--color-text-soft);
+}
+
+.b2b-range-field input {
+  padding: 5px 8px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  font-family: inherit;
+  font-size: 0.82rem;
+}
+
+.b2b-form-hint {
+  flex: 1 1 220px;
+  font-size: 0.78rem;
+  color: var(--color-text-soft);
+}
+
+/* ---- Who owes what ------------------------------------------------------- */
+
+.b2b-chase-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.b2b-chase-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) auto;
+  align-items: baseline;
+  gap: 4px 12px;
+  padding: 8px 12px;
+  border: 1px solid var(--color-border);
+  border-left: 3px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+}
+
+.b2b-chase-row.is-overdue {
+  border-left-color: #c0504d;
+  background: #fdf1f0;
+}
+
+.b2b-chase-name {
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.b2b-chase-amount {
+  font-family: var(--font-display);
+  font-weight: 700;
+  color: var(--color-ember-dark);
+}
+
+.b2b-chase-note {
+  grid-column: 1 / -1;
+  font-size: 0.76rem;
+  color: var(--color-text-soft);
+}
+
+/* ---- The sales list ------------------------------------------------------ */
+
+.b2b-sale-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.b2b-sale-row {
+  display: grid;
+  /* Client and dates take the slack; the money, the status and the buttons
+     each stay their own width so the amounts line up down the column. */
+  grid-template-columns: minmax(180px, 1fr) auto minmax(110px, auto) auto;
+  align-items: center;
+  gap: 6px 14px;
+  padding: 10px 14px;
+  border: 1px solid var(--color-border);
+  border-left: 3px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-sm);
+}
+
+.b2b-sale-row.is-overdue {
+  border-left-color: #c0504d;
+}
+
+.b2b-sale-row.is-due_soon {
+  border-left-color: #d99b26;
+}
+
+.b2b-sale-row.is-paid {
+  border-left-color: #6f9b57;
+  /* Settled rows are still on the page — the month's revenue includes them —
+     but they are not what anyone is scanning for. */
+  opacity: 0.72;
+}
+
+.b2b-sale-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.b2b-sale-client {
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.b2b-sale-meta {
+  font-size: 0.76rem;
+  color: var(--color-text-soft);
+}
+
+.b2b-sale-notes {
+  font-size: 0.76rem;
+  color: var(--color-text-muted);
+  font-style: italic;
+}
+
+.b2b-sale-money {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+}
+
+.b2b-sale-amount {
+  font-family: var(--font-display);
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: var(--color-text);
+}
+
+.b2b-sale-part {
+  font-size: 0.72rem;
+  color: var(--color-ember-dark);
+}
+
+.b2b-sale-status {
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 0.76rem;
+  font-weight: 600;
+  text-align: center;
+  white-space: nowrap;
+  background: var(--color-surface-alt);
+  color: var(--color-text-muted);
+}
+
+.b2b-sale-status.is-overdue {
+  background: #fbe3e3;
+  color: #96322f;
+}
+
+.b2b-sale-status.is-due_soon {
+  background: #fdf0d8;
+  color: #8a6316;
+}
+
+.b2b-sale-status.is-paid {
+  background: #e8f2e2;
+  color: #456b32;
+}
+
+.b2b-sale-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.b2b-chip.is-danger:hover {
+  border-color: #c0504d;
+  color: #96322f;
+}
+
+/* The payment box unfolds under the row it belongs to rather than in a
+   dialog: the amount and the due date it is being paid against stay on
+   screen while the figure is typed. */
+.b2b-sale-pay {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px;
+  margin-top: 8px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--color-border-strong);
+}
+
+.b2b-sale-pay .b2b-field {
+  flex: 0 0 140px;
+}
+
+/* ---- The invoice line editor ---------------------------------------------
+   A grid rather than a table so the "where did this rate come from" note can
+   span the full row underneath its line without a second <tr>. Every column
+   but the description is a fixed width, so the rate and total columns line up
+   down the editor the way they will on the invoice. */
+
+.b2b-mode-switch {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.b2b-line-editor {
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-alt);
+}
+
+.b2b-pricelist-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 10px;
+  padding: 7px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--color-ember-light);
+  font-size: 0.78rem;
+  color: var(--color-ember-dark);
+}
+
+/* The fix offered where the problem is stated, rather than as an instruction
+   to go and do it on another tab. */
+.b2b-pricelist-attach {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.b2b-pricelist-attach select {
+  padding: 5px 8px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  font-family: inherit;
+  font-size: 0.8rem;
+}
+
+.b2b-line-head,
+.b2b-line-row {
+  display: grid;
+  grid-template-columns: minmax(140px, 1.1fr) minmax(140px, 1.4fr) 110px 110px 90px 28px;
+  align-items: center;
+  gap: 8px;
+}
+
+.b2b-line-head {
+  padding: 0 0 6px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--color-text-soft);
+}
+
+.b2b-line-row {
+  padding: 5px 0;
+  border-top: 1px solid var(--color-border);
+}
+
+.b2b-line-row input,
+.b2b-line-row select {
+  width: 100%;
+  min-width: 0;
+  padding: 6px 8px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  font-family: inherit;
+  font-size: 0.84rem;
+}
+
+/* Quantity and its unit share a cell: the unit is Odoo's own (kg, Units), and
+   it has to sit against the number or nobody can tell 5 kg from 5 pieces. */
+.b2b-line-qty {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.b2b-line-qty em {
+  font-size: 0.72rem;
+  font-style: normal;
+  color: var(--color-text-soft);
+}
+
+.b2b-line-total {
+  font-family: var(--font-display);
+  font-weight: 700;
+  text-align: right;
+  color: var(--color-text);
+}
+
+.b2b-line-remove {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 50%;
+  background: var(--color-surface);
+  font-size: 1rem;
+  line-height: 1;
+  color: var(--color-text-soft);
+  cursor: pointer;
+}
+
+.b2b-line-remove:hover {
+  border-color: #c0504d;
+  color: #96322f;
+}
+
+/* Spans the whole row, under the line it explains. */
+.b2b-line-note {
+  grid-column: 1 / -1;
+  padding-left: 2px;
+  font-size: 0.72rem;
+  color: var(--color-text-soft);
+}
+
+/* A rate the pricelist did not choose. Amber rather than red: it is not
+   wrong, it just wasn't decided by the account's agreed rates, and somebody
+   should look at it before the invoice goes out. */
+.b2b-line-note.is-warn {
+  color: #8a6316;
+}
+
+.b2b-line-note em {
+  font-style: normal;
+  color: var(--color-text-muted);
+}
+
+.b2b-line-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--color-border-strong);
+}
+
+.b2b-line-grand {
+  font-family: var(--font-display);
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: var(--color-ember-dark);
+}
+
+/* ---- Invoice state on a sale row ----------------------------------------- */
+
+.b2b-sale-lines {
+  font-size: 0.74rem;
+  color: var(--color-text-muted);
+}
+
+/* The gap between the delivery sheet and the invoice, stated on the row. Not
+   a warning -- the roll-up is what is wanted -- so it reads as a note. */
+.b2b-sale-rollup {
+  font-size: 0.72rem;
+  color: var(--color-text-soft);
+}
+
+.b2b-sale-odoo-error {
+  font-size: 0.74rem;
+  color: #96322f;
+}
+
+/* The one action here that writes to the accounts, so it does not look like
+   the neutral chips beside it. */
+.b2b-chip.is-invoice {
+  border-color: var(--color-ember);
+  color: var(--color-ember-dark);
+}
+
+.b2b-chip.is-invoice:hover:not(:disabled) {
+  background: var(--color-ember-light);
+}
+
+/* The PDF link is an <a>, so it needs the bits a <button> got for free. */
+a.b2b-chip {
+  display: inline-flex;
+  align-items: center;
+  text-decoration: none;
+}
+
+/* ---- Sales by month ------------------------------------------------------ */
+
+.b2b-month-bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  min-height: 110px;
+  overflow-x: auto;
+}
+
+.b2b-month-bar {
+  display: flex;
+  flex: 1 1 44px;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+  min-width: 44px;
+  height: 110px;
+}
+
+.b2b-month-bar-value {
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: var(--color-text-soft);
+  white-space: nowrap;
+}
+
+.b2b-month-bar-fill {
+  width: 100%;
+  /* Heights come from the tallest month in the range, so a bar can round to
+     nothing; the minimum keeps a real month visible as a sliver rather than
+     as a gap that reads like missing data. */
+  min-height: 3px;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  background: linear-gradient(180deg, var(--color-ember) 0%, var(--color-ember-dark) 100%);
+}
+
+.b2b-month-bar-label {
+  font-size: 0.72rem;
+  color: var(--color-text-muted);
+  white-space: nowrap;
 }
 
 /* ---- Weekend Prep Planner: unconfirmed Odoo quotations -------------------
@@ -5321,6 +5567,31 @@ html {
     overflow-x: auto;
   }
 
+  /* The sale row's four columns do not survive a phone; stacked, the money
+     and the status still read in the order they are scanned. */
+  .b2b-sale-row {
+    grid-template-columns: 1fr auto;
+  }
+
+  /* Six columns of invoice line become two. The header row is dropped
+     entirely — with the fields stacked it labels nothing. */
+  .b2b-line-head {
+    display: none;
+  }
+
+  .b2b-line-row {
+    grid-template-columns: 1fr 28px;
+  }
+
+  .b2b-sale-status {
+    grid-column: 1 / -1;
+    justify-self: start;
+  }
+
+  .b2b-sale-actions {
+    grid-column: 1 / -1;
+  }
+
   /* The scrollers need to be able to shrink inside their flex/grid parents,
      or they size to the table and scroll nothing. */
   .prep-table-wrap,
@@ -5376,4 +5647,2566 @@ html {
   .wizard-step {
     flex: 1 1 100%;
   }
+}
+
+/* ---------------------------------------------------------------------------
+   Marketing ROI (src/pages/marketing/MarketingROI.tsx)
+
+   The chart is CSS bars rather than SVG: two rupee measures on one shared
+   scale is a width, and a div does that natively at any container size
+   without a viewBox to keep in step. The mark specs it follows come from the
+   dataviz guidance -- bars capped at 14px so the band keeps its air, a 4px
+   rounded data-end with a square baseline, a 2px surface gap between the two
+   bars of a pair, and no gridlines at all because every value is labelled at
+   its tip.
+
+   The two series colours live in the component (COLOR_INVESTED /
+   COLOR_GENERATED) rather than here, so they sit next to the note recording
+   that they were validated for colour-blind separation against this chart
+   surface.
+   --------------------------------------------------------------------------- */
+
+.mkt-roi {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.mkt-head h3 {
+  margin: 0 0 4px;
+  font-size: 1.25rem;
+}
+
+.mkt-head p {
+  margin: 0;
+  max-width: 70ch;
+  font-size: 0.86rem;
+  color: var(--color-text-muted);
+}
+
+.mkt-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 14px 16px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-sm);
+}
+
+.mkt-range {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px;
+}
+
+.mkt-range-field,
+.mkt-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.mkt-range-field > span,
+.mkt-field > span {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--color-text-soft);
+}
+
+.mkt-range-field input,
+.mkt-field input,
+.mkt-field select,
+.mkt-table select,
+.mkt-table input {
+  padding: 8px 10px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  font-family: inherit;
+  font-size: 0.86rem;
+  color: var(--color-text);
+}
+
+.mkt-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.mkt-chip {
+  padding: 7px 12px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 999px;
+  background: var(--color-surface);
+  font-family: inherit;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--color-text-muted);
+  cursor: pointer;
+}
+
+.mkt-chip:hover {
+  border-color: var(--color-ember);
+  color: var(--color-ember-dark);
+}
+
+.mkt-tabs {
+  display: flex;
+  gap: 6px;
+}
+
+.mkt-tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 999px;
+  background: var(--color-surface);
+  font-family: inherit;
+  font-size: 0.84rem;
+  font-weight: 600;
+  color: var(--color-text-muted);
+  cursor: pointer;
+}
+
+.mkt-tab.is-active {
+  background: var(--color-charcoal);
+  border-color: var(--color-charcoal);
+  color: #fff;
+}
+
+/* The count of orders with no channel on them. Ember on the inactive tab so
+   the measurement gap is visible without having to open the tab. */
+.mkt-tab-badge {
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--color-ember);
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: #fff;
+}
+
+.mkt-body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.mkt-sources {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.mkt-source {
+  padding: 6px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  background: var(--color-surface-alt);
+  font-size: 0.78rem;
+  color: var(--color-text-muted);
+}
+
+/* Connected / not connected carries a word as well as a colour -- a status
+   that reads only as green-or-grey is unreadable to a colour-blind user and
+   invisible in a screenshot. */
+.mkt-source.is-on {
+  border-color: #63a877;
+  color: #1e6b32;
+}
+
+.mkt-source.is-off {
+  border-color: var(--color-border-strong);
+  color: var(--color-text-soft);
+}
+
+.mkt-source code {
+  font-size: 0.74rem;
+}
+
+.mkt-alert {
+  padding: 11px 14px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-alt);
+  font-size: 0.84rem;
+  color: var(--color-text-muted);
+}
+
+.mkt-alert-warn {
+  border-color: #d8a93c;
+  background: #fff7e6;
+  color: #6d4a06;
+}
+
+.mkt-alert-error {
+  border-color: #d8a1a1;
+  background: #fdf1f0;
+  color: #96322f;
+}
+
+.mkt-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 12px;
+}
+
+.mkt-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 14px 16px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-sm);
+}
+
+.mkt-tile-label {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--color-text-soft);
+}
+
+/* Proportional figures, not tabular: a tile value is a large standalone
+   number, and equal-width digits make one like 121 look loose at this size.
+   tabular-nums is applied to the tables instead, where columns must align. */
+.mkt-tile-value {
+  font-family: var(--font-display);
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: var(--color-text);
+}
+
+.mkt-tile-value.is-good {
+  color: #1e6b32;
+}
+
+.mkt-tile-value.is-bad {
+  color: #96322f;
+}
+
+.mkt-tile-sub {
+  font-size: 0.78rem;
+  color: var(--color-text-muted);
+}
+
+.mkt-panel {
+  padding: 16px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-sm);
+}
+
+.mkt-panel h4 {
+  margin: 0 0 4px;
+  font-size: 0.98rem;
+}
+
+.mkt-panel-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.mkt-panel-hint {
+  margin: 8px 0 0;
+  max-width: 90ch;
+  font-size: 0.8rem;
+  color: var(--color-text-muted);
+}
+
+.mkt-legend {
+  display: flex;
+  gap: 14px;
+  font-size: 0.8rem;
+  color: var(--color-text-muted);
+}
+
+.mkt-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.mkt-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+}
+
+/* ---- The invested vs generated bars ------------------------------------ */
+
+.mkt-chart {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 4px 0;
+  /* The chart surface the two series colours were validated against. */
+  background: var(--color-surface);
+}
+
+.mkt-chart-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 168px) minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+}
+
+.mkt-chart-label {
+  display: flex;
+  flex-direction: column;
+  font-size: 0.84rem;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.mkt-chart-roi {
+  font-size: 0.74rem;
+  font-weight: 600;
+  color: var(--color-text-soft);
+}
+
+/* 2px of surface between the pair of bars -- white doing the separating,
+   rather than a stroke around each mark. */
+.mkt-chart-bars {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.mkt-bar-track {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.mkt-bar {
+  /* Capped, not filling the band: the leftover is air. Square at the
+     baseline, 4px rounded at the data-end. */
+  height: 14px;
+  min-width: 2px;
+  border-radius: 0 4px 4px 0;
+  transition: width 160ms ease-out;
+}
+
+/* Values ride the bar tips, which is why this chart has no axis or
+   gridlines: the labels are the scale. */
+.mkt-bar-value {
+  font-size: 0.78rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-muted);
+  white-space: nowrap;
+}
+
+.mkt-bar-track:hover .mkt-bar-value {
+  color: var(--color-text);
+}
+
+.mkt-tooltip {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 6px);
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 190px;
+  padding: 9px 11px;
+  border-radius: var(--radius-sm);
+  background: var(--color-charcoal);
+  box-shadow: var(--shadow-md);
+  font-size: 0.78rem;
+  color: #f3e9de;
+  pointer-events: none;
+}
+
+.mkt-tooltip strong {
+  font-size: 0.8rem;
+  color: #fff;
+}
+
+.mkt-tooltip .mkt-muted {
+  color: #bdaa98;
+}
+
+/* ---- Tables ------------------------------------------------------------ */
+
+.mkt-table-wrap {
+  overflow-x: auto;
+}
+
+.mkt-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.84rem;
+}
+
+.mkt-table th,
+.mkt-table td {
+  padding: 9px 10px;
+  text-align: left;
+  vertical-align: top;
+  /* Hairline, solid, one step off the surface -- recessive by design. */
+  border-bottom: 1px solid var(--color-border);
+}
+
+.mkt-table th {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-text-soft);
+  white-space: nowrap;
+}
+
+/* tabular-nums here and not on the tiles: these are columns of figures that
+   have to line up vertically. */
+.mkt-table .mkt-num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.mkt-table tbody tr:hover {
+  background: var(--color-surface-alt);
+}
+
+/* The unattributed row is set apart rather than styled as a channel: it is
+   revenue whose channel is unknown, and it must not read as a competitor to
+   the rows above it. */
+.mkt-row-unattributed {
+  background: var(--color-bg-alt);
+  color: var(--color-text-muted);
+}
+
+.mkt-good {
+  color: #1e6b32;
+}
+
+.mkt-bad {
+  color: #96322f;
+}
+
+.mkt-muted {
+  color: var(--color-text-soft);
+}
+
+.mkt-block {
+  display: block;
+  font-size: 0.76rem;
+}
+
+.mkt-tag {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 7px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 999px;
+  font-size: 0.68rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-text-soft);
+  white-space: nowrap;
+}
+
+/* The second table inside a panel that carries two of them: the per-channel
+   ledger, then the orders behind it. The rule keeps the detail visibly
+   subordinate to the summary without a second heading, which would read as a
+   separate panel wedged into this one. */
+.mkt-table-inset {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--color-border);
+}
+
+.mkt-category-list {
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 6px;
+}
+
+.mkt-category-list li {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 7px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-alt);
+  font-size: 0.84rem;
+}
+
+.mkt-category-list strong {
+  font-variant-numeric: tabular-nums;
+}
+
+/* The three UTM dimension panels side by side. They are read against each
+   other -- "instagram made the most, and it was the bio link that did it" --
+   so they wrap rather than stack until there genuinely is no room. */
+.mkt-split {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 16px;
+}
+
+/* ---- Forms ------------------------------------------------------------- */
+
+.mkt-form {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.mkt-field-wide {
+  grid-column: 1 / -1;
+}
+
+.mkt-form-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.mkt-form-actions .mkt-muted {
+  flex: 1 1 260px;
+  font-size: 0.78rem;
+}
+
+.mkt-primary {
+  padding: 9px 18px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: var(--color-ember);
+  font-family: inherit;
+  font-size: 0.86rem;
+  font-weight: 600;
+  color: #fff;
+  cursor: pointer;
+}
+
+.mkt-primary:hover:not(:disabled) {
+  background: var(--color-ember-dark);
+}
+
+.mkt-primary:disabled {
+  background: var(--color-border-strong);
+  cursor: not-allowed;
+}
+
+.mkt-primary-sm {
+  padding: 6px 12px;
+  font-size: 0.8rem;
+}
+
+.mkt-link-danger {
+  padding: 0;
+  border: none;
+  background: none;
+  font-family: inherit;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: #96322f;
+  cursor: pointer;
+}
+
+.mkt-link-danger:disabled {
+  color: var(--color-text-soft);
+  cursor: not-allowed;
+}
+
+/* ---- Attribution ------------------------------------------------------- */
+
+.mkt-attr-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 12px 0;
+  padding: 10px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-alt);
+}
+
+.mkt-attr-counts {
+  font-size: 0.84rem;
+  color: var(--color-text-muted);
+}
+
+.mkt-attr-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.mkt-checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.82rem;
+  color: var(--color-text-muted);
+}
+
+/* Phones: the toolbar stops trying to sit on one line, and the chart's
+   label column gives way so the bars keep a usable length. */
+@media (max-width: 720px) {
+  .mkt-toolbar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .mkt-tabs {
+    flex-wrap: wrap;
+  }
+
+  .mkt-chart-row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 4px;
+  }
+
+  .mkt-chart-label {
+    flex-direction: row;
+    align-items: baseline;
+    gap: 8px;
+  }
+
+  .mkt-tooltip {
+    left: auto;
+    right: 0;
+  }
+}
+
+/* ==========================================================================
+   Finance — Spending vs Sales (Finance > Spending vs Sales)
+   --------------------------------------------------------------------------
+   This screen deliberately wears the `.mkt-*` report styles above rather than
+   restating them under a `fin-` prefix. Those classes are the shared
+   report-screen language of this app — the toolbar, the tiles, the panels,
+   the tables, the alerts — and they were written first for Marketing ROI only
+   because that was the first report screen. Duplicating ~600 lines so the
+   selectors could carry a different three letters would guarantee the two
+   screens drift apart on the next change to either.
+
+   What IS below is only what this screen has that no other one does: a
+   vertical grouped column chart, because the weekly figures are a
+   change-over-time series and those read left to right. The horizontal bars
+   `.mkt-chart` draws are for comparing named categories, which is a different
+   question.
+   ========================================================================== */
+
+.fin-plot {
+  display: grid;
+  /* The gutter is fixed rather than sized to content so the plot area's left
+     edge does not jump between renders as the rupee figures change width. */
+  grid-template-columns: 62px minmax(0, 1fr);
+  gap: 0 8px;
+  margin-top: 6px;
+}
+
+/* The value axis. Labels sit ON the gridlines, so both halves of the row use
+   the same flex distribution and stay aligned without magic offsets. */
+.fin-axis {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  align-items: flex-end;
+  height: 240px;
+  padding-bottom: 1px;
+  font-size: 0.7rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-soft);
+}
+
+.fin-plot-area {
+  position: relative;
+  height: 240px;
+}
+
+/* Recessive, and behind the marks — the grid is there to be measured
+   against, not looked at. */
+.fin-gridlines {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  pointer-events: none;
+}
+
+.fin-gridline {
+  border-top: 1px solid var(--color-border);
+}
+
+.fin-gridline:last-child {
+  border-top-color: var(--color-border-strong);
+}
+
+.fin-cols {
+  position: relative;
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+  height: 100%;
+}
+
+.fin-col {
+  position: relative;
+  flex: 1 1 0;
+  min-width: 0;
+  height: 100%;
+  display: flex;
+  align-items: flex-end;
+  /* The 2px surface gap between the two bars of a pair — the spacer that
+     keeps adjacent fills from reading as one mark. */
+  gap: 2px;
+  padding: 0 2px;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  cursor: default;
+}
+
+.fin-col:hover,
+.fin-col.is-hot {
+  background: var(--color-surface-alt);
+}
+
+/* A week nobody traded in. Kept as a column rather than dropped — a closed
+   kitchen is an answer — but it must not read as a week whose bars failed to
+   render, so it carries a hatch and the table says "quiet".
+
+   The hatch is kept very faint on purpose. A quiet run of six weeks is normal
+   here (the kitchen does not open every weekend), and at any heavier weight
+   half the chart becomes texture and the six columns that actually have data
+   stop being the thing the eye lands on. It only has to be visible enough to
+   answer "is that column empty or broken". */
+.fin-col.is-quiet {
+  background: repeating-linear-gradient(
+    135deg,
+    transparent 0 6px,
+    rgba(122, 106, 88, 0.05) 6px 8px
+  );
+}
+
+.fin-bar {
+  flex: 1 1 0;
+  min-width: 0;
+  /* 4px rounded data-end, anchored square to the baseline. */
+  border-radius: 4px 4px 0 0;
+  transition: opacity 0.12s ease;
+}
+
+.fin-col:hover .fin-bar {
+  opacity: 0.86;
+}
+
+.fin-xaxis {
+  grid-column: 2;
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.fin-xtick {
+  flex: 1 1 0;
+  min-width: 0;
+  text-align: center;
+  font-size: 0.68rem;
+  line-height: 1.25;
+  color: var(--color-text-muted);
+  overflow-wrap: anywhere;
+}
+
+.fin-xtick.is-hot {
+  color: var(--color-text);
+  font-weight: 700;
+}
+
+/* Anchored to the column rather than to the cursor, so it cannot cover the
+   bar it is describing. Flipped to the left half for the last few weeks —
+   see the `flip` prop in SpendVsSales.tsx. */
+.fin-tip {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  z-index: 5;
+  width: max-content;
+  max-width: 240px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 9px 11px;
+  border-radius: var(--radius-sm);
+  background: var(--color-charcoal);
+  color: #f7ede2;
+  font-size: 0.76rem;
+  line-height: 1.35;
+  box-shadow: var(--shadow-md);
+  pointer-events: none;
+}
+
+.fin-tip.is-flipped {
+  left: auto;
+  right: 50%;
+}
+
+.fin-tip strong {
+  font-size: 0.82rem;
+}
+
+.fin-tip-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  font-variant-numeric: tabular-nums;
+}
+
+.fin-tip-row i {
+  width: 8px;
+  height: 8px;
+  margin-right: 6px;
+  border-radius: 2px;
+  display: inline-block;
+}
+
+.fin-tip-sep {
+  margin: 3px 0 1px;
+  border-top: 1px solid rgba(255, 255, 255, 0.18);
+}
+
+.fin-tip-note {
+  color: #cbb9a6;
+}
+
+/* The week table. Right-aligned money columns with tabular figures, and the
+   net column set apart because it is the one being read down. */
+.fin-net {
+  font-weight: 700;
+}
+
+.fin-week-quiet td {
+  color: var(--color-text-soft);
+}
+
+/* The Mon → Sun dates under each week's name. Kept on one line so a narrow
+   screen scrolls the table (which `.mkt-table-wrap` already does) rather than
+   breaking "2026-06-15" across three lines mid-date. */
+.fin-week-dates {
+  white-space: nowrap;
+}
+
+/* A two-column split — "where it went" beside "where it came from" — that
+   collapses to one on narrow screens. */
+.fin-split {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 14px;
+}
+
+.fin-headline {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 24px;
+  margin-top: 10px;
+  font-size: 0.82rem;
+  color: var(--color-text-muted);
+}
+
+.fin-headline strong {
+  color: var(--color-text);
+}
+
+@media (max-width: 720px) {
+  .fin-plot {
+    grid-template-columns: 48px minmax(0, 1fr);
+  }
+
+  .fin-axis,
+  .fin-plot-area {
+    height: 190px;
+  }
+
+  /* Twelve week labels will not fit across a phone. Every other one is
+     hidden rather than rotated — a half-legible rotated label is worse than
+     an absent one, and the table below carries every week in full. */
+  .fin-xtick:nth-child(even) {
+    visibility: hidden;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   QR & Link Builder (src/pages/marketing/QRLinkBuilder.tsx)
+
+   Shares the .mkt-* furniture with Marketing ROI — same panels, fields,
+   chips and table — because the two screens are two halves of one job and a
+   second visual language between them would be noise. Only what is genuinely
+   new to this screen is below: the source picker, the result cards, and the
+   QR canvas.
+
+   The canvas is deliberately left at its natural pixel size and never scaled
+   by CSS. A QR stretched to fit a box lands module edges on fractional
+   pixels, and the browser antialiases them into grey — which is a code that
+   takes three attempts to scan, from a preview that looked fine.
+   --------------------------------------------------------------------------- */
+
+.mkt-alert-ok {
+  border-color: #9cc4a4;
+  background: #f0f8f2;
+  color: #245f36;
+}
+
+/* The campaign, down beside the Save button rather than at the top. It shares
+   the row with the button on a wide screen and stacks above it on a narrow
+   one — see the phone rules at the end of this section. */
+.qrb-save {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px;
+}
+
+.qrb-campaign-field input {
+  width: 220px;
+  max-width: 100%;
+}
+
+/* The source tiles. A tile is a closed question until it is clicked, and then
+   it grows its own follow-up question inside itself — which is why this is a
+   grid of blocks rather than the row of small chips it replaced: a selected
+   tile is several times the height of an unselected one, and auto-fit rows
+   of items that can each triple in height need somewhere to grow. */
+.qrb-tiles {
+  display: grid;
+  /* min() rather than a bare 260px: auto-fit still lays a track out at its
+     minimum when the container is narrower than that, which on a 360px phone
+     is a grid wider than the screen and a page that scrolls sideways. */
+  grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr));
+  align-items: start;
+  gap: 12px;
+  margin: 12px 0;
+}
+
+.qrb-tile {
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  overflow: hidden;
+  transition: border-color 0.12s ease, box-shadow 0.12s ease;
+}
+
+.qrb-tile:hover {
+  border-color: #d9480f;
+}
+
+/* Selected reads as on through border, tint and the tick together, not colour
+   alone — this gets used on a phone in daylight. */
+.qrb-tile.is-on {
+  border-color: #d9480f;
+  box-shadow: inset 3px 0 0 #d9480f;
+}
+
+.qrb-tile-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  width: 100%;
+  padding: 12px;
+  border: 0;
+  background: none;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.qrb-tile.is-on .qrb-tile-head {
+  background: #fff1e8;
+}
+
+.qrb-tick {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 50%;
+  font-size: 0.78rem;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--color-text-muted);
+}
+
+.qrb-tile.is-on .qrb-tick {
+  border-color: #d9480f;
+  background: #d9480f;
+  color: #fff;
+}
+
+.qrb-tile-name {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.qrb-tile-name strong {
+  font-size: 0.92rem;
+  color: var(--color-text);
+}
+
+.qrb-tile.is-on .qrb-tile-name strong {
+  color: #96320c;
+}
+
+.qrb-tile-name span {
+  font-size: 0.72rem;
+  line-height: 1.35;
+  color: var(--color-text-muted);
+}
+
+/* The follow-up question: which bit of this place. Separated by a rule rather
+   than a gap so it reads as part of the tile above it and not as a second
+   control that happens to sit underneath. */
+.qrb-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border-top: 1px solid var(--color-border);
+}
+
+.qrb-detail-q {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.qrb-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+/* Multi-select, not a radio: a campaign that runs in the bio and in a story
+   wants both links built in one go. */
+.qrb-pill {
+  padding: 5px 10px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 999px;
+  background: var(--color-surface);
+  font-family: inherit;
+  font-size: 0.76rem;
+  color: var(--color-text);
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+
+.qrb-pill:hover {
+  border-color: #d9480f;
+}
+
+.qrb-pill.is-on {
+  border-color: #d9480f;
+  background: #d9480f;
+  color: #fff;
+  font-weight: 600;
+}
+
+.qrb-detail-add {
+  width: 100%;
+  padding: 6px 9px;
+  border: 1px dashed var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  font-family: inherit;
+  font-size: 0.78rem;
+  color: var(--color-text);
+}
+
+/* The everything-else drawer. Deliberately plain: the five tiles above are
+   the job, and this is the escape hatch, so it should not compete with them. */
+.qrb-more {
+  padding: 0;
+  border: 0;
+  background: none;
+  font-family: inherit;
+  font-size: 0.78rem;
+  color: var(--color-text-muted);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+.qrb-more:hover {
+  color: #96320c;
+}
+
+.qrb-custom {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px;
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px dashed var(--color-border);
+}
+
+.qrb-results-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+/* 430px is the width at which a 41x41 code at 4px a module and the URL beside
+   it both stay readable — narrower and the URL wraps into a five-line column
+   nobody can proof-read, which is the one thing this card exists for. */
+.qrb-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(430px, 100%), 1fr));
+  gap: 14px;
+  margin-top: 12px;
+}
+
+.qrb-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+}
+
+.qrb-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.qrb-card-head h5 {
+  margin: 0;
+  font-size: 0.98rem;
+}
+
+.qrb-card-sub {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.7rem;
+  color: var(--color-text-muted);
+}
+
+.qrb-badge {
+  padding: 3px 8px;
+  border-radius: 999px;
+  font-size: 0.68rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.qrb-badge-ok {
+  background: #edf6ef;
+  color: #245f36;
+}
+
+/* Amber, not red. An unmapped source is a link that works and clicks that are
+   tracked — only the revenue rollup is missing — and a red badge would send
+   somebody hunting for a fault that isn't there. */
+.qrb-badge-warn {
+  background: #fff7e6;
+  color: #6d4a06;
+}
+
+.qrb-card-body {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+}
+
+.qrb-canvas {
+  flex: none;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  /* image-rendering keeps the modules square if a browser or a zoom level
+     resamples the canvas anyway. */
+  image-rendering: pixelated;
+}
+
+.qrb-card-link {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  flex: 1;
+}
+
+/* The URL is long, has no spaces, and is the thing being checked before it
+   goes to a printer — so it wraps anywhere rather than overflowing, and it is
+   shown in full rather than truncated. */
+.qrb-url {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.74rem;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  color: var(--color-text);
+}
+
+.qrb-url-tight {
+  display: block;
+  max-width: 46ch;
+  font-size: 0.7rem;
+}
+
+.qrb-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.qrb-meta {
+  font-size: 0.72rem;
+  color: var(--color-text-muted);
+}
+
+.qrb-error {
+  margin: 0;
+  font-size: 0.78rem;
+  color: #96322f;
+}
+
+.qrb-row-actions {
+  display: flex;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+/* ---- On a phone ---------------------------------------------------------
+   This screen gets used standing up — at a stall, in front of the printer,
+   halfway through writing the Instagram caption — so the phone layout is not
+   an afterthought here. Three things change, and each fixes something that
+   actually goes wrong on a 360px screen. */
+@media (max-width: 720px) {
+  /* One tile per row, full width. Two 170px-wide tiles side by side put
+     "Friends & family" on three lines and leave the placement pills below
+     them in a column two pills wide. */
+  .qrb-tiles {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 10px;
+  }
+
+  /* Thumb-sized. 5px of padding is a fine target for a mouse and a miss for
+     a thumb, and these are the controls the whole screen is now made of. */
+  .qrb-tile-head {
+    padding: 14px;
+  }
+
+  .qrb-pill {
+    min-height: 38px;
+    padding: 8px 14px;
+    font-size: 0.82rem;
+  }
+
+  .qrb-tick {
+    width: 26px;
+    height: 26px;
+  }
+
+  .qrb-detail-add,
+  /* 16px, and not a fraction under. iOS Safari zooms the whole page in when
+     a focused input's text is smaller than that, and it does not zoom back
+     out — which on this screen means typing a subreddit name leaves you
+     scrolled sideways into the middle of a tile. */
+  .qrb-campaign-field input {
+    min-height: 40px;
+    font-size: 16px;
+  }
+
+  .qrb-save {
+    align-items: stretch;
+    width: 100%;
+  }
+
+  .qrb-campaign-field {
+    flex: 1 1 160px;
+  }
+
+  .qrb-campaign-field input {
+    width: 100%;
+  }
+
+  .qrb-save .mkt-primary {
+    flex: 1 1 120px;
+    min-height: 42px;
+  }
+
+  .qrb-results-head {
+    align-items: flex-start;
+  }
+
+  .qrb-results-head h4 {
+    flex: 1 1 100%;
+  }
+
+  /* The QR moves above the link rather than shrinking beside it: a preview
+     small enough to sit next to a wrapped URL on a phone is too small to
+     check. */
+  .qrb-card-body {
+    flex-direction: column;
+  }
+
+  .qrb-card-head {
+    flex-wrap: wrap;
+  }
+
+  .qrb-url-tight {
+    max-width: none;
+  }
+
+  .qrb-card-actions .mkt-chip {
+    min-height: 38px;
+  }
+}
+
+/* Below this the published-links table is scrolled sideways inside its own
+   wrap (.mkt-table-wrap) rather than squeezed — a six-column table on a
+   360px screen is unreadable at any font size, and the cards above already
+   carry everything needed to check a link before it goes out. */
+@media (max-width: 480px) {
+  .qrb-card {
+    padding: 12px;
+  }
+
+  /* The canvas is never CSS-scaled — see the note at the top of this section
+     — so on the narrowest screens it is centred instead, rather than sitting
+     against the left edge with the URL wrapped beneath it. */
+  .qrb-canvas {
+    align-self: center;
+  }
+}
+
+/* ---- Finance: the two sides of the business ----------------------------- */
+
+/* The side selector above the chart. Reuses `.mkt-tab` so it is visibly the
+   same control as the Marketing ROI tabs; only the spacing differs, because
+   here it sits inside a panel rather than in a toolbar. */
+.fin-side-tabs {
+  margin: 0 0 4px;
+}
+
+.fin-sides {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 12px;
+  margin-top: 4px;
+}
+
+.fin-side-card {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 14px 16px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-alt);
+}
+
+/* Shared marketing is not a third side of the business, so its card is
+   deliberately not styled like the two that are — no net, no margin, a dashed
+   edge and a muted ground. It has to be impossible to read as B2C's and
+   B2B's equal. */
+.fin-side-card.is-shared {
+  border-style: dashed;
+  background: transparent;
+}
+
+/* ---- Finance: the grouped week table ------------------------------------ */
+
+/* Two header rows, so B2C's three columns and B2B's three are visibly owned
+   by their group rather than being six adjacent money columns the reader has
+   to count along. */
+.fin-week-table thead th.fin-group {
+  text-align: center;
+  letter-spacing: 0.06em;
+}
+
+/* The rule that starts each group. On both the header and the body so the
+   vertical line runs the full height of the table and the eye can follow one
+   side down the page without drifting into the next. */
+.fin-week-table th.fin-group,
+.fin-week-table th.fin-group-start,
+.fin-week-table td.fin-group-start {
+  border-left: 1px solid var(--color-border-strong);
+}
+
+/* The group header row carries the rule already; a second one on the row
+   below it would double up at every boundary. */
+.fin-week-table thead tr:first-child th:first-child {
+  border-left: 0;
+}
+
+.fin-week-table td,
+.fin-week-table th {
+  white-space: nowrap;
+}
+
+/* The total row carries money, not headings. `.mkt-table th` makes every cell
+   in a header row small, uppercase and muted, which is right for a column
+   name and wrong for the most-read figure on the table — and, being more
+   specific than `.mkt-good`, it also swallows the colour that says whether
+   the week made money. Scoped to this table so the ROI screen's footers are
+   untouched. */
+.fin-week-table tfoot th.mkt-num {
+  font-size: 0.84rem;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--color-text);
+}
+
+.fin-week-table tfoot th.mkt-num.mkt-good {
+  color: #1e6b32;
+}
+
+.fin-week-table tfoot th.mkt-num.mkt-bad {
+  color: #96322f;
+}
+
+/* ==========================================================================
+   Sales by Item (src/pages/finance/ItemSales.tsx)
+
+   Everything shared with the other report screens — toolbar, tiles, panels,
+   tables, alerts — is `.mkt-*` and lives above. Below is only what this screen
+   has that no other one does: a STACKED column chart (each period split B2C
+   over B2B, one series per side of the business rather than two figures
+   compared side by side), the sparklines that put one dish's own line beside
+   its total, and the trend badges.
+
+   The sparkline is the reason this screen needed its own block at all. A best
+   seller list is a photograph; the question here is direction, and direction
+   has to be visible on the row itself rather than reconstructed by the reader
+   from a number in a "change" column.
+   ========================================================================== */
+
+.sal-plot {
+  display: grid;
+  /* Fixed gutter, so the plot's left edge does not shift as the axis figures
+     change width between ranges. Same reasoning as `.fin-plot`. */
+  grid-template-columns: 48px minmax(0, 1fr);
+  gap: 0 8px;
+  margin-top: 6px;
+}
+
+.sal-axis {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  align-items: flex-end;
+  height: 220px;
+  padding-bottom: 1px;
+  font-size: 0.7rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-soft);
+}
+
+.sal-plot-area {
+  position: relative;
+  height: 220px;
+}
+
+.sal-gridlines {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  pointer-events: none;
+}
+
+.sal-gridline {
+  border-top: 1px solid var(--color-border);
+}
+
+.sal-gridline:last-child {
+  border-top-color: var(--color-border-strong);
+}
+
+.sal-cols {
+  position: relative;
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+  height: 100%;
+}
+
+.sal-col {
+  position: relative;
+  flex: 1 1 0;
+  min-width: 0;
+  height: 100%;
+  display: flex;
+  align-items: flex-end;
+  padding: 0 2px;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  cursor: default;
+}
+
+.sal-col:hover,
+.sal-col.is-hot {
+  background: var(--color-surface-alt);
+}
+
+.sal-col:focus-visible {
+  outline: 2px solid var(--color-charcoal);
+  outline-offset: 2px;
+}
+
+/* A period nobody sold anything in. Kept as a column — a closed weekend is an
+   answer — with the same very faint hatch the weekly money chart uses, so an
+   empty column cannot be mistaken for a broken one. */
+.sal-col.is-quiet {
+  background: repeating-linear-gradient(135deg, transparent 0 6px, rgba(122, 106, 88, 0.05) 6px 8px);
+}
+
+/* The stack. The 2px gap is the surface spacer between the two fills — without
+   it the B2C/B2B boundary reads as a colour change inside one mark instead of
+   as two marks meeting. */
+.sal-stack {
+  display: flex;
+  flex-direction: column-reverse;
+  justify-content: flex-start;
+  gap: 2px;
+  width: 100%;
+  height: 100%;
+}
+
+.sal-bar {
+  width: 100%;
+  transition: opacity 0.12s ease;
+}
+
+/* Only the top of the stack gets the 4px data-end; where the two segments
+   meet, and on the baseline, the mark stays square. */
+.sal-bar-b2c,
+.sal-bar-b2b:only-child {
+  border-radius: 4px 4px 0 0;
+}
+
+.sal-col:hover .sal-bar {
+  opacity: 0.86;
+}
+
+.sal-xaxis {
+  display: flex;
+  gap: 6px;
+  margin: 6px 0 0 56px;
+}
+
+.sal-xtick {
+  flex: 1 1 0;
+  min-width: 0;
+  text-align: center;
+  font-size: 0.68rem;
+  line-height: 1.25;
+  color: var(--color-text-muted);
+  overflow-wrap: anywhere;
+}
+
+.sal-xtick.is-hot {
+  color: var(--color-text);
+  font-weight: 700;
+}
+
+/* Anchored to its column rather than to the cursor, so it never covers the bar
+   it describes. Flipped to the left for the last few columns, which would
+   otherwise push the panel sideways. */
+.sal-tip {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  z-index: 5;
+  width: max-content;
+  max-width: 260px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 9px 11px;
+  border-radius: var(--radius-sm);
+  background: var(--color-charcoal);
+  color: #f7ede2;
+  font-size: 0.76rem;
+  line-height: 1.35;
+  box-shadow: var(--shadow-md);
+  pointer-events: none;
+}
+
+.sal-tip.is-flipped {
+  left: auto;
+  right: 50%;
+}
+
+.sal-tip strong {
+  font-size: 0.82rem;
+}
+
+.sal-tip-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-variant-numeric: tabular-nums;
+}
+
+.sal-tip-row i {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  display: inline-block;
+  flex: none;
+}
+
+.sal-tip-sep {
+  margin: 3px 0 1px;
+  border-top: 1px solid rgba(255, 255, 255, 0.18);
+}
+
+.sal-tip-note {
+  color: #cbb9a6;
+}
+
+/* ---- What is catching on -------------------------------------------------- */
+
+.sal-movers {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 14px;
+}
+
+.sal-mover-title {
+  margin: 0 0 8px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+
+.sal-mover-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.sal-mover-list li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    'name spark'
+    'figures badge';
+  align-items: center;
+  gap: 4px 10px;
+  padding: 9px 11px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-alt);
+}
+
+.sal-mover-name {
+  grid-area: name;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-weight: 600;
+}
+
+.sal-mover-name span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sal-mover-list .sal-spark {
+  grid-area: spark;
+}
+
+.sal-mover-figures {
+  grid-area: figures;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
+  font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.sal-mover-list .sal-badge {
+  grid-area: badge;
+  justify-self: end;
+}
+
+/* ---- Sparkline, tags, badges --------------------------------------------- */
+
+.sal-spark {
+  display: block;
+  overflow: visible;
+}
+
+/* The side of the business, as a chip. The swatch repeats the chart's colour
+   and the letters carry the meaning, so the tag still says which side it is
+   when the colour is gone. */
+.sal-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 1px 7px 1px 5px;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  background: var(--color-surface);
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  color: var(--color-text-muted);
+  white-space: nowrap;
+}
+
+.sal-tag i {
+  width: 7px;
+  height: 7px;
+  border-radius: 2px;
+  display: inline-block;
+}
+
+/* Word first, colour second: "steady" and "too few to call" are different
+   findings that no colour could tell apart, so every badge is labelled. */
+.sal-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  white-space: nowrap;
+  border: 1px solid transparent;
+}
+
+.sal-badge.is-rising {
+  background: #e6f4ea;
+  border-color: #b7dfc4;
+  color: #1b5e34;
+}
+
+.sal-badge.is-new {
+  background: #fdf0e6;
+  border-color: #f2c9a8;
+  color: #97400f;
+}
+
+.sal-badge.is-falling {
+  background: #fdecea;
+  border-color: #f3c2bd;
+  color: #9c2418;
+}
+
+.sal-badge.is-gone {
+  background: var(--color-surface-alt);
+  border-color: var(--color-border-strong);
+  color: #7a4b45;
+}
+
+.sal-badge.is-steady,
+.sal-badge.is-unrated,
+.sal-badge.is-quiet {
+  background: var(--color-surface-alt);
+  border-color: var(--color-border);
+  color: var(--color-text-muted);
+}
+
+/* ---- The two sides, kept apart -------------------------------------------
+
+   One section per side of the business, stacked. The rule and the heading are
+   the whole separation on screen: without them two identical-looking tile
+   rows, charts and tables run together and a reader lands halfway down
+   thinking wholesale kilos are the weekend's portions. */
+
+.sal-side + .sal-side {
+  margin-top: 26px;
+  padding-top: 22px;
+  border-top: 2px solid var(--color-border-strong);
+}
+
+.sal-side-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+  margin-bottom: 12px;
+}
+
+.sal-side-head h4 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-size: 1.05rem;
+}
+
+/* The side's colour, repeated from its chart and its sparklines so the two
+   are tied together without a legend. */
+.sal-side-head h4 i {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  display: inline-block;
+}
+
+/* The one figure that spans both sides. Rupees add up where quantities do
+   not, so revenue gets a strip of its own above the two sections and every
+   count below it belongs to exactly one side. */
+.sal-whole {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px 20px;
+  padding: 12px 14px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-alt);
+}
+
+.sal-whole-figure {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.sal-whole-figure strong {
+  font-size: 1.35rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.sal-whole p {
+  flex: 1 1 320px;
+  margin: 0;
+}
+
+/* A tile whose value is a dish name, not a figure. Set at reading size — a
+   long name in the figure size is five lines tall and pushes every tile in the
+   row down to match it. */
+.mkt-tile-value.sal-tile-name {
+  font-size: 1.05rem;
+  line-height: 1.3;
+}
+
+/* ---- The item table ------------------------------------------------------ */
+
+.sal-table td,
+.sal-table th {
+  vertical-align: middle;
+}
+
+.sal-sort {
+  border: 0;
+  padding: 0;
+  background: none;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  text-transform: inherit;
+  letter-spacing: inherit;
+}
+
+.sal-sort:hover {
+  text-decoration: underline;
+}
+
+.sal-sort.is-on::after {
+  content: ' \25BE';
+  font-size: 0.7em;
+}
+
+@media (max-width: 720px) {
+  .sal-plot {
+    grid-template-columns: 36px minmax(0, 1fr);
+  }
+
+  .sal-axis,
+  .sal-plot-area {
+    height: 180px;
+  }
+
+  .sal-xaxis {
+    margin-left: 44px;
+  }
+
+  .sal-xtick {
+    font-size: 0.6rem;
+  }
+}
+
+/* ---- Insta Reel Generator (Marketing > Insta Reel Generator) -------------
+   The editor is two columns on a desktop — the clip stack on the left, a
+   phone-shaped preview on the right — and stacks to one on a tablet, where
+   the preview goes first because that is the thing being judged. */
+
+.reel-studio .mkt-panel + .mkt-panel {
+  margin-top: 0;
+}
+
+.reel-drop {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  margin-top: 12px;
+  padding: 26px 18px;
+  border: 2px dashed var(--color-border-strong);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-alt);
+  text-align: center;
+  font-size: 0.84rem;
+  color: var(--color-text-muted);
+  cursor: pointer;
+}
+
+.reel-drop:hover,
+.reel-drop:focus-visible {
+  border-color: var(--color-ember);
+  background: var(--color-ember-light);
+  outline: none;
+}
+
+.reel-drop-busy {
+  cursor: progress;
+}
+
+.reel-drop-icon {
+  font-size: 1.6rem;
+}
+
+.reel-drop strong {
+  color: var(--color-text);
+}
+
+.reel-bar {
+  width: 100%;
+  max-width: 320px;
+  height: 6px;
+  margin-top: 6px;
+  border-radius: 999px;
+  background: var(--color-border);
+  overflow: hidden;
+}
+
+.reel-bar-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: var(--color-ember);
+  transition: width 160ms linear;
+}
+
+.reel-library {
+  margin-top: 12px;
+}
+
+.reel-library-label {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--color-text-soft);
+}
+
+.reel-library-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.reel-dim {
+  font-size: 0.78rem;
+  color: var(--color-text-muted);
+}
+
+.reel-total {
+  font-size: 0.86rem;
+  font-weight: 700;
+  color: var(--color-text-muted);
+}
+
+.reel-total-over {
+  color: #96322f;
+}
+
+.reel-editor {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 300px;
+  gap: 16px;
+  align-items: start;
+}
+
+.reel-clips {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+.reel-clip {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--color-border);
+  border-left: 4px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  cursor: grab;
+}
+
+.reel-clip:active {
+  cursor: grabbing;
+}
+
+.reel-clip-active {
+  border-left-color: var(--color-ember);
+  background: var(--color-surface-alt);
+}
+
+.reel-clip-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.reel-clip-index {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  flex: none;
+  border-radius: 999px;
+  background: var(--color-charcoal);
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: #fff;
+}
+
+.reel-clip-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.86rem;
+  font-weight: 600;
+}
+
+.reel-clip-len {
+  flex: none;
+  font-size: 0.78rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-muted);
+}
+
+.reel-clip-move {
+  display: flex;
+  gap: 4px;
+  flex: none;
+}
+
+.reel-clip-move button {
+  width: 26px;
+  height: 26px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  font-family: inherit;
+  font-size: 0.8rem;
+  color: var(--color-text-muted);
+  cursor: pointer;
+}
+
+.reel-clip-move button:hover:not(:disabled) {
+  border-color: var(--color-ember);
+  color: var(--color-ember-dark);
+}
+
+.reel-clip-move button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.reel-clip-remove:hover:not(:disabled) {
+  border-color: #d8a1a1 !important;
+  color: #96322f !important;
+}
+
+.reel-clip-flags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.reel-flag {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #fff7e6;
+  border: 1px solid #e6cf9a;
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: #6d4a06;
+}
+
+.reel-flag-ok {
+  background: #eef7ee;
+  border-color: #b6d7b6;
+  color: #2f6b34;
+}
+
+.reel-trim {
+  display: grid;
+  grid-template-columns: 120px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  font-size: 0.76rem;
+  color: var(--color-text-muted);
+}
+
+.reel-trim b {
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text);
+}
+
+.reel-trim input[type='range'] {
+  width: 100%;
+  accent-color: var(--color-ember);
+}
+
+.reel-trim-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.reel-caption-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 110px;
+  gap: 8px;
+}
+
+.reel-caption-row input,
+.reel-caption-row select {
+  padding: 7px 9px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  font-family: inherit;
+  font-size: 0.82rem;
+  color: var(--color-text);
+  min-width: 0;
+}
+
+/* The preview column. The 9:16 box is the export's real shape, so a clip that
+   will get black bars shows them here rather than filling the frame and
+   flattering itself. */
+.reel-preview {
+  position: sticky;
+  top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.reel-phone {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 9 / 16;
+  border-radius: var(--radius-md);
+  background: #000;
+  overflow: hidden;
+}
+
+.reel-phone video {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: #000;
+}
+
+.reel-phone-empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  text-align: center;
+  font-size: 0.8rem;
+  color: #cbb9a4;
+}
+
+.reel-overlay {
+  position: absolute;
+  left: 8%;
+  right: 8%;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.55);
+  text-align: center;
+  font-family: var(--font-display);
+  font-size: 0.86rem;
+  font-weight: 700;
+  color: #fff;
+  pointer-events: none;
+}
+
+.reel-overlay-top {
+  top: 12%;
+}
+
+.reel-overlay-center {
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+.reel-overlay-bottom {
+  bottom: 20%;
+}
+
+.reel-preview-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.reel-preview-note {
+  margin: 0;
+  font-size: 0.74rem;
+  line-height: 1.45;
+  color: var(--color-text-soft);
+}
+
+.reel-music {
+  margin-top: 10px;
+}
+
+.reel-music-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+  font-size: 0.86rem;
+}
+
+.reel-music-controls {
+  align-items: end;
+}
+
+.reel-music-controls input[type='range'] {
+  accent-color: var(--color-ember);
+}
+
+.reel-export-actions {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+}
+
+.reel-render {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.reel-done {
+  display: grid;
+  grid-template-columns: 200px minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.reel-phone-sm {
+  width: 200px;
+}
+
+.reel-done-side {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.reel-done-side p {
+  margin: 0;
+}
+
+.reel-done-side a {
+  text-decoration: none;
+}
+
+.reel-ig-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin: 10px 0;
+}
+
+.reel-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.84rem;
+  color: var(--color-text-muted);
+}
+
+.reel-publish {
+  margin-top: 10px;
+}
+
+.reel-studio textarea {
+  padding: 8px 10px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  font-family: inherit;
+  font-size: 0.86rem;
+  color: var(--color-text);
+  resize: vertical;
+}
+
+@media (max-width: 900px) {
+  .reel-editor {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  /* Preview first on a narrow screen: it is the thing being judged, and a
+     sticky column that is no longer a column is just something in the way. */
+  .reel-preview {
+    position: static;
+    order: -1;
+    max-width: 260px;
+  }
+
+  .reel-done {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 520px) {
+  .reel-trim {
+    grid-template-columns: 96px minmax(0, 1fr);
+  }
+
+  .reel-caption-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* Purchase lines that were logged as spend but never moved stock, because the
+   item they name has no material row. The pill marks the row, the button
+   opens the one-line form that gives it one — see handleCatalogItem in
+   src/pages/ops/shared/WeeklyPurchasing.tsx. Amber rather than red: the buy
+   itself is recorded correctly, it just isn't finished. */
+.purch-uncat-banner {
+  margin: 12px 0 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: #fff8e6;
+  border: 1px solid #f0d795;
+  color: #7a5b06;
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.purch-uncat-pill {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #fff1cc;
+  color: #7a5b06;
+  font-size: 0.66rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  vertical-align: middle;
+}
+
+.purch-uncat-btn {
+  margin-top: 4px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--color-ember-dark);
+  font-size: 0.76rem;
+  font-weight: 700;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.purch-uncat-row > td {
+  background: #fffaf0;
+}
+
+.purch-uncat-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px;
+}
+
+.purch-uncat-form span {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.76rem;
+  font-weight: 700;
+  color: var(--color-text-soft);
+}
+
+.purch-uncat-form input {
+  min-width: 160px;
+}
+
+/* The two endings for an ad hoc line, as a segmented pair rather than a
+   dropdown: they are different enough in consequence that the one being
+   chosen should be readable from across the counter. */
+.purch-uncat-modes {
+  display: inline-flex;
+  margin-bottom: 12px;
+  border: 1px solid #f0d795;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.purch-uncat-modes button {
+  padding: 6px 12px;
+  border: none;
+  background: transparent;
+  color: #7a5b06;
+  font-size: 0.76rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.purch-uncat-modes button + button {
+  border-left: 1px solid #f0d795;
+}
+
+.purch-uncat-modes button.is-active {
+  background: #fff1cc;
+  color: #5e4605;
+}
+
+/* Suggested matches for the typed name — see loadMatchSuggestions in
+   src/pages/ops/shared/WeeklyPurchasing.tsx. Each is a plain unselected
+   option until clicked: nothing here is pre-picked, because the click moves
+   stock onto a real count. */
+.purch-match-caption {
+  margin: 0 0 6px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--color-text-soft);
+}
+
+.purch-match-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0 0 12px;
+  padding: 0;
+  list-style: none;
+}
+
+.purch-match-option {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--color-border, #e2ddd4);
+  border-radius: 8px;
+  background: #fff;
+  text-align: left;
+  cursor: pointer;
+}
+
+.purch-match-option:hover {
+  border-color: #e0c78a;
+}
+
+.purch-match-option.is-chosen {
+  border-color: var(--color-ember-dark);
+  box-shadow: inset 0 0 0 1px var(--color-ember-dark);
+}
+
+.purch-match-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.85rem;
+  font-weight: 700;
+}
+
+.purch-match-meta {
+  font-size: 0.74rem;
+  color: var(--color-text-soft);
+}
+
+/* Traffic-light on the model's own confidence, so a "low" is visibly a
+   suggestion to check rather than an answer. */
+.purch-match-conf {
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 0.62rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.purch-match-conf-high {
+  background: #e3f4e6;
+  color: #1f6b34;
+}
+
+.purch-match-conf-medium {
+  background: #fff1cc;
+  color: #7a5b06;
+}
+
+.purch-match-conf-low {
+  background: #efece7;
+  color: #6b6459;
 }

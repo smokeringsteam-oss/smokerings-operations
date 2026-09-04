@@ -1,25 +1,28 @@
 import { useState } from 'react';
 import B2BClients from './B2BClients';
+import B2BSales from './B2BSales';
 import SmokingSession from '../shared/SmokingSession';
 import WeeklyPurchasing from '../shared/WeeklyPurchasing';
-import OrderPacking from '../shared/OrderPacking';
 
 // The other dashboard under Ops (see OpsDashboard.tsx, which owns the sidebar
 // ids). Landing page of module "boxes", exactly like the B2C Dashboard.
-type B2BModule = 'home' | 'clients' | 'weeklyPurchasing' | 'smoking' | 'orderPacking';
+type B2BModule = 'home' | 'clients' | 'sales' | 'weeklyPurchasing' | 'smoking';
 
 // The B2B side of the business: wholesale/corporate accounts rather than the
-// weekend consumer orders the B2C dashboard runs. Clients is the account book
-// with its meat demand and the Sampling/Onboarding stages (see
-// B2BClients.tsx); the other three are the same components the B2C dashboard
-// runs, handed channel="B2B". That's the whole difference: B2B purchases,
-// cooks and orders go through identical flows into the same purchase_log.csv,
-// smoking_log.csv and Kitchen/order_lifecycle_log.csv, each row tagged with
-// the channel so the two sides can still be told apart and totalled apart.
-// What the channel changes is narrow and per-module — which purchases the
-// spend panel counts (server/ops/shared/purchasing.js), what a session defaults its
-// purpose to (server/ops/shared/smoking.js), and whose orders the packing board fetches
-// and how they group (server/integrations/odoo.js fetchOrderPackingList).
+// weekend consumer orders the B2C dashboard runs. Two modules are B2B's own —
+// Clients, the account book with its meat demand and the Sampling/Onboarding
+// stages (B2BClients.tsx), and Sales & Payments, the revenue and receivables
+// book behind it (B2BSales.tsx), which exists here and not on the B2C side
+// because only wholesale gets paid on a cycle rather than at checkout. The
+// other two are the same components the B2C dashboard runs, handed
+// channel="B2B". That's the whole difference: B2B purchases and
+// cooks go through identical flows into the same purchase_log.csv and
+// smoking_log.csv, each row tagged with the channel so the two sides can
+// still be told apart and totalled apart. What the channel changes is narrow
+// and per-module — which purchases the spend panel counts
+// (server/ops/shared/purchasing.js) and what a session defaults its purpose to
+// (server/ops/shared/smoking.js). Orders are not run from here: the packing
+// board lives on the B2C dashboard only.
 const MODULES: { id: B2BModule; label: string; icon: string; stage: string; description: string }[] = [
   {
     id: 'clients',
@@ -46,12 +49,12 @@ const MODULES: { id: B2BModule; label: string; icon: string; stage: string; desc
       'Sample trays and practice cooks for B2B accounts, through the same brine → rub → smoke → rest → shred stages as the weekend service. Every stage change is logged.',
   },
   {
-    id: 'orderPacking',
-    label: 'Order Packing',
-    icon: '📦',
-    stage: 'Serve',
+    id: 'sales',
+    label: 'Sales & Payments',
+    icon: '💰',
+    stage: 'Money',
     description:
-      'Confirmed wholesale orders grouped by delivery day, with the same IN_SMOKER → DELIVERED pipeline and invoicing the weekend board uses. Every status change is logged with its timestamp.',
+      'What each account was billed and what has actually come in. Every delivery is due 15 days later by default, so the list doubles as the chase sheet: overdue first, longest overdue at the top.',
   },
 ];
 
@@ -62,12 +65,12 @@ const B2BDashboard = () => {
     switch (openModule) {
       case 'clients':
         return <B2BClients />;
+      case 'sales':
+        return <B2BSales />;
       case 'weeklyPurchasing':
         return <WeeklyPurchasing channel="B2B" />;
       case 'smoking':
         return <SmokingSession channel="B2B" />;
-      case 'orderPacking':
-        return <OrderPacking channel="B2B" />;
       default:
         return null;
     }

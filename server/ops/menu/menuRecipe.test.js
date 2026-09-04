@@ -19,10 +19,9 @@ const MENU_ITEMS = [
     item_id: 'chicken-bbq-burger',
     item_name: 'Signature Pulled Chicken BBQ Burger',
     portion_size: 120,
-    portion_unit: 'g',
     price_inr: 349,
   },
-  { item_id: 'chicken-tacos', item_name: 'Smoked Chicken Tacos', portion_size: 150, portion_unit: 'g', price_inr: 399 },
+  { item_id: 'chicken-tacos', item_name: 'Smoked Chicken Tacos', portion_size: 150, price_inr: 399 },
 ];
 
 const RECIPES = [
@@ -30,16 +29,18 @@ const RECIPES = [
   { item_id: 'SR-015', recipe_name: 'BBQ sauce' },
 ];
 
-const MATERIALS = [{ item_id: 'RM-043', item_name: 'Aluminium foil', unit_of_measure: 'roll' }];
+const MATERIALS = [{ item_id: 'RM-043', item_name: 'Aluminium foil' }];
 
 // Trimmed to the lines the editor touches. MRI-009 is the awkward one on
-// purpose: bought in sheets, stocked by the roll, so its two quantity columns
-// are in different units and cannot be derived from one another.
+// purpose: its two quantity columns are separate figures (base_is_separate),
+// so neither can be derived from the other. MRI-001 is the other awkward one
+// — two numbers that are NOT separate, just out of step, which is exactly the
+// drift the editor exists to re-link.
 const BOM_LINES = [
-  { line_id: 'MRI-001', parent_id: 'chicken-bbq-burger', child_id: 'IP-001', quantity: 110, unit: 'g', base_quantity: 120, base_unit: 'g' },
-  { line_id: 'MRI-002', parent_id: 'chicken-bbq-burger', child_id: 'SR-015', quantity: 30, unit: 'ml', base_quantity: 30, base_unit: 'ml' },
-  { line_id: 'MRI-009', parent_id: 'chicken-bbq-burger', child_id: 'RM-043', quantity: 2, unit: 'sheets', base_quantity: 0.0667, base_unit: 'roll', notes: 'Converted with UC-022' },
-  { line_id: 'MRI-021', parent_id: 'chicken-tacos', child_id: 'IP-001', quantity: 100, unit: 'g', base_quantity: 150, base_unit: 'g' },
+  { line_id: 'MRI-001', parent_id: 'chicken-bbq-burger', child_id: 'IP-001', quantity: 110, base_quantity: 120 },
+  { line_id: 'MRI-002', parent_id: 'chicken-bbq-burger', child_id: 'SR-015', quantity: 30, base_quantity: 30 },
+  { line_id: 'MRI-009', parent_id: 'chicken-bbq-burger', child_id: 'RM-043', quantity: 2, base_quantity: 0.0667, base_is_separate: 1, notes: 'Two figures, kept apart' },
+  { line_id: 'MRI-021', parent_id: 'chicken-tacos', child_id: 'IP-001', quantity: 100, base_quantity: 150 },
 ];
 
 const { dir } = createTestDb({
@@ -70,8 +71,8 @@ describe('getMenuItemRecipe', () => {
     expect(lines.map((l) => l.lineId)).toEqual(['MRI-001', 'MRI-002', 'MRI-009']);
     expect(lines.map((l) => l.group)).toEqual(['meat', 'side', 'material']);
     // base_quantity wins, which is exactly the trap the editor exists to fix.
-    expect(lines[0]).toMatchObject({ quantity: 110, plannerQuantity: 120, unitsMatch: true });
-    expect(lines[2]).toMatchObject({ quantity: 2, unit: 'sheets', plannerQuantity: 0.0667, unitsMatch: false });
+    expect(lines[0]).toMatchObject({ quantity: 110, plannerQuantity: 120, amountsLinked: true });
+    expect(lines[2]).toMatchObject({ quantity: 2, plannerQuantity: 0.0667, amountsLinked: false });
   });
 
   it('derives child_type from what the child actually is', () => {
@@ -89,7 +90,7 @@ describe('getMenuItemRecipe', () => {
 });
 
 describe('updateMenuItemRecipe', () => {
-  it('writes both quantity columns when the units match', () => {
+  it('writes both quantity columns on a linked line', () => {
     const result = updateMenuItemRecipe({
       menuId: 'chicken-bbq-burger',
       edits: [{ lineId: 'MRI-001', quantity: 110 }],
@@ -104,13 +105,13 @@ describe('updateMenuItemRecipe', () => {
       edits: [{ lineId: 'MRI-001', quantity: 110 }],
     });
     expect(menuRowFor('chicken-bbq-burger').portion_size).toBe(110);
-    expect(result.notes.join(' ')).toMatch(/portion size updated 120 → 110 g/i);
+    expect(result.notes.join(' ')).toMatch(/portion size updated 120 → 110/i);
     // A side is not a portion claim, so it leaves the menu row alone.
     updateMenuItemRecipe({ menuId: 'chicken-bbq-burger', edits: [{ lineId: 'MRI-002', quantity: 40 }] });
     expect(menuRowFor('chicken-bbq-burger').portion_size).toBe(110);
   });
 
-  it('keeps a unit-converting line unless the stock figure is given too', () => {
+  it('keeps a separate-figure line unless the planner number is given too', () => {
     updateMenuItemRecipe({ menuId: 'chicken-bbq-burger', edits: [{ lineId: 'MRI-009', quantity: 3 }] });
     expect(lineFor('MRI-009')).toMatchObject({ quantity: 3, base_quantity: 0.0667 });
 
@@ -119,7 +120,7 @@ describe('updateMenuItemRecipe', () => {
       edits: [{ lineId: 'MRI-009', quantity: 3, baseQuantity: 0.1 }],
     });
     expect(lineFor('MRI-009')).toMatchObject({ quantity: 3, base_quantity: 0.1 });
-    expect(result.notes.join(' ')).toMatch(/stocked in roll/);
+    expect(result.notes.join(' ')).toMatch(/separate planner figure/);
   });
 
   it('clears both columns when a quantity is blanked (to taste)', () => {
@@ -152,7 +153,7 @@ describe('updateMenuItemRecipe', () => {
     // The CSV version of this checked the file was still CRLF and the foil
     // row byte-identical. The point was that a one-line save must not disturb
     // anything else, which is what is asserted here directly.
-    expect(lineFor('MRI-009')).toMatchObject({ quantity: 2, base_quantity: 0.0667, notes: 'Converted with UC-022' });
+    expect(lineFor('MRI-009')).toMatchObject({ quantity: 2, base_quantity: 0.0667, notes: 'Two figures, kept apart' });
     expect(lineFor('MRI-002')).toMatchObject({ quantity: 30, base_quantity: 30 });
     expect(lineFor('MRI-021')).toMatchObject({ quantity: 100, base_quantity: 150 });
   });

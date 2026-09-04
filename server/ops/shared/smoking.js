@@ -325,14 +325,14 @@ function completeRub({ sessionId, rubRecipe, rubStart, rubEnd }) {
 // in JavaScript: it is the same arithmetic, but it only touches the sessions
 // that actually claimed one of these lots.
 //
-// It also has to be done in one unit, and raw_weight_kg only ever speaks kg.
-// That is fine for a lot bought by weight, where quantity_purchased is kg
-// already, and wrong for one bought by the piece: four whole chickens minus a
-// 1.6 kg cook is not "2.4 birds left". So a lot that records what one piece
-// weighs is converted to kg first and reports `remaining` in kg;
-// `remaining_unit` says which of the two the number is in, since the picker
-// prints it. A piece-bought lot logged before anyone weighed it has no
-// conversion available and stays on the old, honest-but-blunt count.
+// The subtraction also has to be done in one scale, and raw_weight_kg only
+// ever speaks kg. That is fine for a lot bought by weight, where
+// quantity_purchased is kg already, and wrong for one bought by the piece:
+// four whole chickens minus a 1.6 kg cook is not "2.4 birds left". So a lot
+// that records what one piece weighs is multiplied out to kg first, and
+// `remaining_in_kg` flags which of the two the number is, since the picker
+// prints it. A piece-bought lot logged before anyone weighed it has no piece
+// weight to multiply by and stays on the old, honest-but-blunt count.
 function getAvailablePurchasesForMaterial(materialId, { excludeSessionId } = {}) {
   if (!materialId) return [];
   return all(
@@ -340,15 +340,13 @@ function getAvailablePurchasesForMaterial(materialId, { excludeSessionId } = {})
             p.purchase_date,
             coalesce(v.vendor_name, '')    AS vendor_name,
             p.quantity_purchased,
-            coalesce(p.unit_of_measure, '') AS unit_of_measure,
             p.weight_per_unit_kg,
             round(p.quantity_purchased * coalesce(p.weight_per_unit_kg, 1) - coalesce(
               (SELECT sum(s.raw_weight_kg)
                  FROM smoking_session s
                 WHERE s.source_purchase_id = p.purchase_id
                   AND s.session_id <> coalesce(?, '')), 0), 2) AS remaining,
-            CASE WHEN p.weight_per_unit_kg IS NOT NULL THEN 'kg'
-                 ELSE coalesce(p.unit_of_measure, '') END      AS remaining_unit
+            p.weight_per_unit_kg IS NOT NULL AS remaining_in_kg
        FROM purchase p
        LEFT JOIN vendor v ON v.vendor_id = p.vendor_id
       WHERE p.material_id = ?
@@ -391,7 +389,6 @@ function getTaggablePurchases(sessionId, { days = TAGGABLE_PURCHASE_LOOKBACK_DAY
             coalesce(v.vendor_name, '')     AS vendor_name,
             p.item_name,
             p.quantity_purchased,
-            coalesce(p.unit_of_measure, '') AS unit_of_measure,
             p.total_cost,
             coalesce(p.client_name, '')     AS client_name,
             -- Already pointing at this session — the UI starts these ticked,
@@ -465,7 +462,11 @@ function startSmoking({ sessionId, rawWeightKg, smokingStart, sourcePurchaseId, 
       throw err;
     }
     if (purchase.remaining < weight) {
-      purchaseWarning = `${sourcePurchaseId} only has ${purchase.remaining}${purchase.unit_of_measure || 'kg'} left on file, but ${weight}kg was logged against it — check the purchase log.`;
+      // `remaining` is only in kg when the lot has a piece weight to
+      // multiply by (or was bought by weight to begin with); otherwise it is
+      // a bare count, so it is reported without a kg that would be a lie.
+      const remainingText = purchase.remaining_in_kg ? `${purchase.remaining}kg` : `${purchase.remaining}`;
+      purchaseWarning = `${sourcePurchaseId} only has ${remainingText} left on file, but ${weight}kg was logged against it — check the purchase log.`;
     }
   } else if (available.length) {
     const err = new Error(

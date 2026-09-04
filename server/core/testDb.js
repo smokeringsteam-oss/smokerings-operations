@@ -34,7 +34,6 @@ CREATE TABLE item (
   item_id   TEXT PRIMARY KEY,
   kind      TEXT NOT NULL,
   name      TEXT NOT NULL,
-  uom_code  TEXT,
   is_active INTEGER,
   notes     TEXT
 );
@@ -63,7 +62,6 @@ CREATE TABLE inventory_adjustment (
   material_id      TEXT,
   item_name        TEXT,
   quantity         REAL,
-  unit_of_measure  TEXT,
   reason           TEXT,
   created_at       TEXT
 );
@@ -74,7 +72,6 @@ CREATE TABLE menu_item (
   protein         TEXT,
   main_product_id TEXT,
   portion_size    REAL,
-  portion_unit    TEXT,
   price_inr       REAL,
   currency        TEXT,
   channel         TEXT,
@@ -87,9 +84,7 @@ CREATE TABLE recipe (
   kind                   TEXT,
   source_material_id     TEXT,
   output_quantity        REAL,
-  output_unit            TEXT,
   portion_size           REAL,
-  portion_unit           TEXT,
   portions_per_batch     REAL,
   yield_pct              REAL,
   raw_weight_per_piece_g REAL,
@@ -112,12 +107,11 @@ CREATE TABLE bom_line (
   parent_id     TEXT NOT NULL REFERENCES item(item_id),
   child_id      TEXT NOT NULL REFERENCES item(item_id),
   quantity      REAL,
-  unit          TEXT,
   base_quantity REAL,
-  base_unit     TEXT,
   is_to_taste   INTEGER DEFAULT 0,
   status        TEXT,
-  notes         TEXT
+  notes         TEXT,
+  base_is_separate INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE b2b_client (
@@ -146,7 +140,10 @@ CREATE TABLE b2b_client (
   odoo_partner_id  INTEGER,
   notes            TEXT,
   created_at       TEXT NOT NULL DEFAULT (datetime('now')),
-  updated_at       TEXT NOT NULL DEFAULT (datetime('now'))
+  updated_at       TEXT NOT NULL DEFAULT (datetime('now')),
+  payment_terms_days INTEGER NOT NULL DEFAULT 15 CHECK (payment_terms_days >= 0),
+  odoo_pricelist_id   INTEGER,
+  odoo_pricelist_name TEXT
 );
 
 -- The CHECK and the CASCADE are carried over from the real schema on
@@ -163,38 +160,42 @@ CREATE TABLE b2b_client_demand (
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
-CREATE TABLE aiseo_prompt (
-  prompt_id   TEXT PRIMARY KEY,
-  prompt_text TEXT NOT NULL,
-  intent      TEXT,
-  is_active   INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0,1)),
-  created_at  TEXT
+-- Every CHECK here is carried over from the real schema on purpose: they are
+-- the guards b2bSales.js leans on rather than re-deriving (an overpayment, a
+-- due date before the delivery, a settled flag on a part-paid invoice), and a
+-- fixture that dropped them would let a regression in any of the three pass.
+CREATE TABLE b2b_sale (
+  sale_id         TEXT PRIMARY KEY,
+  client_id       TEXT NOT NULL REFERENCES b2b_client(client_id) ON DELETE CASCADE,
+  delivered_on    TEXT NOT NULL,
+  amount_inr      REAL NOT NULL CHECK (amount_inr > 0),
+  payment_due_on  TEXT NOT NULL,
+  amount_paid_inr REAL NOT NULL DEFAULT 0 CHECK (amount_paid_inr >= 0),
+  paid_on         TEXT,
+  invoice_number  TEXT,
+  order_ref       TEXT,
+  notes           TEXT,
+  created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at      TEXT NOT NULL DEFAULT (datetime('now')),
+  odoo_invoice_id    INTEGER,
+  odoo_invoice_state TEXT,
+  odoo_access_token  TEXT,
+  odoo_error         TEXT,
+  CONSTRAINT b2b_sale_not_overpaid CHECK (amount_paid_inr <= amount_inr),
+  CONSTRAINT b2b_sale_due_after_delivery CHECK (payment_due_on >= delivered_on),
+  CONSTRAINT b2b_sale_paid_in_full CHECK (paid_on IS NULL OR amount_paid_inr >= amount_inr)
 );
 
--- The CHECKs and the SET NULL are carried over from the real schema for the
--- same reason the b2b ones above are: aiSeo.js reconciles a rank against its
--- total specifically to satisfy that constraint, and deleting a prompt is
--- meant to leave its runs behind with the id cleared. A fixture without them
--- would pass whatever those code paths did.
-CREATE TABLE aiseo_run (
-  run_id           TEXT PRIMARY KEY,
-  prompt_id        TEXT REFERENCES aiseo_prompt(prompt_id) ON DELETE SET NULL,
-  prompt_text      TEXT,
-  engine           TEXT,
-  source           TEXT,
-  ran_at           TEXT,
-  mentioned        INTEGER CHECK (mentioned IN (0,1)),
-  position         INTEGER CHECK (position IS NULL OR position > 0),
-  total_brands     INTEGER CHECK (total_brands IS NULL OR total_brands >= 0),
-  sentiment        TEXT,
-  framing          TEXT,
-  competitors      TEXT,
-  citation_domains TEXT,
-  citation_urls    TEXT,
-  recommendation   TEXT,
-  answer_excerpt   TEXT,
-  CONSTRAINT aiseo_position_within_total
-    CHECK (position IS NULL OR total_brands IS NULL OR position <= total_brands)
+CREATE TABLE b2b_sale_line (
+  line_id         TEXT PRIMARY KEY,
+  sale_id         TEXT NOT NULL REFERENCES b2b_sale(sale_id) ON DELETE CASCADE,
+  position        INTEGER NOT NULL DEFAULT 0,
+  odoo_product_id INTEGER,
+  description     TEXT NOT NULL,
+  unit_label      TEXT,
+  quantity        REAL NOT NULL CHECK (quantity > 0),
+  unit_price      REAL NOT NULL CHECK (unit_price >= 0),
+  line_total      REAL NOT NULL CHECK (line_total >= 0)
 );
 
 -- The purchasing and smoking side. The foreign keys here are the point of
@@ -231,7 +232,6 @@ CREATE TABLE purchase (
   material_id        TEXT REFERENCES item(item_id),
   item_name          TEXT NOT NULL,
   quantity_purchased REAL NOT NULL CHECK (quantity_purchased > 0),
-  unit_of_measure    TEXT,
   unit_price         REAL,
   total_cost         REAL,
   currency           TEXT NOT NULL DEFAULT 'INR',
@@ -362,6 +362,49 @@ CREATE TABLE side_prep_log (
   source        TEXT
 );
 
+-- The marketing spend ledger. The CHECKs are the two the store leans on
+-- rather than re-deriving: the category list (a typo'd category would start
+-- its own bucket in the ROI rollup) and the period ordering (a backwards
+-- period takes a negative share of itself into every overlap sum).
+CREATE TABLE marketing_budget (
+  budget_id    TEXT PRIMARY KEY,
+  period_start TEXT NOT NULL,
+  period_end   TEXT NOT NULL,
+  channel      TEXT NOT NULL,
+  campaign     TEXT,
+  category     TEXT NOT NULL DEFAULT 'ads'
+                    CHECK (category IN ('ads','commission','influencer','print','event','tooling','other')),
+  amount_inr   REAL NOT NULL CHECK (amount_inr >= 0),
+  vendor       TEXT,
+  notes        TEXT,
+  source       TEXT NOT NULL DEFAULT 'manual',
+  created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at   TEXT NOT NULL DEFAULT (datetime('now')),
+  CONSTRAINT marketing_budget_period_order CHECK (period_end >= period_start)
+);
+
+-- The published tracked links and QR codes. The unique index is carried over
+-- from the real schema rather than left out, because the store's save-is-an
+-- -upsert behaviour is exactly what the tests exercise, and without the
+-- index a bug that saved a duplicate would pass here and fail in production.
+CREATE TABLE marketing_link (
+  link_id      TEXT PRIMARY KEY,
+  label        TEXT,
+  destination  TEXT NOT NULL,
+  utm_source   TEXT NOT NULL,
+  utm_medium   TEXT,
+  utm_campaign TEXT,
+  utm_content  TEXT,
+  utm_term     TEXT,
+  notes        TEXT,
+  created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at   TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE UNIQUE INDEX marketing_link_placement_idx ON marketing_link(
+  destination, utm_source, ifnull(utm_medium, ''), ifnull(utm_campaign, ''), ifnull(utm_content, '')
+);
+
 CREATE TABLE scheduled_task (
   task_id           TEXT PRIMARY KEY,
   day               TEXT NOT NULL,
@@ -406,17 +449,17 @@ function createTestDb({
   // the projections in kbViews join the two. A fixture that set up only the
   // subject row would read back as an empty result, which looks like a broken
   // query rather than a broken fixture.
-  const addItem = (id, kind, name, uom) =>
+  const addItem = (id, kind, name) =>
     db
-      .prepare('INSERT OR IGNORE INTO item (item_id, kind, name, uom_code, is_active) VALUES (?, ?, ?, ?, 1)')
-      .run(id, kind, name, uom ?? null);
+      .prepare('INSERT OR IGNORE INTO item (item_id, kind, name, is_active) VALUES (?, ?, ?, 1)')
+      .run(id, kind, name);
 
   // Seeded as item + material pairs, the way the real loader does it, so a
   // fixture can't accidentally describe a material with no item row — which
   // the catalogue's inner join would then drop, for reasons that would take a
   // while to find.
   materials.forEach((m) => {
-    addItem(m.item_id, m.kind || 'raw_material', m.item_name || m.item_id, m.unit_of_measure || 'kg');
+    addItem(m.item_id, m.kind || 'raw_material', m.item_name || m.item_id);
     db.prepare(
       'INSERT INTO material (item_id, category, quantity_on_hand, reorder_level, standard_cost_inr, order_multiple, default_vendor_id) VALUES (?, ?, ?, ?, ?, ?, ?)',
     ).run(
@@ -431,14 +474,13 @@ function createTestDb({
   });
 
   menuItems.forEach((mi) => {
-    addItem(mi.item_id, 'menu_item', mi.item_name || mi.item_id, null);
+    addItem(mi.item_id, 'menu_item', mi.item_name || mi.item_id);
     db.prepare(
-      'INSERT INTO menu_item (item_id, category, portion_size, portion_unit, price_inr, currency, channel, description, odoo_product_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      'INSERT INTO menu_item (item_id, category, portion_size, price_inr, currency, channel, description, odoo_product_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
     ).run(
       mi.item_id,
       mi.category ?? null,
       mi.portion_size ?? null,
-      mi.portion_unit ?? null,
       mi.price_inr ?? null,
       mi.currency ?? 'INR',
       mi.channel ?? 'B2C',
@@ -451,14 +493,13 @@ function createTestDb({
     // 'intermediate' for an IP-xxx smoked product, 'sub_recipe' for anything
     // else — the same split item.kind carries in the real database, and what
     // kbViews turns back into recipe_lines' child_type.
-    addItem(r.item_id, r.kind === 'intermediate' ? 'intermediate' : 'sub_recipe', r.recipe_name || r.item_id, null);
+    addItem(r.item_id, r.kind === 'intermediate' ? 'intermediate' : 'sub_recipe', r.recipe_name || r.item_id);
     db.prepare(
-      'INSERT INTO recipe (item_id, kind, output_quantity, output_unit, source_material_id, yield_pct) VALUES (?, ?, ?, ?, ?, ?)',
+      'INSERT INTO recipe (item_id, kind, output_quantity, source_material_id, yield_pct) VALUES (?, ?, ?, ?, ?)',
     ).run(
       r.item_id,
       r.recipe_kind ?? null,
       r.output_quantity ?? null,
-      r.output_unit ?? null,
       r.source_material_id ?? null,
       r.yield_pct ?? null,
     );
@@ -466,18 +507,17 @@ function createTestDb({
 
   bomLines.forEach((b) => {
     db.prepare(
-      'INSERT INTO bom_line (line_id, parent_id, child_id, quantity, unit, base_quantity, base_unit, is_to_taste, status, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      'INSERT INTO bom_line (line_id, parent_id, child_id, quantity, base_quantity, is_to_taste, status, notes, base_is_separate) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
     ).run(
       b.line_id,
       b.parent_id,
       b.child_id,
       b.quantity ?? null,
-      b.unit ?? null,
       b.base_quantity ?? null,
-      b.base_unit ?? null,
       b.is_to_taste ? 1 : 0,
       b.status ?? 'ok',
       b.notes ?? null,
+      b.base_is_separate ? 1 : 0,
     );
   });
 
@@ -493,8 +533,8 @@ function createTestDb({
     db.prepare(
       `INSERT INTO purchase (purchase_id, purchase_date, channel, client_id, client_name, smoking_session_id,
                              vendor_id, item_type, material_id, item_name, quantity_purchased,
-                             unit_of_measure, unit_price, total_cost, weight_per_unit_kg)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                             unit_price, total_cost, weight_per_unit_kg)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
       p.purchase_id,
       p.purchase_date,
@@ -507,7 +547,6 @@ function createTestDb({
       p.material_id ?? null,
       p.item_name,
       p.quantity_purchased,
-      p.unit_of_measure ?? null,
       p.unit_price ?? null,
       p.total_cost ?? null,
       p.weight_per_unit_kg ?? null,

@@ -32,7 +32,7 @@ const VENDORS = [
 // moves stock — and the kg comes from weight_per_unit_kg beside it.
 const MATERIALS = [
   { item_id: 'RM-001', item_name: 'Pork shoulder', category: 'Meat', quantity_on_hand: 0 },
-  { item_id: 'RM-047', item_name: 'Whole chicken', category: 'Meat', unit_of_measure: 'pcs', quantity_on_hand: 0 },
+  { item_id: 'RM-047', item_name: 'Whole chicken', category: 'Meat', quantity_on_hand: 0 },
 ];
 
 const PURCHASES = [
@@ -44,7 +44,6 @@ const PURCHASES = [
     material_id: 'RM-001',
     item_name: 'Pork shoulder',
     quantity_purchased: 10,
-    unit_of_measure: 'kg',
     unit_price: 400,
     total_cost: 4000,
   },
@@ -57,7 +56,6 @@ const PURCHASES = [
     vendor_id: 'VEN-002',
     item_name: 'Butcher paper',
     quantity_purchased: 50,
-    unit_of_measure: 'pcs',
     unit_price: 4,
     total_cost: 200,
   },
@@ -69,7 +67,6 @@ const PURCHASES = [
     material_id: 'RM-001',
     item_name: 'Pork shoulder',
     quantity_purchased: 5,
-    unit_of_measure: 'kg',
     unit_price: 400,
     total_cost: 2000,
   },
@@ -145,7 +142,6 @@ describe('tagPurchasesToSession', () => {
         {
           materialId: 'RM-001',
           itemName: 'Pork shoulder',
-          unit: 'kg',
           quantity: 4,
           unitPrice: 400,
           clientId: 'CLI-009',
@@ -227,13 +223,12 @@ describe('recordPurchases client tag', () => {
         {
           materialId: 'RM-001',
           itemName: 'Pork shoulder',
-          unit: 'kg',
           quantity: 6,
           unitPrice: 400,
           clientId: 'CLI-001',
           clientName: 'Taj Hotel',
         },
-        { itemName: 'Butcher paper', unit: 'pcs', quantity: 20, unitPrice: 4 },
+        { itemName: 'Butcher paper', quantity: 20, unitPrice: 4 },
       ],
     });
 
@@ -260,7 +255,6 @@ describe('recordPurchases client tag', () => {
         {
           materialId: 'RM-001',
           itemName: 'Pork shoulder',
-          unit: 'kg',
           quantity: 3,
           unitPrice: 400,
           clientId: 'CLI-001',
@@ -280,7 +274,7 @@ describe('recordPurchases client tag', () => {
       recordPurchases({
         vendorName: 'Some Bloke At The Market',
         channel: 'B2C',
-        lines: [{ itemName: 'Charcoal', unit: 'kg', quantity: 10, unitPrice: 30 }],
+        lines: [{ itemName: 'Charcoal', quantity: 10, unitPrice: 30 }],
       }),
     ).toThrow(/No vendor called/);
   });
@@ -291,7 +285,7 @@ describe('recordPurchases client tag', () => {
       purchaseDate: '2026-08-18',
       channel: 'B2B',
       lines: [
-        { materialId: 'RM-047', itemName: 'Whole chicken', unit: 'pcs', quantity: 4, unitPrice: 450, weightPerUnitKg: 1.6 },
+        { materialId: 'RM-047', itemName: 'Whole chicken', quantity: 4, unitPrice: 450, weightPerUnitKg: 1.6 },
       ],
     });
 
@@ -300,7 +294,6 @@ describe('recordPurchases client tag', () => {
     // birds' worth of money, not four kilos' worth.
     expect(purchases[0]).toMatchObject({
       quantity_purchased: 4,
-      unit_of_measure: 'pcs',
       unit_price: 450,
       total_cost: 1800,
       weight_per_unit_kg: 1.6,
@@ -315,7 +308,7 @@ describe('recordPurchases client tag', () => {
       vendorName: 'Pork Shop',
       purchaseDate: '2026-08-18',
       channel: 'B2B',
-      lines: [{ materialId: 'RM-047', itemName: 'Whole chicken', unit: 'pcs', quantity: 4, unitPrice: 450 }],
+      lines: [{ materialId: 'RM-047', itemName: 'Whole chicken', quantity: 4, unitPrice: 450 }],
     });
 
     // Same reason the price below can be blank: unweighed is a real answer,
@@ -330,7 +323,7 @@ describe('recordPurchases client tag', () => {
         purchaseDate: '2026-08-18',
         channel: 'B2B',
         lines: [
-          { materialId: 'RM-047', itemName: 'Whole chicken', unit: 'pcs', quantity: 4, unitPrice: 450, weightPerUnitKg: 0 },
+          { materialId: 'RM-047', itemName: 'Whole chicken', quantity: 4, unitPrice: 450, weightPerUnitKg: 0 },
         ],
       }),
     ).toThrow(/Weight of one Whole chicken/);
@@ -341,7 +334,7 @@ describe('recordPurchases client tag', () => {
       vendorName: 'Pork Shop',
       purchaseDate: '2026-08-18',
       channel: 'B2C',
-      lines: [{ materialId: 'RM-001', itemName: 'Pork shoulder', unit: 'kg', quantity: 2 }],
+      lines: [{ materialId: 'RM-001', itemName: 'Pork shoulder', quantity: 2 }],
     });
 
     // Blank, not 0: the meat was bought, the bill hasn't arrived, and a zero

@@ -12,12 +12,12 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 // fields above it — two different files, two different blast radii.
 //
 // The one non-obvious thing it hides: a line stores its amount twice, as
-// quantity/unit and as base_quantity/base_unit (normalised to how the item is
-// stocked), and the planners read the base column. For meat and sides the two
-// units are the same, so the row shows one input and the server writes both.
-// For a real conversion — foil counted in sheets, stocked in rolls — both are
-// shown, since guessing the conversion is how a shopping list ends up asking
-// for 30 rolls of foil. See server/ops/menu/menuRecipe.js.
+// `quantity` and `baseQuantity`, and the planners read the base one. For meat
+// and sides the two are one amount said twice, so the row shows a single input
+// and the server writes both. Where a line is flagged as carrying two separate
+// figures — foil counted one way and planned another — both are shown, since
+// deriving one from the other is how a shopping list ends up asking for 30
+// rolls of foil. See server/ops/menu/menuRecipe.js.
 
 type RecipeGroup = 'meat' | 'side' | 'material';
 
@@ -28,12 +28,9 @@ type RecipeLine = {
   childType: string;
   group: RecipeGroup;
   quantity: number | null;
-  unit: string;
   baseQuantity: number | null;
-  baseUnit: string;
-  unitsMatch: boolean;
+  amountsLinked: boolean;
   plannerQuantity: number | null;
-  plannerUnit: string;
   isToTaste: boolean;
   status: string;
   notes: string;
@@ -152,10 +149,10 @@ const MenuItemRecipe: React.FC<{
         return {
           lineId,
           quantity: draft.quantity !== undefined ? draft.quantity : asText(line.quantity),
-          // Only sent for a converting line: on a matching-unit line the
-          // server derives the base column from the quantity, which is the
-          // whole point of the single input.
-          ...(line.unitsMatch
+          // Only sent for a line carrying two separate figures: on a linked
+          // line the server derives the base column from the quantity, which
+          // is the whole point of the single input.
+          ...(line.amountsLinked
             ? {}
             : { baseQuantity: draft.baseQuantity !== undefined ? draft.baseQuantity : asText(line.baseQuantity) }),
         };
@@ -251,7 +248,7 @@ const MenuItemRecipe: React.FC<{
                     // nothing, so it's called out on the row rather than left
                     // to be discovered on a Friday.
                     const drifted =
-                      line.unitsMatch && line.plannerQuantity != null && line.plannerQuantity !== line.quantity;
+                      line.amountsLinked && line.plannerQuantity != null && line.plannerQuantity !== line.quantity;
                     return (
                       <div key={line.lineId} className={`menu-recipe-line${isDirty ? ' is-changed' : ''}`}>
                         <span className="menu-recipe-name">
@@ -273,13 +270,12 @@ const MenuItemRecipe: React.FC<{
                               disabled={busy}
                               aria-label={`${line.childName} quantity`}
                             />
-                            <span className="menu-recipe-unit">{line.unit}</span>
                           </label>
 
-                          {/* A genuine unit conversion, so both halves are
-                              stated: what the kitchen counts, and what the
-                              buy list works in. */}
-                          {!line.unitsMatch && (
+                          {/* Two separate figures, so both are stated: what
+                              the kitchen counts, and what the buy list works
+                              in. */}
+                          {!line.amountsLinked && (
                             <label className="menu-recipe-qty is-base">
                               <span className="menu-recipe-arrow" aria-hidden="true">
                                 =
@@ -291,17 +287,16 @@ const MenuItemRecipe: React.FC<{
                                 value={draftValue(line, 'baseQuantity')}
                                 onChange={(e) => setDraft(line, 'baseQuantity', e.target.value)}
                                 disabled={busy}
-                                aria-label={`${line.childName} stock quantity`}
+                                aria-label={`${line.childName} planner quantity`}
                               />
-                              <span className="menu-recipe-unit">{line.baseUnit} (buy list)</span>
+                              <span className="menu-recipe-unit">buy list</span>
                             </label>
                           )}
                         </span>
 
                         {drifted && (
                           <span className="menu-recipe-drift">
-                            planner currently uses {line.plannerQuantity} {line.plannerUnit} — saving this line fixes
-                            it
+                            planner currently uses {line.plannerQuantity} — saving this line fixes it
                           </span>
                         )}
                         {line.notes && <span className="menu-recipe-note">{line.notes}</span>}

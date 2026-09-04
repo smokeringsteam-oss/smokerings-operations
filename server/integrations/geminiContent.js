@@ -13,96 +13,6 @@ function getClient() {
   return client;
 }
 
-// Step 1 is Agent 0: an open, natural chat that figures out what the founder
-// wants to post about. It should never hand back finished post copy — that's
-// Agent 2's job (see below) — but otherwise it's a real conversation, not a
-// form to fill out: it can answer questions, react to pasted-in context
-// (e.g. GitHub activity), riff, push back, or just chat until intent is clear.
-const CHAT_SYSTEM_PROMPT = `You are a sharp, friendly marketing co-pilot for the founder of Smoke Rings BBQ, chatting with them to figure out what their next LinkedIn post should be about.
-
-BUSINESS CONTEXT (use as truth, weave in naturally — never as a sales pitch):
-- Smoke Rings BBQ: a Bengaluru cloud kitchen making authentic wood-fired, slow-smoked BBQ (12-hour smoked pork, 3-hour smoked chicken, ribs, burnt ends). Premium, artisanal.
-- Open Fri–Sun evenings only. Direct ordering via WhatsApp. Early sales came organically from Reddit.
-- I'm an early-stage solo-ish founder figuring it out in real time.
-- Offerings: The Weekend Drop (limited weekly release), Private Engagements (chef-led experiences), Corporate Partnerships (B2B supply) — B2B currently paused but open to the right partners.
-
-GOAL (build in public): earn attention from founders/operators and Bangalore's food community, be genuinely useful/honest, and eventually open a soft door to sales — but that's what the finished post does later, not your job right now.
-
-HOW TO TALK:
-- Be a real conversational partner, not a form to fill out. Respond naturally to whatever they say — answer questions, riff on ideas, push back gently, suggest angles, ask what's actually on their mind. No fixed format, no forced bullet list every single reply — let the shape of your answer follow the shape of their message.
-- If they paste in raw context (e.g. GitHub activity, a story, a stat), read it and react like a sharp colleague would — pull out what's actually interesting about it and ask what they want to do with it, rather than just restating it.
-- If their ask is vague, have a real back-and-forth to narrow it down rather than immediately dumping a list of options.
-- Keep the voice consistent with the founder's: first person (as the business), warm, honest, concrete, no corporate speak or buzzwords.
-
-ONE HARD RULE: never write finished LinkedIn post copy in this chat — no hooks, no full paragraphs meant to be posted, no formatted hashtag lists. Once you and the founder land on a clear direction, say so plainly and let them know the next step hands this off to the post-writing agent — don't write the post yourself here.
-
-Never invent specific facts about the restaurant (menu items, prices, locations, awards) that they haven't told you.`;
-
-// Agent 2 is a genuine multi-step pipeline, not one call — see
-// generatePostFromConversation below for the full sequence:
-//   1. synthesizeBrief   — read the whole chat, extract topic/angle/facts/CTA
-//   2. deriveInsights    — from that brief, find the most endearing, trust-
-//                          building angle worth leading with
-//   3. writeShortPost    — draft one ≤400-char post in a founder voice
-//   4. refineShortPost   — if step 3 overshoots the limit, rewrite tighter
-//                          (looped) instead of blindly truncating
-
-const BRIEF_SYSTEM_PROMPT = `You are reading a chat conversation between a founder and their marketing co-pilot about an upcoming Smoke Rings BBQ LinkedIn post (a Bengaluru cloud kitchen doing wood-fired, slow-smoked BBQ).
-
-Distill the conversation into a short brief for the writer who'll draft the actual post. Extract:
-- "topic": the core topic/angle the founder settled on (one sentence).
-- "keyDetails": the specific, concrete facts/numbers/moments mentioned in the conversation that should be used (verbatim where possible) — not invented, only what was actually said.
-- "ctaTarget": who the post's call-to-action should speak to, if it came up (e.g. "fellow founders", "B2C customers", "B2B partners") — empty string if it never came up.
-
-Only use what's actually in the conversation. If the conversation doesn't clearly land on a topic yet, still extract your best read of what's being discussed.`;
-
-// Agent 2, step 2: reads the brief and pulls out the most endearing,
-// human, trust-building angle worth leading with — deliberately NOT
-// drafting a post itself, so the writer step can focus purely on voice
-// and the tight character budget.
-const INSIGHTS_SYSTEM_PROMPT = `You are a sharp brand strategist for Smoke Rings BBQ, a Bengaluru cloud kitchen doing wood-fired, slow-smoked BBQ (12-hour smoked pork, 3-hour smoked chicken, ribs, burnt ends).
-
-You'll be given a brief (topic, key details, CTA target) distilled from a founder's chat about their next LinkedIn post. Your job is NOT to summarize the brief. Your job is to find the 2-4 most endearing, human, trust-building insights in it — the kind of honest, specific detail that makes a stranger reading a LinkedIn post think "I want to support this person/business."
-
-Look for:
-- A real struggle handled with grit, honesty, or humor (not corporate spin).
-- A specific number, moment, or mistake that shows genuine craft or care.
-- Evidence of a founder who is candid about what's hard and still pushing forward.
-- Anything that builds trust in the food/business, even indirectly.
-
-Output each insight as ONE tight, punchy sentence — raw material for a copywriter, not a post draft itself. No preamble, no post drafts, no hashtags. 2-4 insights, most compelling first.`;
-
-// Agent 2, step 3: turns the insights into one finished, strictly short-form post.
-const SHORT_POST_SYSTEM_PROMPT = `You are the founder of Smoke Rings BBQ, a Bengaluru cloud kitchen doing wood-fired, slow-smoked BBQ, writing a LinkedIn post yourself.
-
-You'll be given a short list of insights already identified as endearing and trust-building. Turn ONE of them — the strongest — into a single finished LinkedIn post.
-
-VOICE: Write like a highly capable, plain-spoken founder who is clearly on top of their business — confident, warm, a little wry. Not a marketing account. First person. No corporate speak, no buzzwords, no filler.
-
-HARD CONSTRAINT: The post body must be 400 characters or fewer, TOTAL — count every character including spaces and punctuation. This is a strict LinkedIn-style short-form post, not a long-form one. Non-negotiable: prefer cutting a sentence over going over 400 characters.
-
-STRUCTURE: A strong opening line, 1-2 more short lines of substance, then a CTA or question that invites replies. Use line breaks for readability within the budget. At most 1 hashtag — every character counts.
-
-Never invent facts beyond what's in the insights you were given.`;
-
-// Agent 2, step 4 (only runs if step 3 overshoots): rewrite tighter instead
-// of blindly slicing the string, which can cut a sentence off mid-word.
-const REFINE_SHORT_POST_SYSTEM_PROMPT = `You are the founder of Smoke Rings BBQ, tightening a LinkedIn post that came in over the strict 400-character budget.
-
-You'll be given the over-length draft and its current character count. Rewrite it to fit in 400 characters or fewer, TOTAL, while keeping the strongest line and the core point intact. Cut secondary sentences or trim wording — don't just chop the end off mid-thought. Keep the same first-person founder voice: confident, warm, a little wry, no corporate speak.`;
-
-function ensureMessages(messages) {
-  if (!Array.isArray(messages) || messages.length === 0) {
-    throw new Error('messages array is required');
-  }
-  return messages
-    .filter((m) => m && typeof m.content === 'string' && m.content.trim())
-    .map((m) => ({
-      role: m.role === 'assistant' ? 'model' : 'user',
-      parts: [{ text: m.content }],
-    }));
-}
-
 function requireClient() {
   const ai = getClient();
   if (!ai) {
@@ -111,162 +21,6 @@ function requireClient() {
     throw err;
   }
   return ai;
-}
-
-function checkFinishReason(response, label) {
-  const finishReason = response.candidates?.[0]?.finishReason;
-  if (finishReason && finishReason !== 'STOP') {
-    const err = new Error(`Gemini cut off ${label} before finishing (${finishReason}). Try again.`);
-    err.status = 502;
-    throw err;
-  }
-}
-
-// Shared by every Agent 2 step below — a single-turn call with a system
-// prompt and a required JSON output shape.
-async function generateJSON({ systemInstruction, userText, schema, maxOutputTokens, label }) {
-  const ai = requireClient();
-  const response = await ai.models.generateContent({
-    model: MODEL,
-    contents: [{ role: 'user', parts: [{ text: userText }] }],
-    config: {
-      systemInstruction,
-      // Gemini's thinking tokens count against maxOutputTokens, so this needs
-      // headroom above the visible JSON output length or generation gets cut off.
-      maxOutputTokens,
-      responseMimeType: 'application/json',
-      responseSchema: schema,
-    },
-  });
-  checkFinishReason(response, label);
-  try {
-    return JSON.parse(response.text || '{}');
-  } catch {
-    const err = new Error(`Gemini did not return structured ${label}. Try again.`);
-    err.status = 502;
-    throw err;
-  }
-}
-
-// Step 1 / Agent 0: an open chat turn — see CHAT_SYSTEM_PROMPT above for what
-// it can and can't do.
-export async function brainstormReply({ messages }) {
-  const ai = requireClient();
-  const cleaned = ensureMessages(messages);
-  const response = await ai.models.generateContent({
-    model: MODEL,
-    contents: cleaned,
-    config: {
-      systemInstruction: CHAT_SYSTEM_PROMPT,
-      // Gemini's thinking tokens count against maxOutputTokens, so this needs
-      // generous headroom above the visible reply length or generation gets cut off.
-      maxOutputTokens: 3000,
-    },
-  });
-
-  checkFinishReason(response, 'its reply');
-  const text = (response.text || '').trim();
-  return { reply: text };
-}
-
-// Agent 2, step 1: distill the chat conversation into a topic/facts/CTA brief.
-async function synthesizeBrief({ messages }) {
-  const cleaned = ensureMessages(messages);
-  const transcript = cleaned.map((m) => `${m.role === 'model' ? 'Co-pilot' : 'Founder'}: ${m.parts[0].text}`).join('\n\n');
-  return generateJSON({
-    systemInstruction: BRIEF_SYSTEM_PROMPT,
-    userText: transcript,
-    label: 'a brief',
-    maxOutputTokens: 1500,
-    schema: {
-      type: Type.OBJECT,
-      properties: {
-        topic: { type: Type.STRING },
-        keyDetails: { type: Type.ARRAY, items: { type: Type.STRING } },
-        ctaTarget: { type: Type.STRING },
-      },
-      required: ['topic', 'keyDetails'],
-    },
-  });
-}
-
-// Agent 2, step 2: derive endearing, trust-building insights from the brief.
-async function deriveInsights({ brief }) {
-  const contextText = [
-    `Topic: ${brief.topic}`,
-    brief.keyDetails?.length ? `Key details:\n${brief.keyDetails.map((d) => `- ${d}`).join('\n')}` : '',
-    brief.ctaTarget ? `CTA target: ${brief.ctaTarget}` : '',
-  ]
-    .filter(Boolean)
-    .join('\n\n');
-
-  const ai = requireClient();
-  const response = await ai.models.generateContent({
-    model: MODEL,
-    contents: [{ role: 'user', parts: [{ text: contextText }] }],
-    config: { systemInstruction: INSIGHTS_SYSTEM_PROMPT, maxOutputTokens: 1500 },
-  });
-  checkFinishReason(response, 'insight extraction');
-  return (response.text || '').trim();
-}
-
-// Agent 2, step 3: draft one ≤400-char post from the insights.
-async function writeShortPost({ insightsText }) {
-  return generateJSON({
-    systemInstruction: SHORT_POST_SYSTEM_PROMPT,
-    userText: insightsText,
-    label: 'a post',
-    maxOutputTokens: 2000,
-    schema: {
-      type: Type.OBJECT,
-      properties: {
-        body: { type: Type.STRING, description: 'The finished post text, 400 characters or fewer.' },
-        hashtags: { type: Type.ARRAY, items: { type: Type.STRING }, description: 'At most 1 hashtag, without the # symbol.' },
-      },
-      required: ['body'],
-    },
-  });
-}
-
-// Agent 2, step 4 (only if step 3 overshoots): rewrite tighter rather than
-// blindly truncating mid-sentence.
-async function refineShortPost({ body, hashtags }) {
-  const userText = `Current draft (${body.length} characters, needs to be ≤400):\n\n${body}`;
-  const result = await generateJSON({
-    systemInstruction: REFINE_SHORT_POST_SYSTEM_PROMPT,
-    userText,
-    label: 'a refined post',
-    maxOutputTokens: 2000,
-    schema: {
-      type: Type.OBJECT,
-      properties: {
-        body: { type: Type.STRING, description: 'The rewritten post text, 400 characters or fewer.' },
-      },
-      required: ['body'],
-    },
-  });
-  return { body: result.body || body, hashtags };
-}
-
-// Agent 2 end to end: the full multi-step pipeline from chat conversation to
-// a finished, on-voice, ≤400-character LinkedIn post.
-export async function generatePostFromConversation({ messages }) {
-  const brief = await synthesizeBrief({ messages });
-  const insightsText = await deriveInsights({ brief });
-  let { body = '', hashtags = [] } = await writeShortPost({ insightsText });
-
-  // The 400-char limit is a hard product requirement, not just a prompt
-  // suggestion — give the model one shot at a proper rewrite if it
-  // overshoots, then fall back to a hard truncation as a last resort so the
-  // pipeline always returns something usable.
-  if (body.length > 400) {
-    ({ body, hashtags } = await refineShortPost({ body, hashtags }));
-  }
-  if (body.length > 400) {
-    body = body.slice(0, 400);
-  }
-
-  return { title: '', body, hashtags, brief, insights: insightsText };
 }
 
 const WEEKEND_PREP_MENU = `- chicken-bbq-burger: Signature Pulled Chicken BBQ Burger
@@ -570,4 +324,313 @@ export async function readOrderTimePreferences({ orders }) {
   }
 
   return { preferences, read: toRead.length, cached };
+}
+
+// ---- Purchase bills: read a photo of the vendor's bill into PO lines ------
+// The butcher hands over a paper slip, Bread Time Stories send a printed
+// invoice, and Swiggy Instamart is a screenshot on the phone. All three end
+// up typed into Weekly Purchasing line by line, which is the slowest part of
+// a Friday. This reads the picture instead.
+//
+// It deliberately stops at "here is what I read" — nothing is written, and
+// every number comes back for the pitmaster to check against the paper still
+// in their hand before they hit Log purchase. See scanPurchaseBill in
+// server/ops/shared/purchaseScan.js for the matching/validation half, which
+// is where anything Gemini invents gets thrown away.
+const BILL_SYSTEM_PROMPT = `You are reading a photo of a purchase bill for Smoke Rings BBQ, a barbecue cloud kitchen in Bengaluru, India. The image is a vendor bill, invoice, delivery challan, handwritten butcher's slip, or a screenshot of a grocery-app order (Swiggy Instamart, Zepto, Blinkit).
+
+Your job is to transcribe what was BOUGHT into structured lines. You are transcribing, not estimating — every number must be visible in the image.
+
+Return:
+- "vendorName": the shop/supplier the bill is FROM, exactly as printed. Empty string if you cannot see one. Never use "Smoke Rings BBQ" — that is the buyer, not the vendor.
+- "purchaseDate": the bill date as YYYY-MM-DD. Empty string if no date is visible. If the year is missing from a date, leave it empty rather than guessing the year.
+- "lines": one entry per item bought.
+- "notes": at most one short sentence about anything that made the read hard (blurry section, torn slip, a total that doesn't add up). Empty string if the read was clean.
+
+Each line has:
+- "itemName": the item as written on the bill, verbatim (e.g. "Pork Belly B/L", "Amul Butter 500g").
+- "materialId": the id of the matching item from the kitchen's catalogue below, if one clearly matches the same physical thing. Use "" when nothing in the catalogue matches — an unmatched line is fine and expected. Never invent an id that is not in the list.
+- "quantity": how many units/kg were bought, as a number. This is the number the vendor charges by.
+- "unitPrice": price per unit in rupees, as a number. 0 if only a line total is printed.
+- "lineTotal": the line's total in rupees, as a number. 0 if only a unit price is printed.
+- "unit": the unit the quantity is in, exactly as the bill words it ("kg", "pcs", "packet", "litre"). Empty string if the bill does not say.
+
+Rules:
+- Only rupee amounts actually printed on the bill. Never compute a missing price by dividing a grand total, and never carry a price over from another line.
+- Skip the bill's own summary rows — subtotal, total, GST/CGST/SGST, delivery fee, discount, round-off, amount paid. Those are not items bought.
+- A quantity written as "2 x 500g" means quantity 2 of a 500g pack; keep quantity 2 and put the pack size in itemName.
+- If a line is genuinely unreadable, leave it out entirely and say so in "notes". A missing line the pitmaster adds by hand is far better than a made-up one.
+- If the image is not a bill at all, return empty lines and say so in "notes".
+
+Kitchen catalogue (id — name — category):
+`;
+
+// Closes off JSON that stopped mid-sentence, dropping whatever element was
+// half-written. Only ever used on a MAX_TOKENS response: the bill schema puts
+// "lines" last, so a cut costs the tail of that array and nothing else, and
+// twenty-eight lines the pitmaster checks by eye beats an error that throws
+// away a read they have to redo. Returns null when the cut landed too early
+// for anything to be salvageable.
+export function repairTruncatedJSON(text) {
+  let inString = false;
+  let escaped = false;
+  let depth = 0;
+  // End of the last value that closed while still nested — i.e. the last
+  // point the document was structurally whole apart from its open parents.
+  let lastComplete = -1;
+
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (ch === '\\') escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') inString = true;
+    else if (ch === '{' || ch === '[') depth += 1;
+    else if (ch === '}' || ch === ']') {
+      depth -= 1;
+      if (depth > 0) lastComplete = i + 1;
+    }
+  }
+
+  if (lastComplete < 0) return null;
+
+  // Re-walk the kept prefix to learn which brackets are still open, then shut
+  // them in reverse — the array of lines first, the wrapper object last.
+  const kept = text.slice(0, lastComplete);
+  const open = [];
+  inString = false;
+  escaped = false;
+  for (let i = 0; i < kept.length; i += 1) {
+    const ch = kept[i];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (ch === '\\') escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') inString = true;
+    else if (ch === '{') open.push('}');
+    else if (ch === '[') open.push(']');
+    else if (ch === '}' || ch === ']') open.pop();
+  }
+
+  try {
+    return JSON.parse(kept + open.reverse().join(''));
+  } catch {
+    return null;
+  }
+}
+
+// `catalogue` is the buyable materials list, passed in rather than baked into
+// the prompt: it is a database read that changes as the kitchen adds items,
+// and a stale copy here would quietly stop matching the very items that were
+// added most recently.
+export async function readPurchaseBill({ imageBase64, mimeType, catalogue = [] }) {
+  const ai = requireClient();
+  if (!imageBase64) {
+    const err = new Error('No image was uploaded.');
+    err.status = 400;
+    throw err;
+  }
+
+  const catalogueText = catalogue
+    .map((m) => `- ${m.material_id} — ${m.item_name}${m.category ? ` — ${m.category}` : ''}`)
+    .join('\n');
+
+  const response = await ai.models.generateContent({
+    model: MODEL,
+    contents: [
+      {
+        role: 'user',
+        parts: [
+          { inlineData: { mimeType: mimeType || 'image/jpeg', data: imageBase64 } },
+          { text: 'Read this bill and return its line items.' },
+        ],
+      },
+    ],
+    config: {
+      systemInstruction: `${BILL_SYSTEM_PROMPT}${catalogueText || '(catalogue unavailable — leave every materialId empty)'}`,
+      // A long grocery bill is thirty-odd lines of JSON, and thinking tokens
+      // count against this budget too — see generateJSON above. 8000 shared
+      // between the two was not enough: a dense Instamart bill against a
+      // catalogue this size can spend most of it deciding materialIds and
+      // then get cut off partway through the array. The budget is a ceiling,
+      // not a spend, so the room here is close to free; capping thinking
+      // separately is what actually guarantees the JSON gets its share.
+      maxOutputTokens: 24000,
+      thinkingConfig: { thinkingBudget: 2048 },
+      responseMimeType: 'application/json',
+      responseSchema: {
+        type: Type.OBJECT,
+        properties: {
+          vendorName: { type: Type.STRING },
+          purchaseDate: { type: Type.STRING, description: 'YYYY-MM-DD, or empty string.' },
+          notes: { type: Type.STRING },
+          lines: {
+            type: Type.ARRAY,
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                itemName: { type: Type.STRING },
+                materialId: { type: Type.STRING, description: 'A catalogue id, or empty string when nothing matches.' },
+                quantity: { type: Type.NUMBER },
+                unitPrice: { type: Type.NUMBER },
+                lineTotal: { type: Type.NUMBER },
+                unit: { type: Type.STRING },
+              },
+              required: ['itemName', 'quantity'],
+            },
+          },
+        },
+        required: ['lines'],
+      },
+    },
+  });
+
+  const finishReason = response.candidates?.[0]?.finishReason;
+  const text = response.text || '';
+
+  // Everything except a clean stop and a clean overrun is a real failure —
+  // a blocked image or a safety stop has nothing worth salvaging.
+  if (finishReason && finishReason !== 'STOP' && finishReason !== 'MAX_TOKENS') {
+    const err = new Error(`Gemini cut off the bill read before finishing (${finishReason}). Try again.`);
+    err.status = 502;
+    throw err;
+  }
+
+  if (finishReason === 'MAX_TOKENS') {
+    const partial = repairTruncatedJSON(text);
+    if (partial?.lines?.length) {
+      // Loud, because the screen shows `notes` in the scan review and this is
+      // exactly the case where the cart is right but incomplete — the missing
+      // lines look like lines the bill never had.
+      return {
+        ...partial,
+        notes: [
+          typeof partial.notes === 'string' ? partial.notes.trim() : '',
+          `This bill was too long to read in one go — only the first ${partial.lines.length} line${partial.lines.length === 1 ? '' : 's'} came back. Check the paper for lines below those and add them by hand.`,
+        ]
+          .filter(Boolean)
+          .join(' '),
+      };
+    }
+    const err = new Error(
+      'Gemini ran out of room before it read anything usable off that bill. Photograph it in two halves and scan each.',
+    );
+    err.status = 502;
+    throw err;
+  }
+
+  try {
+    return JSON.parse(text || '{}');
+  } catch {
+    const err = new Error('Gemini did not return structured bill data. Try a clearer photo.');
+    err.status = 502;
+    throw err;
+  }
+}
+
+// ---- Matching an ad hoc purchase line to a catalogue item -----------------
+// The counter-side twin of the bill read above. A buy logged as "coriander
+// bunch 100 g" or "PORK SHLDR B/L" has no catalogue row, so it recorded the
+// money and moved no stock; the fix is almost always an item that IS in the
+// catalogue under different wording, and finding it by eye means scrolling a
+// sixty-row dropdown.
+//
+// The shortlist is built by string similarity first (scoreMaterials in
+// server/ops/shared/materialMatch.js) and only then handed here, for two
+// reasons: string distance has no idea that "shoulder" and "Boston butt" are
+// the same cut, and Gemini has no idea what is actually in this kitchen. So
+// the local pass decides what could plausibly be it, and this pass decides
+// which of those it is — over a dozen names, not the whole catalogue, which
+// keeps the call small and keeps a hallucinated id out of reach by
+// construction.
+//
+// Nothing here writes. Every id that comes back is checked against the
+// shortlist by the caller, and the pitmaster clicks the one they want.
+const MATCH_SYSTEM_PROMPT = `You are helping the kitchen team at Smoke Rings BBQ, a barbecue cloud kitchen in Bengaluru, India, tidy up their purchase log.
+
+Someone logged a purchase by typing an item name at the counter. That name is not in the materials catalogue, so the buy recorded no stock. You are given the typed name and a shortlist of catalogue items that might be the same physical thing.
+
+Decide which catalogue items, if any, are the SAME physical ingredient as the typed name.
+
+Return "matches", ordered best first, at most 3 entries. Each has:
+- "materialId": the id, copied exactly from the shortlist.
+- "confidence": "high" when it is plainly the same thing (an abbreviation, a plural, a brand name, a pack size, a spelling variant, or the same cut under another butcher's name); "medium" when it is probably the same thing but a detail differs; "low" when it is only worth a look.
+- "reason": one short phrase, under 12 words, saying why — written for a pitmaster, e.g. "same cut, butcher's abbreviation" or "same spice, catalogue spells it out".
+
+Rules:
+- Only ids from the shortlist. Never invent one.
+- Same INGREDIENT, not same category. "Chicken Breast" and "Chicken Whole" are different items; do not match them to each other just because both are chicken.
+- A different pack or unit size of the same ingredient IS a match — the catalogue tracks the ingredient, not the packet.
+- If nothing on the shortlist is the same thing, return an empty "matches" array. That is a useful answer, not a failure — the team will add a new catalogue item instead.
+- Never return more than one "high" unless two shortlist entries really are the same ingredient as each other.`;
+
+// `candidates` is the local shortlist: [{ material_id, item_name, category }].
+// Returns [{ materialId, confidence, reason }] — unvalidated, since checking
+// the ids against the shortlist is the caller's job (suggestMaterialMatches).
+export async function rankMaterialMatches({ itemName, candidates = [] }) {
+  const ai = requireClient();
+  const name = typeof itemName === 'string' ? itemName.trim() : '';
+  if (!name) {
+    const err = new Error('itemName is required.');
+    err.status = 400;
+    throw err;
+  }
+  if (!candidates.length) return { matches: [] };
+
+  const ids = candidates.map((c) => c.material_id);
+  const shortlist = candidates
+    .map((c) => `- ${c.material_id} — ${c.item_name}${c.category ? ` — ${c.category}` : ''}`)
+    .join('\n');
+
+  const response = await ai.models.generateContent({
+    model: MODEL,
+    contents: [
+      {
+        role: 'user',
+        parts: [{ text: `Typed at the counter: "${name}"\n\nCatalogue shortlist (id — name — category):\n${shortlist}` }],
+      },
+    ],
+    config: {
+      systemInstruction: MATCH_SYSTEM_PROMPT,
+      // Three short entries of JSON, but the thinking budget shares this
+      // ceiling — see readPurchaseBill above for why that matters.
+      maxOutputTokens: 2000,
+      thinkingConfig: { thinkingBudget: 512 },
+      responseMimeType: 'application/json',
+      responseSchema: {
+        type: Type.OBJECT,
+        properties: {
+          matches: {
+            type: Type.ARRAY,
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                // The enum is the shortlist itself, so the decoder cannot
+                // spell an id that was never offered.
+                materialId: { type: Type.STRING, enum: ids },
+                confidence: { type: Type.STRING, enum: ['high', 'medium', 'low'] },
+                reason: { type: Type.STRING },
+              },
+              required: ['materialId', 'confidence'],
+            },
+          },
+        },
+        required: ['matches'],
+      },
+    },
+  });
+
+  try {
+    const parsed = JSON.parse(response.text || '{}');
+    return { matches: Array.isArray(parsed.matches) ? parsed.matches : [] };
+  } catch {
+    const err = new Error('Gemini did not return structured match data.');
+    err.status = 502;
+    throw err;
+  }
 }

@@ -1,6 +1,6 @@
 // Side-packing maths shared by the two boards that pack sides — Order
-// Packing (per slot, on packing day) and the Weekend Prep Planner (Step 2's
-// whole-weekend estimate, Step 3's per-order guidelines).
+// Management (per slot, on packing day) and the Weekend Prep Planner (Step 2's
+// whole-weekend box estimate).
 //
 // The two pages deliberately mirror each other's language and shapes rather
 // than importing components from one another, but the container arithmetic
@@ -31,7 +31,7 @@ export type PackOrder = {
 };
 export type PackSlotId = 'satLunch' | 'satEvening' | 'sunLunch' | 'sunEvening';
 
-// One column of the packing board's picker strip. The server builds these so
+// One column of Order Management's picker strip. The server builds these so
 // both channels arrive in the same shape (server/integrations/odoo.js b2cGroups/b2bGroups):
 // for B2C the four weekend services in the order they happen, for B2B one per
 // delivery day, earliest first. `id` is the slot id or the 'YYYY-MM-DD' day.
@@ -86,16 +86,13 @@ export type SideContainer = {
 } | null;
 
 // Static per-item reference (GET /api/recipes/sides-by-item): which packable
-// sides a menu item needs. qty/unit is the human amount to show ("1 pcs" of
-// lettuce); baseQty/baseUnit is the same amount in the material's stock unit
-// (80 g), which is what divides into a container capacity.
+// sides a menu item needs. qty is the amount to show; baseQty is the planner's
+// figure for the same line, which is what divides into a container capacity.
 export type SideByItemLine = {
   key: string;
   name: string;
   qty: number | null;
-  unit: string;
   baseQty: number | null;
-  baseUnit: string;
   container: SideContainer;
 };
 export type SidesByItem = Record<string, SideByItemLine[]>;
@@ -109,12 +106,9 @@ export type OrderSideGroup = {
   name: string;
   portions: number;
   totalQty: number | null;
-  unit: string;
-  // Quantity in the container's own unit, which is what `boxes` is derived
-  // from — usually identical to totalQty, and different only where the
-  // recipe records a side in pieces (lettuce: 4 pcs / 320 g).
+  // The figure `boxes` is derived from — usually identical to totalQty, and
+  // different only on a line that carries a separate planner number.
   baseQty: number | null;
-  baseUnit: string;
   container: SideContainer;
   // How many boxes this group actually needs once the container's capacity
   // is respected — 4 x 30 ml BBQ sauce is 4 cups, not "1 container".
@@ -166,9 +160,7 @@ export const buildOrderSideGroups = (order: PackOrder, sidesByItem: SidesByItem 
           name: line.name,
           portions: 0,
           totalQty: 0,
-          unit: line.unit,
           baseQty: 0,
-          baseUnit: line.baseUnit || line.unit,
           container: line.container || null,
           boxes: 0,
         });
@@ -226,17 +218,15 @@ export type SideBoxTotal = {
   name: string;
   portions: number;
   totalQty: number | null;
-  unit: string;
   container: SideContainer;
   boxes: number;
 };
 
-const emptyTotal = (group: { key: string; name: string; unit: string; container: SideContainer }): SideBoxTotal => ({
+const emptyTotal = (group: { key: string; name: string; container: SideContainer }): SideBoxTotal => ({
   key: group.key,
   name: group.name,
   portions: 0,
   totalQty: 0,
-  unit: group.unit,
   container: group.container,
   boxes: 0,
 });
@@ -271,7 +261,7 @@ export const sideBoxTotalsFromCounts = (
     (sidesByItem[itemId] || []).forEach((line) => {
       const row =
         totals.get(line.key) ||
-        emptyTotal({ key: line.key, name: line.name, unit: line.unit, container: line.container || null });
+        emptyTotal({ key: line.key, name: line.name, container: line.container || null });
       row.portions += count;
       if (line.qty != null && row.totalQty != null) row.totalQty += line.qty * count;
       else row.totalQty = null;
@@ -280,4 +270,100 @@ export const sideBoxTotalsFromCounts = (
     });
   });
   return Array.from(totals.values()).sort((a, b) => b.boxes - a.boxes || b.portions - a.portions);
+};
+
+// ---- Which meats an order carries ---------------------------------------
+// Static reference from GET /api/recipes/meat-by-item — every menu item's
+// smoked-meat components, worked out from the same IP-xxx recipe lines the
+// meat plan uses (server/ops/b2c/recipes.js getMeatByItem). Keyed by menu item
+// id, same as SidesByItem; an item with no meat has no entry.
+export type MeatByItemLine = {
+  // meatConfig.js category key — 'chicken', 'pulledPork', 'ribs', …
+  category: string;
+  label: string;
+  productName: string;
+};
+export type MeatByItem = Record<string, MeatByItemLine[]>;
+
+// A smoker "load": one switch on the Order Management board, covering every
+// meatConfig category that goes in together. Pork is one load whatever cut it
+// is — shoulder, ribs and belly all go on the same smoke — so all three
+// categories sit behind the single pork switch. Chicken is its own.
+//
+// A category missing from every group here simply has no switch (jackfruit
+// and beef ribs today); those orders are still driven one at a time from the
+// per-order dropdown, which is unchanged.
+export type SmokerLoad = {
+  id: 'pork' | 'chicken';
+  label: string;
+  emoji: string;
+  categories: string[];
+};
+
+export const SMOKER_LOADS: SmokerLoad[] = [
+  { id: 'pork', label: 'Pork', emoji: '🐖', categories: ['pulledPork', 'ribs', 'porkBelly'] },
+  { id: 'chicken', label: 'Chicken', emoji: '🐔', categories: ['chicken'] },
+];
+
+// The meat categories one order actually needs, deduped across its line
+// items — a burger and a rib plate in the same order come back as
+// { chicken, ribs }.
+export const orderMeatCategories = (order: PackOrder, meatByItem: MeatByItem | null): Set<string> => {
+  const categories = new Set<string>();
+  if (!meatByItem) return categories;
+  order.items.forEach((item) => {
+    (meatByItem[item.itemId] || []).forEach((line) => categories.add(line.category));
+  });
+  return categories;
+};
+
+// Does this order have anything in this smoker load? — the test behind
+// "whichever order has pork moves to IN_SMOKER".
+export const orderNeedsLoad = (order: PackOrder, meatByItem: MeatByItem | null, load: SmokerLoad): boolean => {
+  const categories = orderMeatCategories(order, meatByItem);
+  return load.categories.some((category) => categories.has(category));
+};
+
+// ---- Smoker days --------------------------------------------------------
+// The meat goes on per SERVICE DAY, not per range: Saturday's orders are
+// smoked on Saturday morning and Sunday's on Sunday. So the "set smoker
+// status" step buckets the board's groups by the day they're delivered on and
+// lights one day at a time — a single range-wide switch would drag Sunday's
+// orders to IN_SMOKER a day early.
+//
+// B2C's four services collapse into their two days (satLunch + satEvening ->
+// Saturday). B2B's groups are already one per delivery day, so each stays its
+// own bucket with the label the server gave it.
+export type SmokerDay = { id: string; label: string; emoji: string; orders: PackOrder[] };
+
+const SLOT_DAY: Record<string, { id: string; label: string }> = {
+  satLunch: { id: 'sat', label: 'Saturday' },
+  satEvening: { id: 'sat', label: 'Saturday' },
+  sunLunch: { id: 'sun', label: 'Sunday' },
+  sunEvening: { id: 'sun', label: 'Sunday' },
+};
+
+export const smokerDays = (groups: PackGroup[]): SmokerDay[] => {
+  const days: SmokerDay[] = [];
+  const byId = new Map<string, SmokerDay>();
+  groups.forEach((group) => {
+    const slotDay = SLOT_DAY[group.id];
+    const id = slotDay ? slotDay.id : group.id;
+    const existing = byId.get(id);
+    if (existing) {
+      existing.orders = existing.orders.concat(group.orders);
+      return;
+    }
+    // Groups arrive in service order, so the first one to claim a day fixes
+    // where that day sits on the strip.
+    const day: SmokerDay = {
+      id,
+      label: slotDay ? slotDay.label : group.label,
+      emoji: '🔥',
+      orders: [...group.orders],
+    };
+    byId.set(id, day);
+    days.push(day);
+  });
+  return days;
 };

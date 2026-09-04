@@ -33,6 +33,17 @@ function hasColumn(db, table, column) {
     .some((c) => c.name === column);
 }
 
+function hasView(db, name) {
+  return !!db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'view' AND name = ?").get(name);
+}
+
+// The stored CREATE text of a table, for the one guard a column list cannot
+// answer: whether a CHECK constraint still allows a particular value.
+function tableSql(db, name) {
+  const row = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?").get(name);
+  return (row && row.sql) || '';
+}
+
 // SQLite cannot alter a CHECK constraint or a primary key in place, so the two
 // steps that need one do the documented twelve-step dance
 // (https://sqlite.org/lang_altertable.html#otheralter): build the new table
@@ -299,7 +310,479 @@ function purchasePieceWeight(db) {
   return 'purchase: weight_per_unit_kg added';
 }
 
-const STEPS = [purchaseAttribution, smokingSessionFields, sidePrepSideKey, appendOnlyLogs, purchasePieceWeight];
+// The AI SEO tracker, removed. Its two tables came out of schema.sql with it,
+// so a database that still has them is no longer the shape a fresh install
+// builds — which is the one thing this file exists to prevent. Dropped rather
+// than left in place: nothing reads them any more, and a table nothing writes
+// is a table the next person has to work out the status of.
+//
+// aiseo_run points at aiseo_prompt, so it goes first. Foreign keys are off
+// here anyway (see the note at the top), but the order costs nothing and
+// keeps the step correct if that ever changes.
+function dropAiSeoTracker(db) {
+  if (!hasTable(db, 'aiseo_prompt') && !hasTable(db, 'aiseo_run')) return null;
+  db.exec('DROP TABLE IF EXISTS aiseo_run');
+  db.exec('DROP TABLE IF EXISTS aiseo_prompt');
+  return 'aiseo_prompt and aiseo_run dropped: the AI SEO tracker is gone';
+}
+
+// Units of measure, removed root and branch.
+//
+// The database used to carry a `uom` table of unit codes (kg, g, ml, pcs,
+// tbsp, "burger portion", ...), a `uom_conversion` table of factors between
+// them (a tablespoon is 15 ml; one clove of garlic is 3 g), and a unit column
+// on everything that held an amount. None of it is recorded any more:
+// quantities are bare numbers, and what they count is whatever the person
+// reading the screen already knows it to be.
+//
+// Nine columns across six tables go, plus both tables and the conversion
+// index. Nothing is renamed and no quantity is touched -- only the labels come
+// off -- so every row survives with its numbers intact.
+//
+// ALTER TABLE ... DROP COLUMN here rather than the twelve-step rebuild the
+// steps above use, for two reasons. Half of these tables (item, material,
+// recipe, menu_item) are pointed at by other tables, and a rebuild has to drop
+// the table it is rebuilding -- which foreign key enforcement refuses, and
+// node:sqlite turns enforcement ON by default, so "foreign keys aren't on
+// yet" is not true here the way the note at the top of this file assumes.
+// DROP COLUMN never drops the table, so the question doesn't arise. It also
+// leaves the surviving columns in place and in order, which is exactly what
+// schema.sql now describes, without a second copy of six CREATE TABLE bodies
+// in this file to drift out of step with it.
+//
+// Two knock-on removals, both units of measure wearing a different hat:
+//   * material.stock_status could be 'unit_mismatch', meaning a count in one
+//     unit had a figure in another subtracted from it. That verdict cannot be
+//     reached without units, so the value leaves the CHECK and the row holding
+//     it becomes 'never_counted' -- which is what its stock_notes already asks
+//     for ("Recount in pcs"), minus the unit. A CHECK cannot be altered in
+//     place, so this one is a rebuild, and the only place foreign keys have to
+//     be turned off for the length of a step.
+//   * v_data_gaps reported unconfirmed conversion factors. That branch goes
+//     with the table it read.
+//
+// Order matters. SQLite refuses to drop a column a view still names, so all
+// four views come down first and go back up last.
+const UOM_COLUMNS = [
+  ['bom_line', 'unit'],
+  ['bom_line', 'base_unit'],
+  ['inventory_adjustment', 'unit_of_measure'],
+  ['item', 'uom_code'],
+  ['menu_item', 'portion_unit'],
+  ['purchase', 'unit_of_measure'],
+  ['recipe', 'output_unit'],
+  ['recipe', 'portion_unit'],
+];
+
+// v_menu_cost names no unit column itself, but it selects from
+// v_bom_explosion, so it comes down with it and goes back unchanged.
+const UOM_VIEWS = ['v_bom_explosion', 'v_data_gaps', 'v_stock_alert', 'v_menu_cost'];
+
+const UOM_VIEW_SQL = {
+  v_bom_explosion: `CREATE VIEW v_bom_explosion AS
+WITH RECURSIVE tree AS (
+    SELECT  b.parent_id AS root_id, b.child_id, b.quantity, b.base_quantity,
+            b.status, 1 AS depth,
+            b.parent_id || ' > ' || b.child_id AS path
+    FROM bom_line b
+    UNION ALL
+    SELECT  t.root_id, b.child_id, b.quantity, b.base_quantity,
+            b.status, t.depth + 1,
+            t.path || ' > ' || b.child_id
+    FROM tree t
+    JOIN bom_line b ON b.parent_id = t.child_id
+    WHERE t.depth < 10
+)
+SELECT t.root_id, r.name AS root_name, t.child_id, c.name AS child_name,
+       c.kind AS child_kind, t.base_quantity, t.status, t.depth, t.path
+FROM tree t
+JOIN item r ON r.item_id = t.root_id
+JOIN item c ON c.item_id = t.child_id`,
+
+  v_data_gaps: `CREATE VIEW v_data_gaps AS
+SELECT 'recipe has no ingredients' AS gap, r.item_id AS ref, i.name AS detail
+FROM recipe r JOIN item i ON i.item_id = r.item_id
+WHERE r.ingredients_recorded = 'no'
+UNION ALL
+SELECT 'bom line needs confirmation', b.line_id, b.parent_id || ' -> ' || b.child_id
+FROM bom_line b WHERE b.status = 'needs_confirmation'
+UNION ALL
+SELECT 'menu item has no recipe', m.item_id, i.name
+FROM menu_item m JOIN item i ON i.item_id = m.item_id
+WHERE NOT EXISTS (SELECT 1 FROM bom_line b WHERE b.parent_id = m.item_id)
+UNION ALL
+SELECT 'material has no standard cost', mt.item_id, i.name
+FROM material mt JOIN item i ON i.item_id = mt.item_id
+WHERE mt.standard_cost_inr IS NULL`,
+
+  v_stock_alert: `CREATE VIEW v_stock_alert AS
+SELECT  i.item_id, i.name, m.category, m.quantity_on_hand, m.reorder_level,
+        m.stock_status, v.vendor_name AS default_vendor, v.lead_time_days,
+        CASE
+            WHEN m.stock_status = 'negative_balance' THEN 'negative — unrecorded purchase'
+            WHEN m.stock_status = 'never_counted'    THEN 'never counted'
+            WHEN m.reorder_level IS NOT NULL
+                 AND m.quantity_on_hand <= m.reorder_level THEN 'at or below reorder level'
+        END AS alert
+FROM material m
+JOIN item i ON i.item_id = m.item_id
+LEFT JOIN vendor v ON v.vendor_id = m.default_vendor_id
+WHERE m.stock_status <> 'ok'
+   OR (m.reorder_level IS NOT NULL AND m.quantity_on_hand <= m.reorder_level)`,
+
+  v_menu_cost: `CREATE VIEW v_menu_cost AS
+SELECT  mi.item_id, i.name, mi.price_inr,
+        round(sum(e.base_quantity * mt.standard_cost_inr), 2) AS known_cost_inr,
+        count(*) FILTER (WHERE mt.standard_cost_inr IS NULL)  AS lines_missing_cost,
+        count(*)                                              AS total_leaf_lines
+FROM menu_item mi
+JOIN item i ON i.item_id = mi.item_id
+LEFT JOIN v_bom_explosion e ON e.root_id = mi.item_id AND e.child_kind = 'raw_material'
+LEFT JOIN material mt ON mt.item_id = e.child_id
+GROUP BY mi.item_id, i.name, mi.price_inr`,
+};
+
+function dropUnitMismatchStatus(db) {
+  // The rebuild drops `material`, which inventory_adjustment points at, so
+  // enforcement goes off for the length of it and back to whatever it was.
+  // Not inside the transaction: SQLite ignores the pragma there.
+  const wasOn = db.prepare('PRAGMA foreign_keys').get().foreign_keys;
+  if (wasOn) db.exec('PRAGMA foreign_keys = OFF');
+  try {
+    rebuild(
+      db,
+      'material',
+      `CREATE TABLE material_new (
+          item_id             TEXT PRIMARY KEY REFERENCES item(item_id) ON DELETE CASCADE,
+          category            TEXT,
+          reorder_level       REAL CHECK (reorder_level >= 0),
+          default_vendor_id   TEXT REFERENCES vendor(vendor_id),
+          standard_cost_inr   REAL CHECK (standard_cost_inr >= 0),
+          cost_basis          TEXT,
+          shelf_life_days     INTEGER CHECK (shelf_life_days > 0),
+          storage             TEXT,
+          order_multiple      REAL CHECK (order_multiple > 0),
+          quantity_on_hand    REAL NOT NULL DEFAULT 0,
+          last_updated        TEXT,
+          last_movement_ref   TEXT,
+          stock_status        TEXT NOT NULL DEFAULT 'never_counted'
+                                   CHECK (stock_status IN ('ok','never_counted','negative_balance')),
+          stock_notes         TEXT,
+          odoo_product_id     INTEGER
+       )`,
+      `INSERT INTO material_new (item_id, category, reorder_level, default_vendor_id,
+                                 standard_cost_inr, cost_basis, shelf_life_days, storage,
+                                 order_multiple, quantity_on_hand, last_updated, last_movement_ref,
+                                 stock_status, stock_notes, odoo_product_id)
+       SELECT item_id, category, reorder_level, default_vendor_id,
+              standard_cost_inr, cost_basis, shelf_life_days, storage,
+              order_multiple, quantity_on_hand, last_updated, last_movement_ref,
+              CASE stock_status WHEN 'unit_mismatch' THEN 'never_counted' ELSE stock_status END,
+              stock_notes, odoo_product_id
+         FROM material`,
+      [
+        'CREATE INDEX material_status_idx ON material(stock_status)',
+        'CREATE INDEX material_vendor_idx ON material(default_vendor_id)',
+      ],
+    );
+  } finally {
+    if (wasOn) db.exec('PRAGMA foreign_keys = ON');
+  }
+}
+
+// The one thing the unit columns said that the numbers beside them cannot:
+// whether a line's quantity and base_quantity are one amount said twice or two
+// figures kept apart on purpose. Recorded as a column of its own before the
+// units it is derived from are dropped -- see the note on bom_line in
+// schema.sql for why the distinction has to survive at all.
+//
+// A blank base_unit meant "same as unit" to every reader of these rows, so it
+// counts as matching rather than as separate.
+function captureSeparateBaseQuantity(db) {
+  if (hasColumn(db, 'bom_line', 'base_is_separate')) return;
+  db.exec(
+    'ALTER TABLE bom_line ADD COLUMN base_is_separate INTEGER NOT NULL DEFAULT 0 ' +
+      'CHECK (base_is_separate IN (0,1))',
+  );
+  db.exec(`UPDATE bom_line
+              SET base_is_separate = 1
+            WHERE trim(coalesce(base_unit, '')) <> ''
+              AND lower(trim(coalesce(base_unit, ''))) <> lower(trim(coalesce(unit, '')))`);
+}
+
+function dropUnitsOfMeasure(db) {
+  const columns = UOM_COLUMNS.filter(([table, column]) => hasColumn(db, table, column));
+  const statusOwed = tableSql(db, 'material').includes('unit_mismatch');
+  const uomTables = ['uom_conversion', 'uom'].filter((t) => hasTable(db, t));
+  if (!columns.length && !statusOwed && !uomTables.length) return null;
+
+  const views = UOM_VIEWS.filter((v) => hasView(db, v));
+  views.forEach((v) => db.exec(`DROP VIEW "${v}"`));
+
+  // Before the columns it reads are gone.
+  if (hasColumn(db, 'bom_line', 'base_unit')) captureSeparateBaseQuantity(db);
+
+  columns.forEach(([table, column]) => db.exec(`ALTER TABLE "${table}" DROP COLUMN "${column}"`));
+  if (statusOwed) dropUnitMismatchStatus(db);
+  // The conversion index goes with its table; DROP TABLE takes it.
+  uomTables.forEach((t) => db.exec(`DROP TABLE "${t}"`));
+
+  // Only the views that were there before go back up, minus the unit columns
+  // and the conversion gap.
+  views.forEach((v) => db.exec(UOM_VIEW_SQL[v]));
+
+  const stripped = columns.map(([table, column]) => `${table}.${column}`);
+  if (statusOwed) stripped.push("material.stock_status 'unit_mismatch'");
+  const tail = uomTables.length ? `; ${uomTables.join(' and ')} dropped` : '';
+  return `units of measure removed: ${stripped.join(', ')}${tail}`;
+}
+
+// The B2B sales book: what a wholesale account was billed and whether they
+// have paid. Nothing to migrate — there is no CSV or earlier column behind
+// this, it is new ground — so the step is a create-if-absent, and the
+// `payment_terms_days` column beside it is an ADD COLUMN with the house
+// default already in it.
+//
+// Written out here rather than read from schema.sql because that file is
+// applied wholesale to a fresh database; a half-applied `db.exec` of it
+// against a live one would be a much worse failure than a duplicated CREATE
+// that migrations.test.js diffs against the real thing on every run.
+function b2bSalesBook(db) {
+  const done = [];
+
+  if (!hasColumn(db, 'b2b_client', 'payment_terms_days')) {
+    // NOT NULL with a default is allowed on ADD COLUMN precisely because
+    // SQLite can fill the existing rows from it — every account already on
+    // the book gets the house 15-day cycle, which is what they were on.
+    db.exec(
+      'ALTER TABLE b2b_client ADD COLUMN payment_terms_days INTEGER NOT NULL DEFAULT 15 ' +
+        'CHECK (payment_terms_days >= 0)',
+    );
+    done.push('b2b_client.payment_terms_days added (default 15)');
+  }
+
+  if (!hasTable(db, 'b2b_sale')) {
+    db.exec(`CREATE TABLE b2b_sale (
+    sale_id         TEXT PRIMARY KEY,
+    client_id       TEXT NOT NULL REFERENCES b2b_client(client_id) ON DELETE CASCADE,
+    delivered_on    TEXT NOT NULL,
+    amount_inr      REAL NOT NULL CHECK (amount_inr > 0),
+    payment_due_on  TEXT NOT NULL,
+    amount_paid_inr REAL NOT NULL DEFAULT 0 CHECK (amount_paid_inr >= 0),
+    paid_on         TEXT,
+    invoice_number  TEXT,
+    order_ref       TEXT,
+    notes           TEXT,
+    created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at      TEXT NOT NULL DEFAULT (datetime('now')),
+    CONSTRAINT b2b_sale_not_overpaid CHECK (amount_paid_inr <= amount_inr),
+    CONSTRAINT b2b_sale_due_after_delivery CHECK (payment_due_on >= delivered_on),
+    CONSTRAINT b2b_sale_paid_in_full CHECK (paid_on IS NULL OR amount_paid_inr >= amount_inr)
+)`);
+    db.exec('CREATE INDEX b2b_sale_client_idx ON b2b_sale(client_id)');
+    db.exec('CREATE INDEX b2b_sale_due_idx    ON b2b_sale(payment_due_on)');
+    done.push('b2b_sale created: the B2B revenue and receivables book');
+  }
+
+  return done.length ? done.join('; ') : null;
+}
+
+// The invoice half of the sales book: the lines a sale is billed on, and the
+// Odoo invoice it was raised as. Split from b2bSalesBook above rather than
+// folded into it because that step has already run on the live database —
+// each step decides for itself what is left to do (see the note at the top),
+// and a step that has finished must not be edited into one that has not.
+function b2bInvoiceLines(db) {
+  const done = [];
+
+  const columns = [
+    ['odoo_invoice_id', 'INTEGER'],
+    ['odoo_invoice_state', 'TEXT'],
+    ['odoo_access_token', 'TEXT'],
+    ['odoo_error', 'TEXT'],
+  ].filter(([column]) => !hasColumn(db, 'b2b_sale', column));
+
+  if (columns.length) {
+    // All four are nullable with no default: a sale that has never been sent
+    // to Odoo genuinely has no answer for any of them, which is what NULL is
+    // for. Nothing to backfill.
+    columns.forEach(([column, type]) => db.exec(`ALTER TABLE b2b_sale ADD COLUMN ${column} ${type}`));
+    done.push(`b2b_sale gains ${columns.map(([c]) => c).join(', ')}`);
+  }
+
+  const clientColumns = [
+    ['odoo_pricelist_id', 'INTEGER'],
+    ['odoo_pricelist_name', 'TEXT'],
+  ].filter(([column]) => !hasColumn(db, 'b2b_client', column));
+
+  if (clientColumns.length) {
+    clientColumns.forEach(([column, type]) => db.exec(`ALTER TABLE b2b_client ADD COLUMN ${column} ${type}`));
+    done.push(`b2b_client gains ${clientColumns.map(([c]) => c).join(', ')}`);
+  }
+
+  if (!hasTable(db, 'b2b_sale_line')) {
+    db.exec(`CREATE TABLE b2b_sale_line (
+    line_id         TEXT PRIMARY KEY,
+    sale_id         TEXT NOT NULL REFERENCES b2b_sale(sale_id) ON DELETE CASCADE,
+    position        INTEGER NOT NULL DEFAULT 0,
+    odoo_product_id INTEGER,
+    description     TEXT NOT NULL,
+    unit_label      TEXT,
+    quantity        REAL NOT NULL CHECK (quantity > 0),
+    unit_price      REAL NOT NULL CHECK (unit_price >= 0),
+    line_total      REAL NOT NULL CHECK (line_total >= 0)
+)`);
+    db.exec('CREATE INDEX b2b_sale_line_sale_idx ON b2b_sale_line(sale_id)');
+    db.exec('CREATE INDEX b2b_sale_line_product_idx ON b2b_sale_line(odoo_product_id)');
+    done.push('b2b_sale_line created: what each invoice is made of');
+  }
+
+  return done.length ? done.join('; ') : null;
+}
+
+// The spend side of marketing, which had nowhere to live at all: revenue per
+// channel was always answerable out of Odoo, and what we paid to get it was
+// answerable out of nobody's records. Creates the table only -- there is
+// nothing to backfill, because there was no earlier home for these figures.
+function marketingBudget(db) {
+  if (hasTable(db, 'marketing_budget')) return null;
+
+  // The CHECKs are carried over from schema.sql rather than left to the
+  // server, for the two things that would corrupt the rollup silently: a
+  // category typo starting its own bucket, and a period that ends before it
+  // starts taking a negative share of itself into every overlap sum.
+  db.exec(`CREATE TABLE marketing_budget (
+    budget_id    TEXT PRIMARY KEY,
+    period_start TEXT NOT NULL,
+    period_end   TEXT NOT NULL,
+    channel      TEXT NOT NULL,
+    campaign     TEXT,
+    category     TEXT NOT NULL DEFAULT 'ads'
+                      CHECK (category IN ('ads','commission','influencer','print','event','tooling','other')),
+    amount_inr   REAL NOT NULL CHECK (amount_inr >= 0),
+    vendor       TEXT,
+    notes        TEXT,
+    source       TEXT NOT NULL DEFAULT 'manual',
+    created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at   TEXT NOT NULL DEFAULT (datetime('now')),
+    CONSTRAINT marketing_budget_period_order CHECK (period_end >= period_start)
+)`);
+  db.exec('CREATE INDEX marketing_budget_period_idx  ON marketing_budget(period_start, period_end)');
+  db.exec('CREATE INDEX marketing_budget_channel_idx ON marketing_budget(channel)');
+
+  return 'marketing_budget created: what each channel and campaign cost';
+}
+
+// The published-link record, which nothing kept before: a QR code went to a
+// printer and the only copy of what it pointed at was in whoever generated
+// it's browser history. Table only -- there is nothing to backfill, because
+// the links that are already in the world were never written down.
+function marketingLinks(db) {
+  if (hasTable(db, 'marketing_link')) return null;
+
+  db.exec(`CREATE TABLE marketing_link (
+    link_id      TEXT PRIMARY KEY,
+    label        TEXT,
+    destination  TEXT NOT NULL,
+    utm_source   TEXT NOT NULL,
+    utm_medium   TEXT,
+    utm_campaign TEXT,
+    utm_content  TEXT,
+    utm_term     TEXT,
+    notes        TEXT,
+    created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at   TEXT NOT NULL DEFAULT (datetime('now'))
+)`);
+  // Over ifnull() rather than the bare columns -- see the note in
+  // schema.sql: SQLite counts NULLs as distinct, so the bare version would
+  // not catch two saves of the same untagged link.
+  db.exec(`CREATE UNIQUE INDEX marketing_link_placement_idx ON marketing_link(
+    destination, utm_source, ifnull(utm_medium, ''), ifnull(utm_campaign, ''), ifnull(utm_content, '')
+)`);
+  db.exec('CREATE INDEX marketing_link_campaign_idx ON marketing_link(utm_campaign)');
+
+  return 'marketing_link created: the tracked links and QR codes we have published';
+}
+
+// The weekly content cadence, as rows in the schedule everything else lives
+// in rather than a second list somewhere: Daily View reads scheduled_task, so
+// a posting day that isn't a row there is a posting day nobody is reminded
+// about. Category 'Marketing' is what puts them in their own Daily View card,
+// away from the kitchen and procurement tasks.
+//
+// Per-row rather than all-or-nothing, so a row someone retires by hand stays
+// retired instead of coming back on the next server start.
+const MARKETING_CADENCE = [
+  ['WS-17', 'Monday', 'Social posts - order delivered reel (IG, FB, WhatsApp, YouTube, Story)'],
+  ['WS-18', 'Tuesday', 'Poster content post (Instagram, YouTube)'],
+  ['WS-19', 'Wednesday', 'Social posts - CTA to place orders (IG, FB, WhatsApp, YouTube, Story)'],
+  ['WS-20', 'Wednesday', 'Community posts - LinkedIn, WhatsApp community, Reddit community'],
+  ['WS-21', 'Thursday', 'Social posts - CTA to place orders (IG, FB, WhatsApp, YouTube, Story)'],
+  ['WS-22', 'Friday', 'Reel content'],
+  ['WS-23', 'Saturday', 'Social posts - BTS (IG, FB, WhatsApp, YouTube, Story)'],
+  ['WS-24', 'Sunday', 'Social posts - BTS (IG, FB, WhatsApp, YouTube, Story)'],
+  ['WS-25', 'Sunday', 'Community posts - LinkedIn, WhatsApp community, Reddit community'],
+];
+
+function marketingContentCadence(db) {
+  if (!hasTable(db, 'scheduled_task')) return null;
+  // An empty scheduled_task is a database that has no weekly cadence at all
+  // (a fresh `npm run db:init`), not one missing its marketing rows — seeding
+  // half a schedule into it would be worse than leaving it empty.
+  if (!db.prepare('SELECT 1 FROM scheduled_task LIMIT 1').get()) return null;
+
+  const seen = db.prepare('SELECT 1 FROM scheduled_task WHERE task_id = ?');
+  // No time_of_day: these go out when the content is ready, and pinning a
+  // clock time nobody agreed to would show up in Daily View as a deadline.
+  //
+  // Landing at the end of their day rather than the start: sort_order is what
+  // Daily View orders by now (see scheduledTaskOrder, which runs first), and
+  // the column's default of 0 would put every seeded row above the tasks the
+  // day already had.
+  const add = db.prepare(
+    `INSERT INTO scheduled_task (task_id, day, time_of_day, task, assigned_to, category, sort_order)
+     VALUES (?, ?, NULL, ?, 'Adarsh', 'Marketing',
+             (SELECT coalesce(max(sort_order), 0) + 1 FROM scheduled_task WHERE day = ?))`,
+  );
+
+  const added = MARKETING_CADENCE.filter(([taskId]) => !seen.get(taskId));
+  added.forEach(([taskId, day, task]) => add.run(taskId, day, task, day));
+
+  return added.length ? `scheduled_task: ${added.length} marketing cadence task(s) added` : null;
+}
+
+// Daily View grew an edit mode: rename a task, retire one, add one, drag it up
+// the day's list or across to another day. The last of those needs somewhere to
+// keep the order, and rowid — what the schedule was read in by until now — is
+// fixed at insert, so a moved task would snap back on the next reload.
+//
+// Seeded from rowid, so the schedule that exists today keeps exactly the order
+// it reads in today; only what someone actually drags moves after that.
+function scheduledTaskOrder(db) {
+  if (!hasTable(db, 'scheduled_task')) return null;
+  if (hasColumn(db, 'scheduled_task', 'sort_order')) return null;
+  db.exec(
+    'ALTER TABLE scheduled_task ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0',
+  );
+  db.exec('UPDATE scheduled_task SET sort_order = rowid');
+  return 'scheduled_task: sort_order added, seeded from the existing row order';
+}
+
+const STEPS = [
+  purchaseAttribution,
+  smokingSessionFields,
+  sidePrepSideKey,
+  appendOnlyLogs,
+  purchasePieceWeight,
+  dropAiSeoTracker,
+  dropUnitsOfMeasure,
+  b2bSalesBook,
+  b2bInvoiceLines,
+  marketingBudget,
+  marketingLinks,
+  scheduledTaskOrder,
+  marketingContentCadence,
+];
 
 // Returns only what it actually changed, so the caller can say so once on
 // startup rather than have every step announce itself into a silent log.

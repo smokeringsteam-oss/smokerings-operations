@@ -130,7 +130,7 @@ const BUSINESS_TYPES = [
 // than switched to commas now that a parser is no longer in the way: these
 // rows still get exported back to CSV for the knowledge-base repo, and a
 // menu item with a comma in its name is ambiguous to anyone who opens that
-// in Excel. Same convention as aiSeo.js.
+// in Excel.
 const LIST_SEP = ';';
 
 function badRequest(message) {
@@ -232,6 +232,16 @@ function toClient(row, demandsByClient) {
     onboardingTotal: ONBOARDING_STEP_KEYS.length,
     priceList: row.price_list || '',
     paymentTerms: row.payment_terms || '',
+    // The numeric half of the payment terms — how many days after delivery an
+    // invoice for this account falls due. server/ops/b2b/b2bSales.js computes
+    // every due date off it; `paymentTerms` above stays the free-text note
+    // beside it ("Net 15, NEFT to the current account").
+    paymentTermsDays: row.payment_terms_days == null ? 15 : Number(row.payment_terms_days),
+    // The Odoo pricelist that decides this account's rates. Held as a
+    // string above this line for the same reason odooPartnerId is: the
+    // detail form posts it back as the value of a <select>.
+    odooPricelistId: row.odoo_pricelist_id == null ? '' : String(row.odoo_pricelist_id),
+    odooPricelistName: row.odoo_pricelist_name || '',
     // INTEGER in the schema, a string everywhere above this line — the
     // detail form posts it back as typed text and the UI compares it as one.
     odooPartnerId: row.odoo_partner_id == null ? '' : String(row.odoo_partner_id),
@@ -398,6 +408,30 @@ function updateClient({ id, ...fields } = {}) {
       .map((s) => String(s).trim())
       .filter(Boolean)
       .join(LIST_SEP);
+  }
+  // Not in EDITABLE_FIELDS because that path stringifies and trims, and this
+  // column is an INTEGER with a CHECK behind it — a blank or a negative here
+  // would fail at the database with a message nobody can act on.
+  // Two columns from one field: the id is the link, the name is cached
+  // beside it so a screen can say which pricelist is attached without an Odoo
+  // round trip. Clearing the id clears the name with it — a stale name next
+  // to no pricelist reads as though one is still set.
+  if (fields.odooPricelistId !== undefined) {
+    const raw = String(fields.odooPricelistId ?? '').trim();
+    if (!raw) {
+      patch.odoo_pricelist_id = null;
+      patch.odoo_pricelist_name = null;
+    } else {
+      const id = Number(raw);
+      if (!Number.isInteger(id) || id <= 0) badRequest('That is not an Odoo pricelist id.');
+      patch.odoo_pricelist_id = id;
+      patch.odoo_pricelist_name = String(fields.odooPricelistName ?? '').trim();
+    }
+  }
+  if (fields.paymentTermsDays !== undefined) {
+    const days = Number(String(fields.paymentTermsDays ?? '').trim());
+    if (!Number.isFinite(days) || days < 0) badRequest('The payment cycle must be a number of days.');
+    patch.payment_terms_days = Math.round(days);
   }
   if (fields.sampleOutcome !== undefined) {
     const outcome = String(fields.sampleOutcome || '').trim();

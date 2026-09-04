@@ -21,8 +21,8 @@
 //   * portionCapacity — how many PORTIONS fit, used where the kitchen thinks
 //     in servings rather than volume (one onion per tub; six chip portions
 //     per foil sheet). It wins over capacity when both are on file, and it's
-//     the only thing that works for sides recorded in "burger portion" /
-//     "taco portion" units, which have no volume to divide at all.
+//     the only thing that works for a side counted out by the plate, which
+//     has no volume to divide at all.
 
 // Catalog — capacity in ml, material_id matching materials.csv so the
 // container is orderable from Hyperpure (VEN-009) off the same id.
@@ -48,6 +48,9 @@ const SIDE_CONTAINERS = {
   'SR-015': 'sauceCup', // BBQ sauce
   'SR-016': 'sauceCup', // Coleslaw
   'SR-018': 'sauceCup', // Salad dressing
+  'SR-020': 'sauceCup', // Umami glaze — was reaching a cup through the old
+  //                       unit fallback rather than this table; listed here
+  //                       explicitly now that the fallback is gone.
   'SR-017': 'tray', // Salad mix
   'SR-012': 'twoOz', // Caramelised onions — one burger portion per tub
   'SR-019': 'twoOz', // Chopped onion — one taco portion per tub
@@ -57,15 +60,15 @@ const SIDE_CONTAINERS = {
   //                   doesn't fall through to the default if it ever is
 };
 
-// Sides with no explicit mapping fall back on their unit: anything poured
-// (ml) is a dip and gets a cup, anything weighed (g) is bulk and gets a tray.
-// Anything counted (pcs, "burger portion", …) has no volume to divide by —
-// returns null, and the caller falls back to one container per order, which
-// is what the boards did everywhere before this file existed.
-const DEFAULT_BY_UNIT = { ml: 'sauceCup', g: 'tray' };
-
-function getSideContainer(key, baseUnit) {
-  const slot = SIDE_CONTAINERS[key] || DEFAULT_BY_UNIT[String(baseUnit || '').toLowerCase()];
+// A side with no entry above gets no container, and the caller falls back to
+// one per order — which is what the boards did everywhere before this file
+// existed. There used to be a second chance before that fallback: a side was
+// matched on its unit, so anything poured (ml) got a cup and anything weighed
+// (g) got a tray without being listed by hand. Units of measure are no longer
+// recorded anywhere, so that guess is gone and the table above is the whole
+// answer — a new packable side has to be added to it to be boxed by size.
+function getSideContainer(key) {
+  const slot = SIDE_CONTAINERS[key];
   const container = slot ? CONTAINERS[slot] : null;
   if (!container) return null;
   // Both sizing fields always present on the wire so the boards can branch on
@@ -75,9 +78,9 @@ function getSideContainer(key, baseUnit) {
 
 // How many of `container` a side needs. Portions win over volume where a
 // portionCapacity is on file — "one onion per tub" and "6 chip portions per
-// foil sheet" are how the kitchen counts these, and sides measured in
-// "burger portion" have no millilitres to divide anyway. A side with a
-// container but no usable quantity still needs at least one box.
+// foil sheet" are how the kitchen counts these, and a side counted out by the
+// plate has no millilitres to divide anyway. A side with a container but no
+// usable quantity still needs at least one box.
 function containersNeeded(qty, container, portions) {
   if (!container) return 1;
   if (container.portionCapacity > 0) {

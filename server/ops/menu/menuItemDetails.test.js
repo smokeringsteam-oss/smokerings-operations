@@ -27,6 +27,9 @@ const FIELDS = {
   sale_delay: { type: 'integer', string: 'Lead Time', readonly: false },
   sale_ok: { type: 'boolean', string: 'Can be Sold', readonly: false },
   categ_id: { type: 'many2one', string: 'Product Category', readonly: false, relation: 'product.category', required: true },
+  responsible_id: { type: 'many2one', string: 'Responsible', readonly: false, relation: 'res.users', required: true },
+  // Blocked, like the four below it: this editor does not deal in units of
+  // measure, so Odoo's own stays on Odoo's form.
   uom_id: { type: 'many2one', string: 'Unit', readonly: false, relation: 'uom.uom', required: true },
   taxes_id: { type: 'many2many', string: 'Sales Taxes', readonly: false, relation: 'account.tax' },
   invoice_policy: {
@@ -87,7 +90,7 @@ function fakeOdoo(model, method, args = [], kwargs = {}) {
   if (model === 'account.tax' && method === 'read') {
     return args[0].map((id) => ({ id, display_name: `Tax ${id}` }));
   }
-  if (method === 'name_search') return [[16, 'kg'], [1, 'Units']];
+  if (method === 'name_search') return [[16, 'Adarsh'], [1, 'Priya']];
   throw new Error(`Unexpected call: ${model}.${method} ${JSON.stringify(args)} ${JSON.stringify(kwargs)}`);
 }
 
@@ -101,7 +104,8 @@ beforeEach(() => {
     sale_delay: 0,
     sale_ok: true,
     categ_id: [B2B_CATEGORY_ID, 'Food / Finished Products / B2B Wholesale'],
-    uom_id: [16, 'kg'],
+    responsible_id: [16, 'Adarsh'],
+    uom_id: [1, 'Units'],
     taxes_id: [7],
     invoice_policy: 'order',
     x_packaging_type: false,
@@ -149,7 +153,7 @@ describe('fetchMenuItemDetails', () => {
     const details = await fetchMenuItemDetails({ id: ITEM_ID });
 
     expect(detailField(details, 'x_packaging_type').value).toBe(''); // false -> ''
-    expect(detailField(details, 'uom_id').value).toEqual({ id: 16, name: 'kg' });
+    expect(detailField(details, 'responsible_id').value).toEqual({ id: 16, name: 'Adarsh' });
     expect(detailField(details, 'taxes_id').value).toEqual([{ id: 7, name: 'Tax 7' }]);
     expect(detailField(details, 'sale_ok').value).toBe(true);
     expect(detailField(details, 'weight').value).toBe(0);
@@ -164,7 +168,7 @@ describe('updateMenuItemDetails', () => {
   it('writes only the fields it was given, coerced to what Odoo expects', async () => {
     await updateMenuItemDetails({
       id: ITEM_ID,
-      values: { weight: '1.5', x_meat_qty_g: '250.7', sale_ok: false, taxes_id: [7, 23], uom_id: 16 },
+      values: { weight: '1.5', x_meat_qty_g: '250.7', sale_ok: false, taxes_id: [7, 23], responsible_id: 16 },
     });
 
     expect(writes).toHaveLength(1);
@@ -173,7 +177,7 @@ describe('updateMenuItemDetails', () => {
       x_meat_qty_g: 250, // integer field, so the typed decimal is truncated
       sale_ok: false,
       taxes_id: [[6, 0, [7, 23]]], // 6 = replace the set, which is what a form submit means
-      uom_id: 16,
+      responsible_id: 16,
     });
   });
 
@@ -202,8 +206,9 @@ describe('updateMenuItemDetails', () => {
     await expect(
       updateMenuItemDetails({ id: ITEM_ID, values: { invoice_policy: 'whenever' } }),
     ).rejects.toMatchObject({ status: 400 });
-    // uom_id is required, so blanking it would fail at the database instead.
-    await expect(updateMenuItemDetails({ id: ITEM_ID, values: { uom_id: null } })).rejects.toMatchObject({
+    // responsible_id is required, so blanking it would fail at the database
+    // instead.
+    await expect(updateMenuItemDetails({ id: ITEM_ID, values: { responsible_id: null } })).rejects.toMatchObject({
       status: 400,
     });
     expect(writes).toHaveLength(0);
@@ -234,12 +239,16 @@ describe('updateMenuItemDetails', () => {
 
 describe('fetchMenuItemFieldOptions', () => {
   it('searches the relation the field itself points at', async () => {
-    const result = await fetchMenuItemFieldOptions({ field: 'uom_id', query: 'k' });
-    expect(result.relation).toBe('uom.uom');
+    const result = await fetchMenuItemFieldOptions({ field: 'responsible_id', query: 'a' });
+    expect(result.relation).toBe('res.users');
     expect(result.options).toEqual([
-      { id: 16, name: 'kg' },
-      { id: 1, name: 'Units' },
+      { id: 16, name: 'Adarsh' },
+      { id: 1, name: 'Priya' },
     ]);
+  });
+
+  it('will not offer options for a blocked field, units of measure included', async () => {
+    await expect(fetchMenuItemFieldOptions({ field: 'uom_id' })).rejects.toMatchObject({ status: 400 });
   });
 
   it('will not read a model the product record does not link to', async () => {
