@@ -5,10 +5,16 @@
     "module": "ESNext",
     "moduleResolution": "bundler",
     "allowSyntheticDefaultImports": true,
-    // Without this, `tsc -b` emits vite.config.js + vite.config.d.ts next to
-    // the source. Vite resolves vite.config.js ahead of vite.config.ts, so the
-    // stale build output silently becomes the config that actually loads.
-    "noEmit": true,
+    // `tsc -b` emits vite.config.js + vite.config.d.ts for this project, and
+    // Vite resolves vite.config.js ahead of vite.config.ts — so left in the
+    // source directory the stale build output silently becomes the config
+    // that actually loads. That is the bug behind an afternoon of HMR that
+    // only worked after a hard refresh.
+    //
+    // The fix is to send the emit somewhere harmless rather than to switch it
+    // off. A composite project may not set noEmit (TS6310), so doing that
+    // stops `tsc -b` — and therefore `npm run build` — outright.
+    "outDir": "./node_modules/.tmp/vite-config",
     "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.node.tsbuildinfo"
   },
   "include": ["vite.config.ts"]

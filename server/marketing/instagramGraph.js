@@ -32,18 +32,47 @@
 //     story is live when it is not.
 //
 // Setup this expects, once, in .env — see .env.example for the walkthrough:
-// an Instagram Business or Creator account linked to a Facebook Page, a Meta
-// app with instagram_basic + instagram_content_publish, a long-lived token in
-// IG_ACCESS_TOKEN, the IG user id in IG_USER_ID, and PUBLIC_BASE_URL.
-
-// Meta supports each version for roughly two years. Pinned rather than
-// floating so a version deprecation surfaces as one obvious constant to bump
-// instead of behaviour that drifts under us; override with IG_GRAPH_VERSION
-// without touching code.
+// an Instagram Business or Creator account, a token in IG_ACCESS_TOKEN, the
+// IG user id in IG_USER_ID, and PUBLIC_BASE_URL.
+//
+// THE TWO INSTAGRAM PUBLISHING APIS, AND WHY THE HOST IS NOT A CONSTANT.
+//
+// Meta ships two of them. They take the same endpoints, the same three-step
+// container dance and the same media_type values, so almost everything below
+// is common — but they live on different hosts and each one rejects the
+// other's tokens:
+//
+//   * Instagram API with Facebook Login — graph.facebook.com. Tokens start
+//     EAA..., and it needs the account linked to a Facebook Page and an app
+//     holding instagram_basic + instagram_content_publish.
+//   * Instagram API with Instagram Login — graph.instagram.com. Tokens start
+//     IGAA..., no Facebook Page anywhere, and the account authorises the app
+//     directly. This is what smokerings_bbq uses.
+//
+// This module was written against the first and only ever called
+// graph.facebook.com, so an IGAA token failed every request with
+// "Invalid OAuth access token - Cannot parse access token" — a message that
+// names neither the real problem nor the fix. The host is now chosen from the
+// token's own prefix, so either kind works and neither has to be declared.
+// IG_API_HOST overrides it if Meta ever renames a host or a token prefix
+// changes.
 const DEFAULT_GRAPH_VERSION = 'v23.0';
 
+const FACEBOOK_HOST = 'graph.facebook.com';
+const INSTAGRAM_HOST = 'graph.instagram.com';
+
 const graphVersion = () => process.env.IG_GRAPH_VERSION || DEFAULT_GRAPH_VERSION;
-const graphBase = () => `https://graph.facebook.com/${graphVersion()}`;
+
+// An empty token lands on the Instagram host rather than throwing: this is
+// called by describeInstagramConfig for a screen that has nothing set up yet,
+// and "which host would we use" has a sensible answer before a token exists.
+export function graphHost(token = process.env.IG_ACCESS_TOKEN || '') {
+  const override = (process.env.IG_API_HOST || '').trim();
+  if (override) return override.replace(/^https?:\/\//, '').replace(/\/+$/, '');
+  return token.startsWith('EAA') ? FACEBOOK_HOST : INSTAGRAM_HOST;
+}
+
+const graphBase = () => `https://${graphHost()}/${graphVersion()}`;
 
 // How long we are willing to wait for Meta to transcode before giving up. A
 // 90-second reel is normally ready inside a minute; five minutes is the point
@@ -79,6 +108,10 @@ export function describeInstagramConfig() {
     publicBaseUrl: publicBaseUrl || null,
     publicBaseProblem,
     graphVersion: version,
+    // Which of the two APIs this token is being sent to. Reported because
+    // the failure when it is wrong ("Cannot parse access token") is the least
+    // helpful error Meta returns, and this is the value that explains it.
+    apiHost: graphHost(accessToken),
     configured: Boolean(accessToken && userId && publicBaseUrl && !publicBaseProblem),
   };
 }
@@ -155,7 +188,14 @@ async function graphRequest(url, options = {}) {
   return payload;
 }
 
-function requireConfig() {
+// `needsPublicBase` is what separates the two things this module does.
+// Publishing genuinely cannot happen without a URL Meta can fetch. Asking
+// Instagram *who this token is* is a plain authenticated GET and needs no
+// such thing — and refusing it until a tunnel is running had the checks in
+// exactly the wrong order: you could not confirm the credentials were right
+// until after standing up the funnel, so a bad token looked like a tunnel
+// problem and vice versa. Credentials first, plumbing second.
+function requireConfig({ needsPublicBase = true } = {}) {
   const config = getInstagramConfig();
   if (!config.accessToken || !config.userId) {
     const err = new Error(
@@ -164,6 +204,7 @@ function requireConfig() {
     err.status = 400;
     throw err;
   }
+  if (!needsPublicBase) return config;
   if (!config.publicBaseUrl) {
     const err = new Error(
       'PUBLIC_BASE_URL is not set. Instagram fetches the video from a public URL rather than receiving an upload, so the server needs to know how it is reachable from outside.',
@@ -179,7 +220,7 @@ function requireConfig() {
 // show "posting as @smokeringsbbq" rather than asking the user to trust that
 // a string in a .env file points where they think it does.
 export async function checkInstagramAccount() {
-  const { accessToken, userId } = requireConfig();
+  const { accessToken, userId } = requireConfig({ needsPublicBase: false });
   const url = new URL(`${graphBase()}/${userId}`);
   url.searchParams.set('fields', 'id,username,name,followers_count');
   url.searchParams.set('access_token', accessToken);
@@ -275,6 +316,44 @@ async function publishContainer(containerId) {
 
   return published.id || null;
 }
+
+// Steps 1 and 2 WITHOUT step 3 - the half of the dance that puts the video and
+// its caption on Meta's servers but leaves the profile untouched.
+//
+// This exists because Instagram has no scheduled-publish parameter: a post
+// timed for later has to be two acts. Preparing early is not merely tidier, it
+// is what makes a timed post survivable. Once the container exists Meta holds
+// the video itself, so the machine that fires the publish at the appointed
+// minute needs nothing but one HTTPS call - not this server, and not the
+// Funnel that Meta originally pulled the file through.
+//
+// A container is good for 24 hours and then expires. Nothing is on the profile
+// until publishPreparedContainer runs against it.
+export async function prepareReel({ fileName, target = 'reel', caption = '', shareToFeed = false, onStage } = {}) {
+  const { publicBaseUrl } = requireConfig();
+  if (!fileName || /[\/]/.test(fileName)) {
+    const err = new Error('A rendered file name is required.');
+    err.status = 400;
+    throw err;
+  }
+
+  const videoUrl = `${publicBaseUrl}/api/marketing/reel/render-file/${encodeURIComponent(fileName)}`;
+  const stage = (name, detail) => {
+    if (typeof onStage === 'function') onStage(name, detail);
+  };
+
+  stage('creating', videoUrl);
+  const containerId = await createContainer({ videoUrl, target, caption, shareToFeed });
+
+  stage('processing', containerId);
+  await waitForContainer(containerId, (code) => stage('processing', code));
+
+  stage('prepared', containerId);
+  return { containerId, videoUrl, target };
+}
+
+// The other half: makes a prepared container public. One call, no upload.
+export { publishContainer as publishPreparedContainer };
 
 // The whole publish, start to finish. `fileName` is a name inside the renders
 // directory; the public URL is built here rather than taken from the caller so

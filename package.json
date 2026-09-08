@@ -13,7 +13,12 @@
     "preview": "vite preview",
     "test": "vitest",
     "db:init": "node server/scripts/dbInit.js",
-    "db": "node server/scripts/dbQuery.js"
+    "db": "node server/scripts/dbQuery.js",
+    "csv:mirror": "node server/scripts/mirrorCsv.js",
+    "youtube:login": "node server/scripts/googleLogin.js youtube",
+    "drive:login": "node server/scripts/googleLogin.js drive",
+    "drive:setup": "node server/scripts/driveSetup.js",
+    "push:keys": "node server/scripts/pushKeys.js"
   },
   "dependencies": {
     "@google/genai": "^2.16.0",
@@ -22,15 +27,18 @@
     "express": "^4.18.2",
     "ffmpeg-static": "^5.3.0",
     "ffprobe-static": "^3.1.0",
+    "leaflet": "^1.9.4",
     "multer": "^1.4.4",
     "playwright": "^1.43.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "react-router-dom": "^6.26.2"
+    "react-router-dom": "^6.26.2",
+    "web-push": "^3.6.7"
   },
   "devDependencies": {
     "@testing-library/jest-dom": "^6.5.0",
     "@testing-library/react": "^16.0.1",
+    "@types/leaflet": "^1.9.22",
     "@types/react": "^18.3.5",
     "@types/react-dom": "^18.3.0",
     "@vitejs/plugin-react": "^4.3.1",

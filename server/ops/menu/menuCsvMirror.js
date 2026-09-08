@@ -4,9 +4,8 @@
 // and copies the read-back record onto the matching CSV row, so the two can't
 // drift the moment someone reprices a dish. menu.csv isn't decorative —
 // server/ops/b2c/recipes.js reads it to turn weekend order counts into a prep plan
-// (item names, and the menu_id every recipe line hangs off), and the content
-// prompts quote its descriptions. A price or name changed only in Odoo would
-// leave the prep sheet and the copy quoting last month's menu.
+// (item names, and the menu_id every recipe line hangs off). A price or name
+// changed only in Odoo would leave the prep sheet quoting last month's menu.
 //
 // A failed mirror never fails the request. The Odoo write has already
 // happened and can't be rolled back honestly, and the knowledge-base repo
@@ -21,10 +20,10 @@
 //
 // The one structural difference: a menu.csv row was one row, and its
 // database equivalent spans two tables — the name and the active flag belong
-// to `item`, which every kind of thing shares, while price and description
-// are specific to a menu item. So a single mirror can write both, and does it
-// in one transaction: a price that saved while the name silently didn't would
-// be a worse outcome than neither saving.
+// to `item`, which every kind of thing shares, while the price is specific to
+// a menu item. So a single mirror can write both, and does it in one
+// transaction: a price that saved while the name silently didn't would be a
+// worse outcome than neither saving.
 import { readMenu } from '../../core/kbViews.js';
 import { transaction, update } from '../../core/repo.js';
 import { matchProduct } from '../../integrations/odoo.js';
@@ -35,10 +34,16 @@ import { matchProduct } from '../../integrations/odoo.js';
 // These are still the CSV's column names, because they are what the `changed`
 // list reports back to the dashboard and what the knowledge-base repo calls
 // them. TARGETS below says where each one now actually lives.
+//
+// `description` is deliberately absent. Odoo's description_sale is the single
+// source of truth for a dish's blurb, and nothing here ever read the mirrored
+// copy back — readMenu()'s callers use item_name, price_inr and menu_id only.
+// A write-only second copy could do nothing but drift, so the blurb now lives
+// in exactly one place. menu_item.description is kept in the schema holding
+// its last mirrored values rather than migrated away; treat it as stale.
 const COLUMNS = {
   name: 'item_name',
   price: 'price_inr',
-  description: 'description',
   available: 'is_active',
 };
 
@@ -50,7 +55,6 @@ const TARGETS = {
   item_name: { table: 'item', column: 'name' },
   is_active: { table: 'item', column: 'is_active', encode: (v) => (v === 'yes' ? 1 : 0) },
   price_inr: { table: 'menu_item', column: 'price_inr', encode: (v) => (v === '' ? null : Number(v)) },
-  description: { table: 'menu_item', column: 'description' },
   odoo_product_id: { table: 'menu_item', column: 'odoo_product_id', encode: (v) => (v === '' ? null : Number(v)) },
 };
 
@@ -101,8 +105,9 @@ function findRow(rows, item) {
 }
 
 // `fields` names which of COLUMNS this edit actually touched, so an edit that
-// only changed the price can't overwrite a hand-written CSV description with
-// whatever Odoo happens to hold in description_sale.
+// only changed the price can't overwrite a hand-written knowledge-base name
+// with whatever Odoo happens to hold. An edit that touched nothing mirrorable
+// (a description-only save) still lands here and still backfills the pin.
 function mirrorMenuItemToCsv(item, fields = []) {
   try {
     const rows = readMenu();
@@ -133,7 +138,6 @@ function mirrorMenuItemToCsv(item, fields = []) {
     // Odoo hands prices back as numbers; String() keeps 349 as "349" rather
     // than "349.00", matching how the column is already written by hand.
     if (fields.includes('price')) set(COLUMNS.price, String(item.price));
-    if (fields.includes('description')) set(COLUMNS.description, item.description);
     // Odoo splits "on the menu" across sale_ok and active; menu.csv has one
     // flag, so an item that is archived OR marked unavailable reads as no.
     if (fields.includes('available')) set(COLUMNS.available, item.isAvailable && !item.isArchived ? 'yes' : 'no');

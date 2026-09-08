@@ -8,6 +8,7 @@ import { fileURLToPath } from 'url';
 import {
   extractWeekendOrders,
   readOrderTimePreferences,
+  suggestTaskPlacement,
 } from './integrations/geminiContent.js';
 import {
   getConfig as getGithubConfig,
@@ -34,6 +35,7 @@ import {
   syncRawMaterialsToOdoo,
   addStockOnHand,
 } from './integrations/odoo.js';
+import { fetchWhatsappThreads } from './integrations/odooWhatsapp.js';
 import {
   createTask as createScheduledTask,
   deleteTask as deleteScheduledTask,
@@ -42,6 +44,7 @@ import {
   updateTask as updateScheduledTask,
 } from './sprint/recurringSchedule.js';
 import { getWeekStatus, setTaskStatus } from './sprint/weeklyScheduleStatusLog.js';
+import { getTodayTasks, setTodayTaskDone } from './sprint/todayTasks.js';
 import {
   getConfig as getPurchasingConfig,
   getVendors,
@@ -77,6 +80,21 @@ import {
   deleteSession,
 } from './ops/shared/smoking.js';
 import { getStageLog } from './ops/shared/smokingStageLog.js';
+import {
+  deleteSubscription as deletePushSubscription,
+  getPublicKey as getPushPublicKey,
+  isConfigured as isPushConfigured,
+  listSubscriptions as listPushSubscriptions,
+  pruneDeliveries as prunePushDeliveries,
+  saveSubscription as savePushSubscription,
+} from './core/pushNotify.js';
+import { listNotes, addNote, setNoteDone, deleteNote } from './core/sharedNotes.js';
+import {
+  getTodayPending,
+  runReminderTick,
+  sendPendingDigestNow,
+  DEFAULT_DIGEST_MINUTES,
+} from './sprint/taskReminders.js';
 import { getMenu, computeSwiggyPlan, computeMeatPlan, computePrepPlan, getPackableSidesByItem, getMeatByItem } from './ops/b2c/recipes.js';
 import { getMenuItemRecipe, updateMenuItemRecipe } from './ops/menu/menuRecipe.js';
 import { getWeekendStatus, setWeekendStatus } from './ops/b2c/weekendStatus.js';
@@ -145,12 +163,16 @@ import {
 import {
   MAX_AUDIO_BYTES,
   MAX_CLIP_BYTES,
+  MEDIA_MAX_AGE_DAYS,
   CLIPS_DIR,
   RENDERS_DIR,
   buildRenderPlan,
   describeToolchain as describeReelToolchain,
+  DEFAULT_TARGET as DEFAULT_REEL_TARGET,
+  DEFAULT_LOOK as DEFAULT_REEL_LOOK,
   ensureMediaDirs,
   getRenderJob,
+  recoverRenderJob,
   probeMedia,
   pruneOldMedia,
   startRender,
@@ -161,6 +183,23 @@ import {
   getPublishJob,
   startPublish,
 } from './marketing/instagramGraph.js';
+// The two destinations that take the bytes from here rather than fetching
+// them: YouTube over OAuth, Drive over the GA4 service account.
+import {
+  describeYouTubeConfig,
+  getUploadJob as getYouTubeJob,
+  startUpload as startYouTubeUpload,
+} from './marketing/youtubeUpload.js';
+import {
+  checkDriveFolder,
+  forgetImportedSources,
+  importDriveFile,
+  listDriveLibrary,
+  listDriveReels,
+  describeDriveConfig,
+  getDriveJob,
+  startDriveUpload,
+} from './integrations/googleDrive.js';
 import { buildWeeklyReport, DEFAULT_WEEKS } from './finance/weeklyLedger.js';
 import { buildItemSalesReport } from './finance/itemSales.js';
 import {
@@ -170,6 +209,9 @@ import {
   categorisePurchases,
 } from './finance/purchaseLog.js';
 import { describeConfig as describeGaConfig } from './integrations/googleAnalytics.js';
+import { buildCustomerMapReport, pendingAddresses } from './marketing/customerGeography.js';
+import { getAutoReelJob, startAutoReel } from './marketing/autoReel.js';
+import { locateAddresses, pinAddress, forgetAddress } from './core/geocode.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const uploadDir = path.join(__dirname, 'uploads');
@@ -361,6 +403,23 @@ app.get('/api/odoo/order-packing', async (req, res) => {
     res.json(result);
   } catch (err) {
     console.error('Error in GET /api/odoo/order-packing:', err);
+    res.status(err.status || 500).json({ error: err.message || String(err) });
+  }
+});
+
+// WhatsApp inbox — the customer conversations still waiting on us, for the
+// Ops Dashboard view and the sidebar notification badge behind it. Both poll
+// this same endpoint; it is read-only and cheap (four search_reads), and it
+// answers 200 with available:false rather than erroring when Odoo or the
+// WhatsApp module isn't set up, so a badge polling on a timer can't fill the
+// console with failures. See server/integrations/odooWhatsapp.js for what
+// counts as needing attention.
+app.get('/api/odoo/whatsapp/threads', async (req, res) => {
+  try {
+    const result = await fetchWhatsappThreads({ limit: req.query.limit });
+    res.json(result);
+  } catch (err) {
+    console.error('Error in GET /api/odoo/whatsapp/threads:', err);
     res.status(err.status || 500).json({ error: err.message || String(err) });
   }
 });
@@ -1421,6 +1480,27 @@ app.post('/api/github/sprint-board/:itemId/assignees', async (req, res) => {
   }
 });
 
+// Where a newly typed task should be filed: which epic, what status, who is on
+// it. A suggestion only — the answer lands in the add form's own dropdowns and
+// the person adding the task can change any of it before anything is created.
+// See suggestTaskPlacement in server/integrations/geminiContent.js.
+//
+// The epics, the logins and the statuses come from the caller rather than from
+// here. They are the sprint board's own idea of what a top-level issue is (see
+// EPIC_ISSUE_NUMBERS in SprintDashboard.tsx), and a second copy on this side
+// would be a list to keep in step for no gain — the model is only ever allowed
+// to pick from what it was handed, and the pick is checked against that list
+// again before it comes back.
+app.post('/api/github/sprint-board/suggest-placement', async (req, res) => {
+  try {
+    const { title, epics = [], assignees = [], statuses = [] } = req.body || {};
+    res.json(await suggestTaskPlacement({ title, epics, assignees, statuses }));
+  } catch (err) {
+    console.error('Error in POST /api/github/sprint-board/suggest-placement:', err);
+    res.status(err.status || 500).json({ error: err.message || String(err) });
+  }
+});
+
 app.post('/api/github/sprint-board/sub-issues', async (req, res) => {
   try {
     const { parentIssueId, title, body = '', status, assignee } = req.body;
@@ -1733,6 +1813,66 @@ app.post('/api/marketing/attribution/backfill', async (req, res) => {
   }
 });
 
+// ---- Customer Map (Marketing > Customer Map) ------------------------------
+// Where the orders come from, on a map. The report is a read of Odoo joined
+// to the local geocode cache and is safe to build on every page load; putting
+// a new address ON the map is a separate POST, because that is the call that
+// sends an address to a third party. See the note at the top of
+// server/core/geocode.js.
+
+app.get('/api/marketing/customer-map', async (req, res) => {
+  try {
+    // Both optional: nothing at all gives the last twelve weeks.
+    const { from, to } = req.query || {};
+    res.json(await buildCustomerMapReport({ fromDate: from, toDate: to }));
+  } catch (err) {
+    console.error('Error in GET /api/marketing/customer-map:', err);
+    res.status(err.status || 500).json({ error: err.message || String(err) });
+  }
+});
+
+// Looks up the addresses in the range that have never been looked up, a
+// batch at a time. The client says how many and over what range; it does NOT
+// say which addresses — that list is derived here, so nothing but a customer
+// address already in Odoo can be sent to the geocoder through this endpoint.
+app.post('/api/marketing/customer-map/locate', async (req, res) => {
+  try {
+    const { from, to, limit } = req.body || {};
+    const pending = await pendingAddresses({ fromDate: from, toDate: to });
+    const result = await locateAddresses(pending, { limit });
+    res.json(result);
+  } catch (err) {
+    console.error('Error in POST /api/marketing/customer-map/locate:', err);
+    res.status(err.status || 500).json({ error: err.message || String(err) });
+  }
+});
+
+// A pin dropped by hand, for an address no geocoder is going to find — an
+// apartment name, a landmark, a gate number. Overwrites whatever the lookup
+// decided, and is never overwritten by a later one.
+app.post('/api/marketing/customer-map/pin', (req, res) => {
+  try {
+    const { address, latitude, longitude, locality, postcode } = req.body || {};
+    res.json({ pin: pinAddress({ address, latitude, longitude, locality, postcode }) });
+  } catch (err) {
+    console.error('Error in POST /api/marketing/customer-map/pin:', err);
+    res.status(err.status || 500).json({ error: err.message || String(err) });
+  }
+});
+
+// Forgets what we know about an address so it can be looked up again — the
+// one thing this is for is an address that was wrong in Odoo and has since
+// been fixed there.
+app.post('/api/marketing/customer-map/forget', (req, res) => {
+  try {
+    const { address } = req.body || {};
+    res.json({ forgotten: forgetAddress(address) });
+  } catch (err) {
+    console.error('Error in POST /api/marketing/customer-map/forget:', err);
+    res.status(err.status || 500).json({ error: err.message || String(err) });
+  }
+});
+
 // ---- Tracked links & QR codes (Marketing > QR & Link Builder) -------------
 // The other end of attribution from the tagging list above: instead of
 // working out afterwards where an order came from, publish a link that says
@@ -1840,8 +1980,30 @@ async function probeCached(filePath) {
   return probeCache.get(key);
 }
 
+// Everything the Share step needs to decide which destinations it can offer,
+// in one call: what can be rendered, and which of the three places it can be
+// sent to are actually wired up. A destination that is not configured is
+// still shown — greyed, with the reason — rather than hidden, because a
+// missing tile reads as a missing feature.
 app.get('/api/marketing/reel/status', (req, res) => {
-  res.json({ toolchain: describeReelToolchain(), instagram: describeInstagramConfig() });
+  res.json({
+    toolchain: describeReelToolchain(),
+    instagram: describeInstagramConfig(),
+    youtube: describeYouTubeConfig(),
+    drive: describeDriveConfig(),
+  });
+});
+
+// Confirms the Drive folder is real and reachable before a 40MB upload is
+// aimed at it, and says whether it is in a Shared Drive — which is the thing
+// that decides whether uploads will work at all. See googleDrive.js.
+app.get('/api/marketing/reel/drive-folder', async (req, res) => {
+  try {
+    res.json(await checkDriveFolder());
+  } catch (err) {
+    console.error('Error in GET /api/marketing/reel/drive-folder:', err);
+    res.status(err.status || 500).json({ error: err.message || String(err) });
+  }
 });
 
 // Confirms the token actually works and says whose account it is, so nobody
@@ -1851,6 +2013,75 @@ app.get('/api/marketing/reel/account', async (req, res) => {
     res.json(await checkInstagramAccount());
   } catch (err) {
     console.error('Error in GET /api/marketing/reel/account:', err);
+    res.status(err.status || 500).json({ error: err.message || String(err) });
+  }
+});
+
+// The stored name is `<timestamp>-<random>-<sanitised original>`; this gives
+// the last part back so a listing reads like the file somebody dropped in
+// rather than like a database key.
+function displayNameOf(storedName) {
+  return storedName.replace(/^\d+-[a-z0-9]{1,8}-/, '') || storedName;
+}
+
+// What is still on disk. The editor's draft lives in the browser but the media
+// it points at does not, and the two go out of step on their own: clips are
+// swept after a week (pruneOldMedia). So a restored timeline is reconciled
+// against this rather than trusted — a clip that has been swept has to be
+// dropped at load, with the operator told, instead of turning into a black
+// block that fails the export twenty minutes later.
+//
+// Video and audio are separated by what ffprobe found in them rather than by
+// where they were uploaded, because they were uploaded to the same folder.
+app.get('/api/marketing/reel/clips', async (req, res) => {
+  try {
+    ensureMediaDirs();
+    const clips = [];
+    const audio = [];
+
+    const names = fs.readdirSync(CLIPS_DIR);
+    // Probed a batch at a time rather than one after another. Every probe is a
+    // process spawn, and a week of clips is dozens of them: done serially this
+    // route takes long enough that clips get dropped onto the page before it
+    // answers. Batched rather than all at once because "all at once" on a full
+    // folder means fifty ffprobes competing for the same disk.
+    const PROBE_BATCH = 8;
+    for (let start = 0; start < names.length; start += PROBE_BATCH) {
+      const batch = names.slice(start, start + PROBE_BATCH);
+      const probed = await Promise.all(
+        batch.map(async (name) => {
+          const filePath = path.join(CLIPS_DIR, name);
+          try {
+            if (!fs.statSync(filePath).isFile()) return null;
+            return { name, probe: await probeCached(filePath) };
+          } catch {
+            // Unreadable is indistinguishable from gone as far as the editor
+            // is concerned, and neither is worth an error here.
+            return null;
+          }
+        }),
+      );
+
+      for (const result of probed) {
+        if (!result) continue;
+        const { name, probe } = result;
+        const entry = {
+          id: name,
+          name: displayNameOf(name),
+          url: `/api/marketing/reel/clip-file/${encodeURIComponent(name)}`,
+          ...probe,
+        };
+        if (probe.hasVideo && probe.duration > 0) clips.push(entry);
+        else if (probe.hasAudio && probe.duration > 0) audio.push(entry);
+      }
+    }
+
+    // Newest first: the clips from the cook that just finished are the ones
+    // being looked for.
+    const byNewest = (a, b) => Number(b.id.split('-')[0] || 0) - Number(a.id.split('-')[0] || 0);
+    res.json({ clips: clips.sort(byNewest), audio: audio.sort(byNewest), keptForDays: MEDIA_MAX_AGE_DAYS });
+  } catch (err) {
+    console.error('Error in GET /api/marketing/reel/clips:', err);
     res.status(err.status || 500).json({ error: err.message || String(err) });
   }
 });
@@ -1950,9 +2181,82 @@ app.delete('/api/marketing/reel/clips/:name', (req, res) => {
   }
 });
 
+// Rough cut — the first pass at an edit, made by measuring the footage.
+//
+// One ffmpeg decode per clip finds the scene changes, the black frames, the
+// THE SOURCE LIBRARY, and the automatic build that runs off it.
+//
+// Everything a reel is made from lives in one Google Drive folder: the clips
+// shot during the cook, dropped in from a phone, and the songs to lay under
+// them. This lists that folder, and the route below turns a selection from it
+// into a finished video without anybody opening an editor.
+//
+// The folder is pinned server-side in googleDrive.js and there is deliberately
+// no way to ask these routes for a different one. drive.readonly can reach the
+// whole account — Google sells no folder-scoped Drive scope — so the pin is
+// what makes "only that folder" true, and a folder parameter here would undo
+// it. Import re-checks membership per file for the same reason.
+app.get('/api/marketing/reel/drive/library', async (req, res) => {
+  try {
+    res.json(await listDriveLibrary());
+  } catch (err) {
+    console.error('Error in GET /api/marketing/reel/drive/library:', err);
+    res.status(err.status || 500).json({ error: err.message || String(err) });
+  }
+});
+
+// Pick the clips, pick a song, get a reel.
+//
+// Answers 202 with a build id and nothing else useful: fetching several
+// hundred megabytes out of Drive, decoding every clip, and asking a model for
+// captions is minutes of work, well past any sensible request timeout. The
+// five stages are in server/marketing/autoReel.js and the screen polls the
+// route below for which one is running.
+app.post('/api/marketing/reel/auto', (req, res) => {
+  try {
+    const {
+      clipFileIds = [],
+      songFileId = '',
+      target = DEFAULT_REEL_TARGET,
+      look = DEFAULT_REEL_LOOK,
+      targetSeconds,
+      maxShotSeconds,
+      musicMode,
+      sessionHint,
+    } = req.body || {};
+
+    const job = startAutoReel({
+      clipFileIds,
+      songFileId,
+      target,
+      look,
+      targetSeconds,
+      maxShotSeconds,
+      musicMode,
+      sessionHint,
+    });
+    res.status(202).json(job);
+  } catch (err) {
+    console.error('Error in POST /api/marketing/reel/auto:', err);
+    res.status(err.status || 500).json({ error: err.message || String(err) });
+  }
+});
+
+// Where the build has got to.
+//
+// Once it reaches `rendering` the job carries a renderId and the screen
+// switches to polling the render route, which is the same one every other way
+// of making a reel ends at — so the review and share steps below needed no
+// changes to work with an automatic build.
+app.get('/api/marketing/reel/auto/:buildId', (req, res) => {
+  const job = getAutoReelJob(req.params.buildId);
+  if (!job) return res.status(404).json({ error: 'That build is not on this server. It may have restarted.' });
+  res.json(job);
+});
+
 app.post('/api/marketing/reel/render', async (req, res) => {
   try {
-    const { clips = [], music = null, target = 'story' } = req.body || {};
+    const { clips = [], music = null, target = DEFAULT_REEL_TARGET, look = DEFAULT_REEL_LOOK } = req.body || {};
     if (!Array.isArray(clips) || !clips.length) {
       return res.status(400).json({ error: 'Add at least one clip before rendering.' });
     }
@@ -1978,12 +2282,15 @@ app.post('/api/marketing/reel/render', async (req, res) => {
       };
     }
 
-    const plan = buildRenderPlan({ clips, sources, music: plannedMusic, target });
+    const plan = buildRenderPlan({ clips, sources, music: plannedMusic, target, look });
 
     // Sweep before starting rather than after finishing: a render that fails
     // still leaves its inputs behind, and this is the moment we know nothing
     // older is in use.
     pruneOldMedia();
+    // The sweep can delete a Drive import that autoReel is caching a path to,
+    // so the cache is reconciled against the disk in the same breath.
+    forgetImportedSources();
 
     const job = startRender(plan);
     res.status(202).json({
@@ -1998,9 +2305,19 @@ app.post('/api/marketing/reel/render', async (req, res) => {
   }
 });
 
-app.get('/api/marketing/reel/render/:renderId', (req, res) => {
-  const job = getRenderJob(req.params.renderId);
-  if (!job) return res.status(404).json({ error: 'That render is not one this server knows about.' });
+app.get('/api/marketing/reel/render/:renderId', async (req, res) => {
+  // A miss here usually means this process is not the one that started the
+  // render — `node --watch` restarts on any server edit, and the job table is
+  // in memory. If the encode had already finished, the file is still on disk
+  // and can be matched back to the id, so look before saying no.
+  let job = getRenderJob(req.params.renderId);
+  if (!job) job = await recoverRenderJob(req.params.renderId).catch(() => null);
+  if (!job) {
+    return res.status(404).json({
+      error:
+        'This server has no record of that export. It restarts whenever a server file is saved, which loses an encode that was still running — start the export again.',
+    });
+  }
 
   res.json({
     renderId: job.renderId,
@@ -2010,6 +2327,12 @@ app.get('/api/marketing/reel/render/:renderId', (req, res) => {
     warnings: job.warnings,
     totalDuration: job.totalDuration,
     sizeBytes: job.sizeBytes,
+    // What was actually made, not what the screen currently has selected: the
+    // Share step offers destinations against the file on disk, and the target
+    // dropdown can be changed after an export without re-running it.
+    target: job.target,
+    width: job.width,
+    height: job.height,
     // Only offered once the file is actually complete; a URL to a half-written
     // mp4 is worse than no URL.
     url: job.status === 'ready' ? `/api/marketing/reel/render-file/${encodeURIComponent(job.fileName)}` : null,
@@ -2053,6 +2376,110 @@ app.post('/api/marketing/reel/publish', (req, res) => {
 app.get('/api/marketing/reel/publish/:publishId', (req, res) => {
   const job = getPublishJob(req.params.publishId);
   if (!job) return res.status(404).json({ error: 'That publish is not one this server knows about.' });
+  res.json(job);
+});
+
+// YouTube, unlike Instagram, takes the bytes from here — so this one works
+// without PUBLIC_BASE_URL or a tunnel. See server/marketing/youtubeUpload.js,
+// including why an unaudited API project forces every upload to private.
+app.post('/api/marketing/reel/youtube', (req, res) => {
+  try {
+    const { fileName, title = '', description = '', privacyStatus = 'public', tags = [] } = req.body || {};
+    resolveMediaFile(RENDERS_DIR, fileName);
+
+    const job = startYouTubeUpload({ fileName, title, description, privacyStatus, tags });
+    res.status(202).json({ uploadId: job.uploadId, status: job.status, stage: job.stage });
+  } catch (err) {
+    console.error('Error in POST /api/marketing/reel/youtube:', err);
+    res.status(err.status || 500).json({ error: err.message || String(err) });
+  }
+});
+
+app.get('/api/marketing/reel/youtube/:uploadId', (req, res) => {
+  const job = getYouTubeJob(req.params.uploadId);
+  if (!job) return res.status(404).json({ error: 'That upload is not one this server knows about.' });
+  res.json(job);
+});
+
+// The master copy. Not a publish — nothing transcodes it and nothing decides
+// when it goes live — which is exactly why it is worth having alongside the
+// two destinations that re-encode.
+// Past reels, for reposting. See the "Coming back the other way" section of
+// googleDrive.js — this lists only what this app itself uploaded, because the
+// drive.file scope cannot see anything else in the account.
+app.get('/api/marketing/reel/drive/files', async (req, res) => {
+  try {
+    res.json({ files: await listDriveReels({ limit: req.query.limit }) });
+  } catch (err) {
+    console.error('Error in GET /api/marketing/reel/drive/files:', err);
+    res.status(err.status || 500).json({ error: err.message || String(err) });
+  }
+});
+
+// Pulls one back down and hands it over in exactly the shape a finished
+// export has, so the review screen and every destination take it without
+// knowing it came from Drive rather than out of ffmpeg.
+//
+// The probe is not decoration. The Share step greys out destinations whose
+// shape does not match the file — posting a landscape video as a Story
+// letterboxes it into something nobody meant to publish — and an imported
+// file has no target recorded anywhere. Its dimensions are the honest
+// substitute: upright means the three vertical targets, landscape means the
+// YouTube video, and that is precisely the distinction the Share step makes.
+app.post('/api/marketing/reel/drive/import', async (req, res) => {
+  try {
+    const { fileId } = req.body || {};
+    const { renderId, fileName, outputPath, driveName } = await importDriveFile(fileId);
+
+    let probe;
+    try {
+      probe = await probeMedia(outputPath);
+    } catch {
+      fs.rmSync(outputPath, { force: true });
+      const err = new Error(
+        `"${driveName}" came down from Drive but could not be read as a video. It may have been damaged in the upload.`,
+      );
+      err.status = 422;
+      throw err;
+    }
+
+    const upright = probe.height >= probe.width;
+    res.json({
+      renderId,
+      status: 'ready',
+      percent: 100,
+      error: null,
+      warnings: [`Imported from Drive: ${driveName}`],
+      totalDuration: probe.duration,
+      sizeBytes: fs.statSync(outputPath).size,
+      target: upright ? 'ig-reel' : 'yt-video',
+      width: probe.width,
+      height: probe.height,
+      url: `/api/marketing/reel/render-file/${encodeURIComponent(fileName)}`,
+      fileName,
+    });
+  } catch (err) {
+    console.error('Error in POST /api/marketing/reel/drive/import:', err);
+    res.status(err.status || 500).json({ error: err.message || String(err) });
+  }
+});
+
+app.post('/api/marketing/reel/drive', (req, res) => {
+  try {
+    const { fileName, name = '' } = req.body || {};
+    resolveMediaFile(RENDERS_DIR, fileName);
+
+    const job = startDriveUpload({ fileName, name: String(name || '').trim() });
+    res.status(202).json({ uploadId: job.uploadId, status: job.status, stage: job.stage });
+  } catch (err) {
+    console.error('Error in POST /api/marketing/reel/drive:', err);
+    res.status(err.status || 500).json({ error: err.message || String(err) });
+  }
+});
+
+app.get('/api/marketing/reel/drive/:uploadId', (req, res) => {
+  const job = getDriveJob(req.params.uploadId);
+  if (!job) return res.status(404).json({ error: 'That upload is not one this server knows about.' });
   res.json(job);
 });
 
@@ -2173,6 +2600,224 @@ app.get('/api/finance/status', (req, res) => {
   const { url, db, configured } = getOdooConfig();
   res.json({ odoo: { url, db, configured }, defaultWeeks: DEFAULT_WEEKS });
 });
+
+// ---- Shared notes -------------------------------------------------------
+//
+// The note bubble in the top bar. Its endpoints carry no business rules of
+// their own — see server/core/sharedNotes.js for what a note is and why the
+// table is append-only, and server/sprint/todayTasks.js for the strip of
+// today's cadence the same panel pins above the board.
+
+// Today's cadence, pinned above the board in the same panel — see
+// server/sprint/todayTasks.js for why the two live together. Deliberately a
+// separate endpoint rather than a field on the notes payload: the panel only
+// asks for this while it is open, whereas the notes poll runs all session
+// behind the bubble's unread count.
+app.get('/api/today-tasks', (req, res) => {
+  try {
+    res.json(getTodayTasks());
+  } catch (err) {
+    console.error('Error in GET /api/today-tasks:', err);
+    res.status(err.status || 500).json({ error: err.message || String(err) });
+  }
+});
+
+// Ticks one of them. The same write Daily View makes — same table, same CSV
+// mirror — so the two screens can never disagree about what is done.
+app.post('/api/today-tasks/:taskId', (req, res) => {
+  try {
+    const { done } = req.body || {};
+    res.json(setTodayTaskDone({ taskId: req.params.taskId, done }));
+  } catch (err) {
+    console.error('Error in POST /api/today-tasks/:taskId:', err);
+    res.status(err.status || 500).json({ error: err.message || String(err) });
+  }
+});
+
+
+// The panel's whole payload: the newest notes oldest-first, the board counts,
+// and the names that have posted. Polled by every open dashboard, so it stays
+// a couple of cheap reads of a small table.
+//
+// ?q= filters on the note text and the poster's name; ?author= narrows to one
+// person by whole name, and the two stack. Server-side because the browser
+// only ever holds the most recent page of notes — see listNotes.
+app.get('/api/notes', (req, res) => {
+  try {
+    res.json(listNotes({ q: req.query?.q, author: req.query?.author }));
+  } catch (err) {
+    console.error('Error in GET /api/notes:', err);
+    res.status(err.status || 500).json({ error: err.message || String(err) });
+  }
+});
+
+// Posts one. 201 with the stored note, so the device that wrote it gets the
+// server's id and timestamp back and can drop its optimistic copy rather than
+// wait for the next poll to reconcile them.
+app.post('/api/notes', (req, res) => {
+  try {
+    const { body, author } = req.body || {};
+    res.status(201).json(addNote({ body, author }));
+  } catch (err) {
+    console.error('Error in POST /api/notes:', err);
+    res.status(err.status || 500).json({ error: err.message || String(err) });
+  }
+});
+
+// Ticks or unticks one. PATCH rather than POST because it edits a row that
+// already exists, and the tick lives on the server rather than in the browser
+// so that one person marking a job done is visible to everyone else.
+app.patch('/api/notes/:id', (req, res) => {
+  try {
+    const { done, by } = req.body || {};
+    res.json(setNoteDone({ id: req.params.id, done, by }));
+  } catch (err) {
+    console.error('Error in PATCH /api/notes/:id:', err);
+    res.status(err.status || 500).json({ error: err.message || String(err) });
+  }
+});
+
+// Deletes one. Deliberately 200 rather than 404 for a note that has already
+// gone — two devices tapping the same X is ordinary, and both of them wanted
+// the same end state.
+app.delete('/api/notes/:id', (req, res) => {
+  try {
+    res.json(deleteNote({ id: req.params.id }));
+  } catch (err) {
+    console.error('Error in DELETE /api/notes/:id:', err);
+    res.status(err.status || 500).json({ error: err.message || String(err) });
+  }
+});
+
+// ---- Push notifications -------------------------------------------------
+//
+// Reminders for whatever is still pending today, delivered to the phone rather
+// than waiting on the dashboard for someone to open it. See
+// server/core/pushNotify.js for the path a notification takes and why legion
+// has to be awake for any of it to happen.
+
+// What the toggle in Daily View needs to render itself: whether this server can
+// send at all, the public key a browser needs to subscribe, and who is
+// currently subscribed.
+app.get('/api/push/status', (req, res) => {
+  try {
+    res.json({
+      configured: isPushConfigured(),
+      publicKey: getPushPublicKey(),
+      subscriptions: listPushSubscriptions(),
+      digestTime: pushDigestLabel(),
+    });
+  } catch (err) {
+    console.error('Error in GET /api/push/status:', err);
+    res.status(err.status || 500).json({ error: err.message || String(err) });
+  }
+});
+
+app.post('/api/push/subscribe', (req, res) => {
+  try {
+    const { subscription, label } = req.body || {};
+    if (!isPushConfigured()) {
+      return res
+        .status(503)
+        .json({ error: 'Push is not configured on the server — no VAPID keys in .env.' });
+    }
+    res.status(201).json(savePushSubscription({ ...(subscription || {}), label }));
+  } catch (err) {
+    console.error('Error in POST /api/push/subscribe:', err);
+    res.status(err.status || 500).json({ error: err.message || String(err) });
+  }
+});
+
+app.post('/api/push/unsubscribe', (req, res) => {
+  try {
+    res.json(deletePushSubscription((req.body || {}).endpoint));
+  } catch (err) {
+    console.error('Error in POST /api/push/unsubscribe:', err);
+    res.status(err.status || 500).json({ error: err.message || String(err) });
+  }
+});
+
+// The "send it now" button. Deliberately the real digest rather than a canned
+// "hello" — proving the pipeline works means seeing what a reminder will
+// actually look like, including the case where there is nothing left to do.
+app.post('/api/push/test', async (req, res) => {
+  try {
+    const result = await sendPendingDigestNow();
+    res.json({
+      ...result,
+      message:
+        result.message ||
+        (result.sent
+          ? `Sent to ${result.sent} device${result.sent === 1 ? '' : 's'}.`
+          : 'Nothing was sent — no device has notifications turned on yet.'),
+    });
+  } catch (err) {
+    console.error('Error in POST /api/push/test:', err);
+    res.status(err.status || 500).json({ error: err.message || String(err) });
+  }
+});
+
+// What the reminder would consider pending right now. Exists for the times the
+// question is "why didn't it tell me?", which is otherwise unanswerable
+// without a database prompt.
+app.get('/api/push/pending', (req, res) => {
+  try {
+    res.json(getTodayPending());
+  } catch (err) {
+    console.error('Error in GET /api/push/pending:', err);
+    res.status(err.status || 500).json({ error: err.message || String(err) });
+  }
+});
+
+// PUSH_DIGEST_TIME as "HH:MM", the hour the morning digest goes out. Parsed
+// once here rather than per tick, and falling back to the module's default if
+// it is set to something that isn't a time.
+function pushDigestMinutes() {
+  const raw = (process.env.PUSH_DIGEST_TIME || '').trim();
+  const match = /^(\d{1,2}):(\d{2})$/.exec(raw);
+  if (!match) return DEFAULT_DIGEST_MINUTES;
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  if (hours > 23 || minutes > 59) return DEFAULT_DIGEST_MINUTES;
+  return hours * 60 + minutes;
+}
+
+function pushDigestLabel() {
+  const total = pushDigestMinutes();
+  return `${String(Math.floor(total / 60)).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`;
+}
+
+// The timer.
+//
+// Once a minute, which is as coarse as it can be while still hitting a task
+// scheduled at a specific minute. It is cheap — two indexed reads against a
+// table of a few dozen rows — and it sends nothing unless something is both
+// due and unclaimed, so the overwhelming majority of ticks do no work at all.
+//
+// unref() so this never holds the process open: with it referenced, Ctrl-C on
+// a dev server would hang for up to a minute waiting on a timer that has
+// nothing to say.
+const PUSH_TICK_MS = 60 * 1000;
+if (process.env.PUSH_REMINDERS !== 'off') {
+  const tick = () => {
+    runReminderTick(new Date(), { digestMinutes: pushDigestMinutes() }).then((result) => {
+      if (result?.sent) console.log(`[push] sent ${result.sent} notification(s)`);
+    });
+  };
+  setInterval(tick, PUSH_TICK_MS).unref();
+  // A first pass on startup rather than a minute from now: the server is
+  // restarted often enough (every backend edit) that always waiting a minute
+  // would make a reminder due in that window quietly disappear.
+  tick();
+  // Old delivery claims, cleared once per boot — see pushNotify.js for why
+  // this is a startup job rather than a scheduled one.
+  try {
+    const pruned = prunePushDeliveries();
+    if (pruned) console.log(`[push] pruned ${pruned} old delivery record(s)`);
+  } catch (err) {
+    console.error('[push] could not prune delivery records —', err.message);
+  }
+}
 
 const port = process.env.PORT || 4000;
 app.listen(port, () => console.log(`Reddit poster server listening on http://localhost:${port}`));

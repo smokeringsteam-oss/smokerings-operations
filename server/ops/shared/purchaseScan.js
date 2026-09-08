@@ -106,12 +106,6 @@ function normaliseScannedBill(parsed, { materials = [], vendors = [] } = {}) {
       return;
     }
 
-    const quantity = toNumber(raw.quantity);
-    if (!(quantity > 0)) {
-      skipped.push({ itemName, reason: 'Quantity was missing or unreadable — add this line by hand.' });
-      return;
-    }
-
     // A bill prints one of the two, or both, and they disagree as often as
     // not once a discount is involved. The unit price is what the purchase
     // log stores, so a printed one is used as-is and a missing one is derived
@@ -119,6 +113,29 @@ function normaliseScannedBill(parsed, { materials = [], vendors = [] } = {}) {
     // total (the prompt forbids that read in the first place).
     const printedUnitPrice = toNumber(raw.unitPrice);
     const lineTotal = toNumber(raw.lineTotal);
+
+    // A butcher's slip bills by weight, and its till knows that: the column
+    // is headed QTY/WT and holds 4.430, but the summary two lines down reads
+    // "#ITEMS:1 TQty:0 TWt:4.430", because to the till a weighed item has no
+    // countable quantity at all. Read off a photo, that 0 wins often enough
+    // to matter, and it used to take the whole line with it — a 4.430 kg
+    // shoulder dropped for want of a number printed twice on the same slip.
+    //
+    // When both money columns came back it is not a guess: 2392.20 / 540.00
+    // is 4.430 exactly, the same arithmetic the derived unit price below
+    // already trusts, run the other way. Both printed, so still nothing
+    // inferred from a grand total. Three decimals because the number being
+    // recovered is a weight in kg.
+    let quantity = toNumber(raw.quantity);
+    let derivedQuantity = false;
+    if (!(quantity > 0) && lineTotal > 0 && printedUnitPrice > 0) {
+      quantity = Math.round((lineTotal / printedUnitPrice) * 1000) / 1000;
+      derivedQuantity = true;
+    }
+    if (!(quantity > 0)) {
+      skipped.push({ itemName, reason: 'Quantity was missing or unreadable — add this line by hand.' });
+      return;
+    }
     let unitPrice = printedUnitPrice > 0 ? printedUnitPrice : 0;
     let derivedPrice = false;
     if (!unitPrice && lineTotal > 0) {
@@ -136,6 +153,7 @@ function normaliseScannedBill(parsed, { materials = [], vendors = [] } = {}) {
       billText: itemName,
       unit: clean(raw.unit),
       quantity,
+      derivedQuantity,
       unitPrice,
       derivedPrice,
       lineTotal: lineTotal > 0 ? lineTotal : Math.round(quantity * unitPrice * 100) / 100,

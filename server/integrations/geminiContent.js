@@ -350,7 +350,7 @@ Return:
 Each line has:
 - "itemName": the item as written on the bill, verbatim (e.g. "Pork Belly B/L", "Amul Butter 500g").
 - "materialId": the id of the matching item from the kitchen's catalogue below, if one clearly matches the same physical thing. Use "" when nothing in the catalogue matches — an unmatched line is fine and expected. Never invent an id that is not in the list.
-- "quantity": how many units/kg were bought, as a number. This is the number the vendor charges by.
+- "quantity": how many units/kg were bought, as a number. This is the number the vendor charges by, and on a butcher's slip it is a weight rather than a count — a column headed "QTY/WT", "WT", "Qty/Kg" or similar holds the quantity even when it reads 4.430. Take it from the item's own row. Never take it from a summary counter near the total ("#ITEMS:1", "TQty:0", "Total Qty"): a till prints TQty:0 for a weighed item, and that 0 is about the till, not about what was bought.
 - "unitPrice": price per unit in rupees, as a number. 0 if only a line total is printed.
 - "lineTotal": the line's total in rupees, as a number. 0 if only a unit price is printed.
 - "unit": the unit the quantity is in, exactly as the bill words it ("kg", "pcs", "packet", "litre"). Empty string if the bill does not say.
@@ -359,6 +359,8 @@ Rules:
 - Only rupee amounts actually printed on the bill. Never compute a missing price by dividing a grand total, and never carry a price over from another line.
 - Skip the bill's own summary rows — subtotal, total, GST/CGST/SGST, delivery fee, discount, round-off, amount paid. Those are not items bought.
 - A quantity written as "2 x 500g" means quantity 2 of a 500g pack; keep quantity 2 and put the pack size in itemName.
+- Some photos hold several separate bills at once — a roll of thermal slips, or one long strip the shop printed per weigh-in, each with its own header, bill number and NET total. Read every item row on every bill in the image into one flat "lines" array; they were all bought, and the screen logs them as one trip.
+- An item row with no real name ("NON PLU", "MISC", "ITEM 1", a bare code) is still a line that was bought. Keep it, with itemName exactly as printed — do not skip it and do not invent a name for it.
 - If a line is genuinely unreadable, leave it out entirely and say so in "notes". A missing line the pitmaster adds by hand is far better than a made-up one.
 - If the image is not a bill at all, return empty lines and say so in "notes".
 
@@ -633,4 +635,133 @@ export async function rankMaterialMatches({ itemName, candidates = [] }) {
     err.status = 502;
     throw err;
   }
+}
+
+// ---- Filing a new sprint task -------------------------------------------
+//
+// The sprint board's add form used to ask three questions before it would let
+// you type a task: which epic it belongs under, what status it starts in, and
+// who is on it. Only the first is genuinely hard — the board's epics are broad
+// ("Marketing", "Kitchen Ops") and the person adding a task at 11pm has to
+// hold all ten of them in their head to place one line of text. So the model
+// answers that question, and the answer arrives as a suggestion in the same
+// dropdowns rather than as a decision: see SprintDashboard.tsx, where nothing
+// it picks is beyond overriding before the issue is created.
+//
+// Everything it may answer with is handed to it as a list, and everything it
+// answers is checked back against that list below. A hallucinated epic here
+// would not be a wrong label on a screen — createSubIssueTask would file a
+// real GitHub issue under the wrong parent, and taking that back is manual.
+const PLACEMENT_SYSTEM_PROMPT = `You are the sprint-board assistant for Smoke Rings BBQ, a barbecue cloud kitchen in Bengaluru, India. The team runs the whole business off one GitHub project board: smoking and kitchen prep, weekend orders, vendor purchasing, marketing and social content, the ops dashboard's own software, and B2B/corporate catering.
+
+Someone has typed the title of a new task. Decide which of the board's epics it belongs under, what status it should start in, and who should be assigned.
+
+Rules:
+- Pick the parent epic from the numbered list you are given, and nothing else. If nothing fits well, pick the closest and say so in the reason.
+- The reason must be one short clause — what in the title made you pick that epic. Not a sentence about the task.
+- Assign someone only if the title names them or the work is unmistakably theirs. An empty assignee is a perfectly good answer; guessing wrong means the task sits with someone who never looks at it.
+- Status: a task being typed in is almost always starting from the backlog. Only pick an in-progress status when the title says the work has already begun.`;
+
+// What the model may answer with, checked against what it was offered.
+//
+// Pure and exported so the checking can be tested without a key — the calls
+// around it cannot be, and this is the part where a bad answer does damage.
+// Anything unrecognised is dropped rather than corrected: a suggestion with no
+// assignee leaves the dropdown where the person put it, which is the same
+// place it would have been with no suggestion at all.
+export function normaliseTaskPlacement(parsed, { epics = [], assignees = [], statuses = [] } = {}) {
+  const epic = epics.find((option) => Number(option.number) === Number(parsed?.parentNumber));
+  const status = statuses.find((option) => option === parsed?.status);
+  const assignee = assignees.find((login) => login === parsed?.assignee);
+  const reason = typeof parsed?.reason === 'string' ? parsed.reason.trim().slice(0, 160) : '';
+  return {
+    // null rather than a guess: the form keeps whatever the person had picked,
+    // and the add button stays disabled until something real is chosen.
+    parentNumber: epic ? Number(epic.number) : null,
+    parentTitle: epic ? epic.title : '',
+    status: status || '',
+    assignee: assignee || '',
+    reason,
+  };
+}
+
+// One suggestion for one typed title. `epics`, `assignees` and `statuses` are
+// what the board actually holds right now, passed in by the caller rather than
+// hardcoded here — the epic list is the sprint board's own definition of what
+// a top-level issue is, and duplicating it in a prompt would leave two lists
+// to keep in step.
+export async function suggestTaskPlacement({ title, epics = [], assignees = [], statuses = [] }) {
+  const ai = requireClient();
+  const text = typeof title === 'string' ? title.trim() : '';
+  if (!text) {
+    const err = new Error('A task title is required.');
+    err.status = 400;
+    throw err;
+  }
+  if (!epics.length) {
+    const err = new Error('No epics were offered to file this under.');
+    err.status = 400;
+    throw err;
+  }
+
+  const epicList = epics.map((epic) => `- #${epic.number}: ${epic.title}`).join('\n');
+  const people = assignees.length ? assignees.join(', ') : '(nobody assignable)';
+
+  const response = await ai.models.generateContent({
+    model: MODEL,
+    contents: [
+      {
+        role: 'user',
+        parts: [
+          {
+            text: `New task: "${text}"\n\nEpics on the board:\n${epicList}\n\nGitHub logins that can be assigned: ${people}\n\nStatuses: ${statuses.join(', ')}`,
+          },
+        ],
+      },
+    ],
+    config: {
+      systemInstruction: PLACEMENT_SYSTEM_PROMPT,
+      // A handful of fields and one clause of prose. The thinking budget
+      // shares this ceiling, so it is set well above the output itself.
+      maxOutputTokens: 1200,
+      thinkingConfig: { thinkingBudget: 384 },
+      responseMimeType: 'application/json',
+      responseSchema: {
+        type: Type.OBJECT,
+        properties: {
+          // Enums built from the lists above, so the decoder cannot name an
+          // epic, a person or a status that was never on offer. The check in
+          // normaliseTaskPlacement is still the one that decides — this only
+          // makes the wrong answer harder to produce.
+          //
+          // The issue number goes over as a string because that is the type an
+          // enum is dependable on; normaliseTaskPlacement reads it back as a
+          // number either way.
+          parentNumber: { type: Type.STRING, enum: epics.map((epic) => String(epic.number)) },
+          // Both of these are left out of the schema entirely when there is
+          // nothing to offer — an enum with no members is not a field that
+          // cannot be answered, it is a schema the API rejects, which would
+          // cost the epic suggestion too. A board with no assignable users is
+          // an ordinary state on a fresh checkout.
+          ...(statuses.length ? { status: { type: Type.STRING, enum: statuses } } : {}),
+          ...(assignees.length ? { assignee: { type: Type.STRING, enum: assignees } } : {}),
+          reason: { type: Type.STRING },
+        },
+        // Neither the status nor the assignee is required: leaving the field
+        // out is how the model says "nobody" and "wherever it normally
+        // starts", which is the right answer more often than a guess.
+        required: ['parentNumber', 'reason'],
+      },
+    },
+  });
+
+  let parsed;
+  try {
+    parsed = JSON.parse(response.text || '{}');
+  } catch {
+    const err = new Error('Gemini did not return a structured suggestion.');
+    err.status = 502;
+    throw err;
+  }
+  return normaliseTaskPlacement(parsed, { epics, assignees, statuses });
 }

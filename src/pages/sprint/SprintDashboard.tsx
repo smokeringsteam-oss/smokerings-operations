@@ -20,6 +20,17 @@ type SprintItem = {
 
 type SprintInfo = { title: string; startDate: string; endDate: string } | null;
 
+// Gemini's read on a half-typed task title: which epic it belongs under, and
+// the two other fields the form asks for. Every one of them is a suggestion —
+// see the note above the suggest effect below for what that means in practice.
+type Placement = {
+  parentNumber: number | null;
+  parentTitle: string;
+  status: string;
+  assignee: string;
+  reason: string;
+};
+
 type GithubStatus = {
   configured: boolean;
   repoConfigured: boolean;
@@ -69,6 +80,24 @@ const SprintDashboard: React.FC = () => {
   const [newStatus, setNewStatus] = useState(STATUS_COLUMNS[0]);
   const [newAssignee, setNewAssignee] = useState('');
   const [adding, setAdding] = useState(false);
+
+  // The suggestion currently on offer, and whether one is in the air.
+  const [placement, setPlacement] = useState<Placement | null>(null);
+  const [suggesting, setSuggesting] = useState(false);
+  // Why there is no suggestion, when there is a reason worth saying — no API
+  // key, mostly. Shown as a quiet line rather than as an error: the form works
+  // exactly as it did before without it, so a failed suggestion must never
+  // look like a failed task.
+  const [suggestError, setSuggestError] = useState('');
+  // Which of the three fields the person has set themselves. A suggestion only
+  // ever writes into the ones they have not touched — otherwise picking an
+  // epic and then fixing a typo in the title would silently put the epic back
+  // to whatever the model preferred.
+  const [touched, setTouched] = useState<{ parent: boolean; status: boolean; assignee: boolean }>({
+    parent: false,
+    status: false,
+    assignee: false,
+  });
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -176,6 +205,66 @@ const SprintDashboard: React.FC = () => {
     }
   };
 
+  // Asks Gemini where a task belongs, once the typing stops.
+  //
+  // On a pause rather than on every keystroke, and not until there is enough
+  // of a title to place — "ord" is not a task, and a call per letter would be
+  // a call per letter. 900ms because this is a model round trip rather than a
+  // database read: a shorter gap mostly buys suggestions for half-typed
+  // titles that the next pause immediately replaces.
+  //
+  // Everything about this is advisory. It writes only into fields nobody has
+  // touched, it never disables the add button, and a failure leaves the form
+  // exactly as it was before suggestions existed — no key, no network, a 429
+  // from the free tier, all of it lands on one grey line under the form.
+  useEffect(() => {
+    const title = newTitle.trim();
+    if (!showAddForm || title.length < 6 || !parentOptions.length) {
+      setPlacement(null);
+      setSuggestError('');
+      return undefined;
+    }
+    let cancelled = false;
+    const id = setTimeout(async () => {
+      setSuggesting(true);
+      setSuggestError('');
+      try {
+        const suggestion = await fetchJSON<Placement>('/api/github/sprint-board/suggest-placement', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            title,
+            epics: parentOptions.map((option) => ({ number: option.number, title: option.title })),
+            assignees: assignableUsers,
+            statuses: STATUS_COLUMNS,
+          }),
+        });
+        // The title moved on while the model was thinking, or the form was
+        // closed. Landing this now would answer a question nobody is asking.
+        if (cancelled) return;
+        setPlacement(suggestion);
+        const epic = parentOptions.find((option) => option.number === suggestion.parentNumber);
+        if (epic?.issueId && !touched.parent) setNewParentId(epic.issueId);
+        if (suggestion.status && !touched.status) setNewStatus(suggestion.status);
+        if (suggestion.assignee && !touched.assignee) setNewAssignee(suggestion.assignee);
+      } catch (err) {
+        if (cancelled) return;
+        setPlacement(null);
+        setSuggestError(String((err as Error).message || err));
+      } finally {
+        if (!cancelled) setSuggesting(false);
+      }
+    }, 900);
+    return () => {
+      cancelled = true;
+      clearTimeout(id);
+    };
+    // `touched` is deliberately not a dependency: it is read at the moment the
+    // answer lands, and listing it would re-run the whole request every time
+    // someone changed a dropdown.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [newTitle, showAddForm, parentOptions, assignableUsers]);
+
   const handleAddTask = async (event: React.FormEvent) => {
     event.preventDefault();
     if (!newTitle.trim() || !newParentId) return;
@@ -196,6 +285,9 @@ const SprintDashboard: React.FC = () => {
       setNewParentId('');
       setNewStatus(STATUS_COLUMNS[0]);
       setNewAssignee('');
+      setPlacement(null);
+      setSuggestError('');
+      setTouched({ parent: false, status: false, assignee: false });
       setShowAddForm(false);
       await load();
     } catch (err) {
@@ -285,7 +377,10 @@ const SprintDashboard: React.FC = () => {
             />
             <select
               value={newParentId}
-              onChange={(event) => setNewParentId(event.target.value)}
+              onChange={(event) => {
+                setNewParentId(event.target.value);
+                setTouched((current) => ({ ...current, parent: true }));
+              }}
               disabled={adding}
               required
             >
@@ -298,14 +393,28 @@ const SprintDashboard: React.FC = () => {
             </select>
           </div>
           <div className="sprint-add-form-row">
-            <select value={newStatus} onChange={(event) => setNewStatus(event.target.value)} disabled={adding}>
+            <select
+              value={newStatus}
+              onChange={(event) => {
+                setNewStatus(event.target.value);
+                setTouched((current) => ({ ...current, status: true }));
+              }}
+              disabled={adding}
+            >
               {STATUS_COLUMNS.map((option) => (
                 <option key={option} value={option}>
                   {option}
                 </option>
               ))}
             </select>
-            <select value={newAssignee} onChange={(event) => setNewAssignee(event.target.value)} disabled={adding}>
+            <select
+              value={newAssignee}
+              onChange={(event) => {
+                setNewAssignee(event.target.value);
+                setTouched((current) => ({ ...current, assignee: true }));
+              }}
+              disabled={adding}
+            >
               <option value="">Unassigned</option>
               {assignableUsers.map((login) => (
                 <option key={login} value={login}>
@@ -317,6 +426,25 @@ const SprintDashboard: React.FC = () => {
               {adding ? 'Adding…' : 'Add to current sprint'}
             </button>
           </div>
+
+          {/* What the model made of the title, said plainly so the pick can be
+              judged rather than just accepted. Only ever a line of text — the
+              dropdowns above are where the answer actually is, and they are
+              still yours to change. */}
+          {suggesting ? <p className="sprint-suggestion is-thinking">Working out where this belongs…</p> : null}
+          {!suggesting && placement?.parentTitle ? (
+            <p className="sprint-suggestion">
+              <span aria-hidden="true">✨</span> Filing under <strong>{placement.parentTitle}</strong>
+              {placement.parentNumber ? ` #${placement.parentNumber}` : ''}
+              {placement.reason ? ` — ${placement.reason}` : ''}
+              {touched.parent ? ' (you picked a different one)' : ''}
+            </p>
+          ) : null}
+          {!suggesting && suggestError ? (
+            <p className="sprint-suggestion is-quiet">
+              No suggestion this time — {suggestError} Pick the epic yourself and add as usual.
+            </p>
+          ) : null}
         </form>
       )}
 

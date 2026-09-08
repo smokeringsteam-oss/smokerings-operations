@@ -1,7 +1,9 @@
-import { Fragment, useState } from 'react';
+import { Fragment } from 'react';
+import { usePersistedChoice } from '../../../lib/usePersistedChoice';
 import WeekendPrepPlanner from './WeekendPrepPlanner';
 import WeeklyPurchasing from '../shared/WeeklyPurchasing';
 import SmokingSession from '../shared/SmokingSession';
+import SmokerStatus from '../shared/SmokerStatus';
 import OrderManagement from '../shared/OrderManagement';
 import ServiceWeeks from './ServiceWeeks';
 import MenuItems from '../menu/MenuItems';
@@ -17,7 +19,7 @@ import MenuItems from '../menu/MenuItems';
 // the same box grid the flow steps use, so the three things you can start
 // from the B2C dashboard read as one set.
 type SetupView = 'serviceWeeks' | 'menu';
-type FlowModule = 'weekendPrep' | 'weeklyPurchasing' | 'smoking' | 'orderManagement';
+type FlowModule = 'weekendPrep' | 'weeklyPurchasing' | 'smoking' | 'smokerStatus' | 'orderManagement';
 type B2CView = 'home' | SetupView | 'prep' | FlowModule;
 
 // The three ways into the B2C dashboard. The first two are setup — which
@@ -46,7 +48,7 @@ const OPTIONS: { id: SetupView | 'prep'; label: string; icon: string; tag: strin
     icon: '🍖',
     tag: 'Weekend flow',
     description:
-      'The four-step weekend run: plan Sat/Sun orders, buy against the list, smoke on Friday, then pack and serve.',
+      'The five-step weekend run: plan Sat/Sun orders, buy against the list, smoke on Friday, put the day’s meat on, then pack and serve.',
   },
 ];
 
@@ -77,11 +79,19 @@ const MODULES: { id: FlowModule; label: string; icon: string; day: string; descr
     description: 'Start a session with raw weight, rub and pitmaster, then complete it with finished weight and quality notes.',
   },
   {
+    id: 'smokerStatus',
+    label: 'Set Smoker Status',
+    icon: '🔥',
+    day: 'Sat–Sun (light)',
+    description:
+      'Put the day’s meat on — one switch for pork and one for beef, separately for Saturday’s and Sunday’s orders, moving every order carrying that meat to IN_SMOKER.',
+  },
+  {
     id: 'orderManagement',
     label: 'Order Management',
     icon: '📦',
     day: 'Sat–Sun (serve)',
-    description: 'Sat/Sun Lunch & Dinner orders and their fulfilment status, the pre-packing guidelines for each slot, and one switch per meat to put the weekend in the smoker.',
+    description: 'Sat/Sun Lunch & Dinner orders and their fulfilment status, from prepping through packing to delivery.',
   },
 ];
 
@@ -95,11 +105,21 @@ const BACK_TO: Record<Exclude<B2CView, 'home'>, { view: B2CView; label: string }
   weekendPrep: { view: 'prep', label: '← Back to Prep steps' },
   weeklyPurchasing: { view: 'prep', label: '← Back to Prep steps' },
   smoking: { view: 'prep', label: '← Back to Prep steps' },
+  smokerStatus: { view: 'prep', label: '← Back to Prep steps' },
   orderManagement: { view: 'prep', label: '← Back to Prep steps' },
 };
 
+// BACK_TO already names every view that is not 'home', so the list of valid
+// views comes from it rather than being spelled out a second time and left to
+// drift.
+const B2C_VIEWS = ['home', ...(Object.keys(BACK_TO) as Exclude<B2CView, 'home'>[])] as B2CView[];
+
 const B2CDashboard = () => {
-  const [view, setView] = useState<B2CView>('home');
+  // Which step you were on, kept across a reload — see usePersistedChoice.
+  // Going back to 'home' is stored too: it is a choice like any other, and a
+  // reload after stepping out should not drop you back into the module you
+  // just left.
+  const [view, setView] = usePersistedChoice<B2CView>('smokerings.b2c.view', 'home', B2C_VIEWS);
 
   const renderFlowGrid = () => (
     <div className="ops-flow-grid">
@@ -140,6 +160,8 @@ const B2CDashboard = () => {
         return <WeeklyPurchasing />;
       case 'smoking':
         return <SmokingSession />;
+      case 'smokerStatus':
+        return <SmokerStatus />;
       case 'orderManagement':
         return <OrderManagement />;
       default:

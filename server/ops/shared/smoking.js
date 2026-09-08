@@ -36,6 +36,7 @@ import { insert, nextId, remove, selectOne, transaction, update } from '../../co
 import { readRecipes, readSessions } from '../../core/kbViews.js';
 import { getMeatMaterials, adjustInventory } from '../../core/inventoryStore.js';
 import { logStageChange } from './smokingStageLog.js';
+import { mirrorCsv } from '../../core/csvMirror.js';
 import { tagPurchasesToSession, clearSessionPurchaseTags } from './purchasing.js';
 
 const STAGE_ORDER = ['rub', 'ready_to_smoke', 'smoking', 'resting', 'shredding', 'completed'];
@@ -116,6 +117,32 @@ function getRecipes({ category } = {}) {
   return category ? rows.filter((r) => r.kind === category) : rows;
 }
 
+// ---- The knowledge-base mirror --------------------------------------------
+// Smoker/smoking_log.csv, written back out from the table after every change.
+// The database is the source of truth (see server/core/csvMirror.js) — the
+// file is a mirror and never an input, so a session deleted in the app leaves
+// the file too, and hand-edits to it are silently undone by the next write.
+//
+// readSessions() is already the CSV era's exact column shape, which is what
+// the screen reads as well, so there is nothing to re-flatten here. It comes
+// back newest-first for the screen's list; the file is written oldest-first
+// so it reads as a log, the same way the weekly status mirror does.
+const CSV_PATH = 'Smoker/smoking_log.csv';
+
+const CSV_HEADER = [
+  'session_id', 'session_date', 'channel', 'client_id', 'client_name', 'session_purpose',
+  'source_material_id', 'source_material_name', 'source_purchase_id', 'output_product_id',
+  'output_type', 'pitmaster', 'brine_recipe_id', 'brine_recipe_name', 'brine_start', 'brine_end',
+  'rub_recipe_id', 'rub_recipe_name', 'rub_start', 'rub_end', 'raw_weight_kg', 'smoking_start',
+  'smoking_end', 'finished_weight_with_bone_kg', 'finished_weight_without_bone_kg', 'yield_pct',
+  'rest_start', 'rest_end', 'shred_start', 'shred_end', 'tenderness_notes', 'smoke_rings_formed',
+  'bark_notes', 'juiciness', 'fed_order_refs', 'stage', 'data_quality_notes',
+];
+
+function mirrorSessionsCsv() {
+  return mirrorCsv(CSV_PATH, CSV_HEADER, readSessions().slice().reverse());
+}
+
 function getSessions({ status, stage } = {}) {
   const filterStage = stage || status; // `status` kept as an alias so old callers/URLs still work
   const rows = readSessions();
@@ -169,7 +196,9 @@ function requireOrder(label, start, end) {
 // the screen renders after a step is what a reload would show.
 function patchSession(sessionId, patch) {
   update('smoking_session', { session_id: sessionId }, patch);
-  return loadRow(sessionId);
+  const row = loadRow(sessionId);
+  mirrorSessionsCsv();
+  return row;
 }
 
 // ---- Stage 1: Brining (creates the session) --------------------------------
@@ -287,6 +316,7 @@ function startBrining({
   );
 
   const sessions = created.map(loadRow);
+  mirrorSessionsCsv();
   // One log row per session in the batch — they're brined together but move
   // through the remaining stages separately, so the history has to be
   // per-session from the start.
@@ -687,7 +717,9 @@ function setFedOrders({ sessionId, orders }) {
     list.forEach((order) => insert('smoking_session_order', { session_id: sessionId, order_id: Number(order.id) }));
   });
 
-  return { session: loadRow(sessionId) };
+  const session = loadRow(sessionId);
+  mirrorSessionsCsv();
+  return { session };
 }
 
 // ---- Realized smoking loss (feeds the Weekend Prep Planner) ----------------
@@ -801,6 +833,10 @@ function deleteSession(sessionId) {
   // deleting a mis-logged session shouldn't erase the money that was spent.
   const purchaseTags = clearSessionPurchaseTags(row.session_id);
 
+  // The file follows the table, so a deleted session leaves it too — the
+  // mirror is the table, not an append-only trail of every cook ever logged.
+  mirrorSessionsCsv();
+
   return { deleted: row, inventoryReversal, purchaseTags };
 }
 
@@ -814,6 +850,7 @@ export {
   getMeatItems,
   getRecipes,
   getSessions,
+  mirrorSessionsCsv,
   startBrining,
   completeRub,
   getAvailablePurchasesForMaterial,

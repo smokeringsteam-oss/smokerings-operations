@@ -768,6 +768,108 @@ function scheduledTaskOrder(db) {
   return 'scheduled_task: sort_order added, seeded from the existing row order';
 }
 
+// The Customer Map screen: where a looked-up address sits on the map.
+//
+// A cache table and nothing else — no existing row has to change, and the
+// first lookup fills it. See the note on the table in schema.sql for why a
+// failed lookup is stored as a row rather than as an absence.
+function geocodeCache(db) {
+  if (hasTable(db, 'geocode_cache')) return null;
+  db.exec(`
+    CREATE TABLE geocode_cache (
+        address_key  TEXT PRIMARY KEY,
+        address      TEXT NOT NULL,
+        latitude     REAL,
+        longitude    REAL,
+        precision    TEXT CHECK (precision IS NULL OR precision IN ('address','locality','postcode')),
+        locality     TEXT,
+        postcode     TEXT,
+        display_name TEXT,
+        provider     TEXT NOT NULL DEFAULT 'nominatim',
+        status       TEXT NOT NULL DEFAULT 'ok' CHECK (status IN ('ok','not_found')),
+        looked_up_at TEXT NOT NULL DEFAULT (datetime('now')),
+        CONSTRAINT geocode_located_has_a_point CHECK (status <> 'ok' OR (latitude IS NOT NULL AND longitude IS NOT NULL))
+    )
+  `);
+  return 'geocode_cache: created';
+}
+
+// Push notification plumbing: who to notify, and what has already been sent.
+//
+// Two new tables and nothing else — no existing row changes, and a database
+// that has never notified anyone simply starts with both empty. See the notes
+// on them in schema.sql for why the endpoint is the key and why the delivery
+// key carries the date.
+function pushNotifications(db) {
+  const made = [];
+  if (!hasTable(db, 'push_subscription')) {
+    db.exec(`
+      CREATE TABLE push_subscription (
+          endpoint      TEXT PRIMARY KEY,
+          p256dh        TEXT NOT NULL,
+          auth          TEXT NOT NULL,
+          label         TEXT,
+          created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+          last_sent_at  TEXT,
+          failure_count INTEGER NOT NULL DEFAULT 0
+      )
+    `);
+    made.push('push_subscription');
+  }
+  if (!hasTable(db, 'push_delivery')) {
+    db.exec(`
+      CREATE TABLE push_delivery (
+          notify_key TEXT PRIMARY KEY,
+          sent_at    TEXT NOT NULL DEFAULT (datetime('now'))
+      )
+    `);
+    made.push('push_delivery');
+  }
+  return made.length ? `${made.join(', ')}: created` : null;
+}
+
+// The shared note bubble's one table. Nothing existing is touched, and a
+// database that has never had a note posted simply starts with it empty.
+//
+// The tick-box columns are handled here rather than as a step of their own.
+// This table is days old and exists on one machine, so there is no fleet of
+// databases at the earlier shape to migrate through in order — and folding
+// them in keeps one step owning one table, which is the arrangement that
+// stays readable. The ADD COLUMN branch is what carries the database that was
+// created between the two changes.
+function sharedNotes(db) {
+  if (!hasTable(db, 'shared_note')) {
+    db.exec(`
+      CREATE TABLE shared_note (
+          note_id    INTEGER PRIMARY KEY,
+          author     TEXT,
+          body       TEXT NOT NULL CHECK (trim(body) <> ''),
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          done       INTEGER NOT NULL DEFAULT 0 CHECK (done IN (0, 1)),
+          done_at    TEXT,
+          done_by    TEXT
+      )
+    `);
+    return 'shared_note: created';
+  }
+  // NOT NULL is addable here only because it comes with a default; every
+  // existing note becomes an unticked one, which is what it was.
+  const added = [];
+  if (!hasColumn(db, 'shared_note', 'done')) {
+    db.exec("ALTER TABLE shared_note ADD COLUMN done INTEGER NOT NULL DEFAULT 0 CHECK (done IN (0, 1))");
+    added.push('done');
+  }
+  if (!hasColumn(db, 'shared_note', 'done_at')) {
+    db.exec('ALTER TABLE shared_note ADD COLUMN done_at TEXT');
+    added.push('done_at');
+  }
+  if (!hasColumn(db, 'shared_note', 'done_by')) {
+    db.exec('ALTER TABLE shared_note ADD COLUMN done_by TEXT');
+    added.push('done_by');
+  }
+  return added.length ? `shared_note: ${added.join(', ')} added` : null;
+}
+
 const STEPS = [
   purchaseAttribution,
   smokingSessionFields,
@@ -782,6 +884,9 @@ const STEPS = [
   marketingLinks,
   scheduledTaskOrder,
   marketingContentCadence,
+  geocodeCache,
+  pushNotifications,
+  sharedNotes,
 ];
 
 // Returns only what it actually changed, so the caller can say so once on

@@ -1333,9 +1333,16 @@ button.wizard-step:hover:not(.active) {
   letter-spacing: 0.03em;
 }
 
-/* ---- Order Management Step 3: what's on the smoker --------------------- */
-/* One card per smoker load (pork, chicken), each a switch plus the orders it
-   would move. Two up on a wide screen, stacked below that. */
+/* ---- Set Smoker Status: what's on the smoker --------------------------- */
+/* One section per service day (Saturday, Sunday), each holding one card per
+   smoker load (pork, beef): a switch plus the orders it would move. Two up on
+   a wide screen, stacked below that. */
+.smoker-day + .smoker-day {
+  margin-top: 26px;
+  padding-top: 20px;
+  border-top: 1px solid var(--color-border);
+}
+
 .smoker-loads {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
@@ -1709,6 +1716,91 @@ button.wizard-step:hover:not(.active) {
   margin-top: 2px;
   font-size: 0.85rem;
   color: var(--color-text-soft);
+}
+
+/* Where the order goes and who to ring. Stacked under the customer line, in
+   the same muted register as the rest of the card's header — it is reference
+   the packer glances at, not a heading. The phone is a link because this is
+   read on a phone. */
+.pack-order-contact {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 6px;
+  font-size: 0.82rem;
+  line-height: 1.35;
+  color: var(--color-text-soft);
+}
+
+/* Text on the left, its Copy button pinned right. Baseline-aligned so the
+   button sits on the first line of an address that wraps to three. */
+.pack-order-contact-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.pack-order-phone {
+  color: var(--color-text);
+  font-weight: 600;
+  text-decoration: none;
+  /* A tap target on a phone, without pushing the card taller on a desktop. */
+  padding: 1px 0;
+}
+
+/* Quiet until wanted: this sits on every order card, and a row of loud
+   buttons down a busy service board is what makes people stop seeing the
+   address next to them. */
+.pack-copy-btn {
+  flex: none;
+  padding: 2px 8px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-muted);
+  font: inherit;
+  font-size: 0.75rem;
+  line-height: 1.5;
+  cursor: pointer;
+  /* Held wide enough for "Couldn't copy" so the row does not jump when the
+     label changes under the finger. */
+  min-width: 84px;
+  text-align: center;
+}
+
+.pack-copy-btn:hover,
+.pack-copy-btn:focus-visible {
+  border-color: var(--color-border-strong);
+  color: var(--color-text);
+}
+
+.pack-copy-btn.copied {
+  border-color: #b7ddba;
+  background: #edf7ee;
+  color: #2b5c30;
+}
+
+.pack-copy-btn.failed {
+  border-color: #f0b3b3;
+  background: #fdeeee;
+  color: #8a2b2b;
+}
+
+.pack-order-phone:hover,
+.pack-order-phone:focus-visible {
+  text-decoration: underline;
+}
+
+/* Addresses run long and must not stretch the card or clip — a half-shown
+   street is worse than a wrapped one. */
+.pack-order-address {
+  overflow-wrap: anywhere;
+}
+
+.pack-order-address-name {
+  color: var(--color-text-muted);
+  font-style: italic;
 }
 
 .pack-prep-unit {
@@ -2111,6 +2203,32 @@ button.wizard-step:hover:not(.active) {
   flex-wrap: wrap;
 }
 
+/* Gemini's read on the task being typed. A line of prose under the form, not a
+   banner or a badge: it is advice about fields that are already filled in
+   above, and anything louder would read as something you have to act on. */
+.sprint-suggestion {
+  margin: 0;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  color: var(--color-text-muted);
+}
+
+.sprint-suggestion strong {
+  color: var(--color-ember-dark);
+}
+
+/* Still thinking, and not yet worth reading. */
+.sprint-suggestion.is-thinking {
+  opacity: 0.7;
+  font-style: italic;
+}
+
+/* No suggestion at all — no key, no network, a quota refusal. Dimmer again,
+   because the form works exactly as it always did without one. */
+.sprint-suggestion.is-quiet {
+  opacity: 0.75;
+}
+
 .sprint-add-form-row > input,
 .sprint-add-form-row > select {
   flex: 1 1 200px;
@@ -2222,6 +2340,149 @@ button.wizard-step:hover:not(.active) {
   outline: none;
   border-color: var(--color-ember);
   box-shadow: 0 0 0 3px var(--color-ember-light);
+}
+
+/* Edit mode: the same rows, with the four scheduled_task columns as fields.
+   The row keeps .group-item-row's frame so switching modes doesn't reflow the
+   card — only what sits inside changes. */
+.daily-view-filter-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.daily-view-edit-row {
+  gap: 8px;
+  cursor: default;
+}
+
+.daily-view-drag-handle {
+  cursor: grab;
+  color: var(--color-text-soft);
+  font-size: 1rem;
+  line-height: 1;
+  user-select: none;
+  flex: 0 0 auto;
+}
+
+.daily-view-drag-handle:active {
+  cursor: grabbing;
+}
+
+/* Name takes whatever's left; time, person and category get fixed shares so
+   the columns line up down the list rather than jittering per label length. */
+.daily-view-edit-fields {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1 1 auto;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.daily-view-input {
+  font: inherit;
+  font-size: 0.85rem;
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border-strong);
+  background: var(--color-surface);
+  color: var(--color-text);
+  min-width: 0;
+}
+
+.daily-view-input:focus {
+  outline: none;
+  border-color: var(--color-ember);
+  box-shadow: 0 0 0 3px var(--color-ember-light);
+}
+
+.daily-view-input:disabled {
+  opacity: 0.6;
+}
+
+.daily-view-input-label {
+  flex: 1 1 200px;
+  font-weight: 600;
+}
+
+.daily-view-input-time {
+  flex: 0 0 96px;
+}
+
+.daily-view-input-person {
+  flex: 0 0 130px;
+}
+
+.daily-view-input-category {
+  flex: 0 0 130px;
+}
+
+.daily-view-row-controls {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+}
+
+.daily-view-icon-button {
+  border: 1px solid var(--color-border-strong);
+  background: var(--color-surface);
+  color: var(--color-text-muted);
+  border-radius: var(--radius-sm);
+  width: 28px;
+  height: 28px;
+  line-height: 1;
+  font-size: 0.85rem;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.daily-view-icon-button:hover:not(:disabled) {
+  border-color: var(--color-ember);
+  color: var(--color-ember-dark);
+}
+
+.daily-view-icon-button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.daily-view-icon-danger:hover:not(:disabled) {
+  border-color: #c0392b;
+  color: #c0392b;
+}
+
+/* The dragged row fades where it came from; the row (or day tab) under the
+   cursor shows the ember edge, so it reads as "this is where it lands". */
+.daily-view-row-dragging {
+  opacity: 0.45;
+}
+
+.daily-view-row-drop {
+  border-color: var(--color-ember);
+  box-shadow: 0 0 0 2px var(--color-ember-light);
+}
+
+.daily-view-day-drop {
+  border-color: var(--color-ember);
+  box-shadow: 0 0 0 3px var(--color-ember-light);
+}
+
+.daily-view-add-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border: 1px dashed var(--color-border-strong);
+  border-radius: var(--radius-sm);
+}
+
+.daily-view-add-row .daily-view-input-label {
+  flex: 1 1 auto;
 }
 
 .inv-section-title {
@@ -2641,6 +2902,30 @@ button.wizard-step:hover:not(.active) {
 
 .purch-scan-review li {
   margin-bottom: 4px;
+}
+
+/* The "picked up where you left off" line. Sits above the whole grid rather
+   than inside the cart card, because it is about the screen having restored
+   itself — which is a thing that happened before the buyer touched anything.
+   Informational green rather than the scan review's amber: nothing here needs
+   fixing, it is work that was saved. */
+.purch-restored {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+  padding: 10px 14px;
+  border-radius: var(--radius-sm);
+  background: #edf7ee;
+  border: 1px solid #b7ddba;
+  color: #2b5c30;
+  font-size: 0.88rem;
+}
+
+.purch-restored p {
+  margin: 0;
 }
 
 /* Cart rows are edited in place, so the inputs have to read as part of the
@@ -3784,6 +4069,39 @@ td.csv-rownum-col {
   flex: 0 0 auto;
 }
 
+/* Shown when the form came back from a saved draft (see the Draft note in
+   SmokingSession.tsx). Blue-grey rather than the ember palette the rest of
+   this screen uses: it is a note about the form itself, not about the cook,
+   and it must not read as an error the way .chat-error would. */
+.smoke-draft-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 16px;
+  margin-bottom: 16px;
+  padding: 12px 16px;
+  border: 1px solid #b9cfe4;
+  border-left: 4px solid #3f7cad;
+  border-radius: var(--radius-md);
+  background: #eef5fb;
+}
+
+.smoke-draft-banner p {
+  margin: 0;
+  flex: 1 1 260px;
+  min-width: 0;
+  font-size: 0.88rem;
+  color: #23486a;
+}
+
+.smoke-draft-banner-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
 /* Step 3's delivery-time callout — the one thing on an order card that came
    from the customer's own mouth rather than from the order lines, so it reads
    as a note pinned to the card rather than another status chip. Warm amber
@@ -3829,6 +4147,57 @@ td.csv-rownum-col {
   border-color: var(--color-border-strong);
   border-left-color: #e0b74b;
   background: var(--color-surface-alt);
+}
+
+/* The customer's own note, straight off the Odoo order (CustomerNote in
+   OrderManagement.tsx). Deliberately quieter than the amber time-preference
+   callout right above it: that one is a decision the kitchen has to make, this
+   is background the packer reads once. Neutral surface with a soft left rule,
+   so the two stack on a card without competing. */
+.pack-order-note {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  margin-top: 10px;
+  padding: 9px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--color-border);
+  border-left: 4px solid var(--color-border-strong);
+  background: var(--color-surface-alt);
+}
+
+.pack-order-note-label {
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--color-text-soft);
+}
+
+/* pre-wrap keeps the line breaks the customer typed — a note listing three
+   things on three lines reads as three things, not as one run-on sentence.
+   break-word because a pasted URL or a long unspaced string would otherwise
+   push the card wider than the grid column. */
+.pack-order-note-text {
+  font-size: 0.86rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  word-break: break-word;
+  color: var(--color-text);
+}
+
+.pack-order-note-toggle {
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--color-ember);
+  text-decoration: underline;
+  cursor: pointer;
 }
 
 /* ---- B2B Clients (Ops > B2B Dashboard > Clients) ------------------------ */
@@ -5604,6 +5973,23 @@ html {
     min-width: 520px;
   }
 
+  /* "All sessions" carries nine columns; at the shared floor above they
+     squeeze to two-character words. Its own floor, scrolled sideways in the
+     same .prep-table-wrap, keeps them readable. */
+  .smoke-sessions-table {
+    min-width: 820px;
+  }
+
+  /* The draft banner's two buttons drop onto their own full-width row rather
+     than sharing one with a three-line sentence. */
+  .smoke-draft-banner-actions {
+    flex: 1 1 100%;
+  }
+
+  .smoke-draft-banner-actions .secondary-button {
+    flex: 1 1 auto;
+  }
+
   .prep-table th,
   .prep-table td {
     padding: 8px 9px;
@@ -5846,6 +6232,21 @@ html {
   border-color: #d8a93c;
   background: #fff7e6;
   color: #6d4a06;
+}
+
+/* The banner that says a saved reel could not be read back. Laid out with the
+   fix-it button on the same line as the sentence, because the sentence is only
+   useful if the action next to it is obvious. */
+.reel-restore-failed {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.reel-restore-failed > span {
+  flex: 1 1 320px;
 }
 
 .mkt-alert-error {
@@ -7650,6 +8051,69 @@ html {
   gap: 6px;
 }
 
+/* One clip in the strip: a wide "add" button and a narrow "delete" one,
+   joined so they read as a single pill. The split is deliberate — the common
+   action gets the whole name as its target and the destructive one gets a
+   corner, which is what stops a thumb deleting a clip it meant to add. */
+.reel-library-chip {
+  display: inline-flex;
+  align-items: stretch;
+}
+
+.reel-library-chip-busy {
+  opacity: 0.5;
+}
+
+/* Squared off where the two meet, so the pair looks like one pill rather
+   than two chips that happen to be touching. */
+.reel-library-add {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+  border-right-width: 0;
+}
+
+.reel-library-delete {
+  /* 40px wide and full height: the WCAG target minimum, and on the phone
+     screen this strip is actually used on, a smaller × is a coin flip. */
+  min-width: 40px;
+  padding: 7px 10px;
+  font-size: 0.95rem;
+  line-height: 1;
+  font-family: inherit;
+  cursor: pointer;
+  color: var(--color-text-soft);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-strong);
+  border-radius: 0 999px 999px 0;
+}
+
+.reel-library-delete:hover:not(:disabled),
+.reel-library-delete:focus-visible {
+  color: #c0392b;
+  border-color: #c0392b;
+  background: #fdf3f2;
+}
+
+.reel-library-delete:disabled,
+.reel-library-add:disabled {
+  cursor: not-allowed;
+}
+
+/* Same "not a chip that adds a clip" treatment as the expander next to it,
+   in the colour of what it does. */
+.reel-library-purge {
+  border-style: dashed !important;
+  color: #c0392b !important;
+  border-color: #e0b4ae !important;
+}
+
+/* The expander on the recent-uploads strip. Deliberately not chip-shaped in
+   colour: it is the one button in that row that does not add a clip. */
+.reel-library-more {
+  border-style: dashed !important;
+  color: var(--color-text-muted) !important;
+}
+
 .reel-dim {
   font-size: 0.78rem;
   color: var(--color-text-muted);
@@ -7665,46 +8129,597 @@ html {
   color: #96322f;
 }
 
-.reel-editor {
+/* ---- The edit screen -----------------------------------------------------
+   A phone-shaped player over a dark scrubbing track, which is the shape every
+   video editor has had since the first one and the shape the Instagram Edits
+   app uses -- so the strip of blocks along the bottom needs no explaining.
+
+   The track is charcoal on purpose. It is the one part of this dashboard that
+   is mostly other people's photographs, and thumbnails read against dark and
+   wash out against the warm paper the rest of the page is built on. */
+
+.reel-edit {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  outline: none;
+}
+
+.reel-edit:focus-visible {
+  outline: 2px solid var(--color-ember);
+  outline-offset: 4px;
+  border-radius: var(--radius-md);
+}
+
+.reel-stage {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 300px;
+  /* The default 210px keeps the 9:16 box under 380px tall, so the player and
+     the track it is read against are both on screen at once on a laptop. The
+     variable is set from the editor's own preview-size buttons: 210 is a
+     sensible default and a terrible fixed rule, because "is that caption
+     readable at a glance" cannot be answered on a box the size of a stamp. */
+  grid-template-columns: var(--reel-preview-w, 210px) minmax(0, 1fr);
   gap: 16px;
   align-items: start;
 }
 
-.reel-clips {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  min-width: 0;
-}
-
-.reel-clip {
+.reel-preview-col {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  padding: 12px;
-  border: 1px solid var(--color-border);
-  border-left: 4px solid var(--color-border-strong);
+  min-width: 0;
+}
+
+.reel-preview-size {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.reel-preview-size .reel-dim {
+  margin-right: auto;
+}
+
+.reel-stage-side {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.reel-phone-time {
+  position: absolute;
+  left: 8px;
+  bottom: 8px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.6);
+  font-size: 0.72rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: #fff;
+}
+
+.reel-phone-time span {
+  font-weight: 500;
+  color: #cbb9a4;
+}
+
+.reel-transport {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.reel-transport button {
+  width: 34px;
+  height: 34px;
+  flex: none;
+  border: 1px solid var(--color-border-strong);
   border-radius: var(--radius-sm);
   background: var(--color-surface);
-  cursor: grab;
+  font-family: inherit;
+  font-size: 0.82rem;
+  line-height: 1;
+  color: var(--color-text);
+  cursor: pointer;
 }
 
-.reel-clip:active {
-  cursor: grabbing;
+.reel-transport button:hover {
+  border-color: var(--color-ember);
+  color: var(--color-ember-dark);
 }
 
-.reel-clip-active {
-  border-left-color: var(--color-ember);
+.reel-transport-play {
+  background: var(--color-charcoal) !important;
+  border-color: var(--color-charcoal) !important;
+  color: #fff !important;
+}
+
+.reel-transport .reel-total {
+  margin-left: auto;
+  text-align: right;
+}
+
+.reel-inspector {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--color-border);
+  border-left: 4px solid var(--color-ember);
+  border-radius: var(--radius-sm);
   background: var(--color-surface-alt);
 }
 
-.reel-clip-head {
+.reel-inspector-head {
   display: flex;
   align-items: center;
   gap: 8px;
   min-width: 0;
+}
+
+.reel-inspector-head strong {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.86rem;
+}
+
+.reel-inspector-moves {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+/* The tool rail. Split is first and heaviest because it is the one thing here
+   that cannot be done any other way -- everything else on it has a drag that
+   does the same job. */
+.reel-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+/* The timeline zoom, as one unit.
+   `margin-left: auto` replaces the flex spacer that used to sit before these
+   buttons. A spacer is a separate flex item, so on a wrapping toolbar it
+   pushed the first zoom button to the far end of one row and let the rest
+   wrap to the next — see the comment in ReelTimelineEditor.tsx. An auto
+   margin on the group does the same job on a wide screen without being able
+   to split the group, because the group is one item. */
+/* The way into reposting, in the page head rather than among the numbered
+   steps: it starts at the end of the flow, with a file that already exists. */
+.reel-head-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+/* The Drive picker reuses the review layer's scrim and bar — it is the same
+   kind of moment, a full-screen step over the editor — and only needs the
+   list itself styling. */
+.drive-pick {
+  gap: 12px;
+}
+
+.drive-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  /* A folder holds a season of cooks eventually. Scroll the list rather than
+     the page behind the overlay. */
+  max-height: min(60vh, 520px);
+  overflow-y: auto;
+}
+
+.drive-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.drive-row-pick {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  padding: 10px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-alt);
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.drive-row-pick:hover:not(:disabled) {
+  border-color: var(--color-border-strong);
+  background: var(--color-ember-light);
+}
+
+.drive-row-pick:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+/* The row being downloaded keeps full opacity while its siblings dim, so the
+   one that was clicked is the one that looks like it is doing something. */
+.drive-row-busy .drive-row-pick:disabled {
+  opacity: 1;
+  border-color: var(--color-ember);
+}
+
+.drive-row-name {
+  font-weight: 600;
+  word-break: break-all;
+}
+
+.drive-row-facts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.78rem;
+  color: var(--color-text-muted);
+}
+
+.reel-zoom-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  margin-left: auto;
+  padding-left: 8px;
+  border-left: 1px solid var(--color-border);
+}
+
+.reel-zoom-caption {
+  font-size: 0.78rem;
+}
+
+.reel-zoom-step {
+  min-width: 34px;
+  font-weight: 700;
+}
+
+/* Fixed width and tabular figures so stepping through 1.4x, 1.9x, 2.6x does
+   not shuffle the buttons either side of it left and right. */
+.reel-zoom-level {
+  min-width: 3.4em;
+  text-align: center;
+  font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-muted);
+}
+
+/* A finger is not a mouse pointer. 34px chips are comfortable to click and
+   fiddly to tap, and these two are the ones tapped repeatedly. */
+@media (pointer: coarse) {
+  .reel-zoom-step {
+    min-width: 42px;
+    min-height: 40px;
+  }
+}
+
+/* Narrow enough that the toolbar wraps: an auto margin here would strand the
+   group alone on the right of its own row. Let it flow with everything else,
+   and drop the divider that only makes sense mid-row. */
+@media (max-width: 720px) {
+  .reel-zoom-controls {
+    margin-left: 0;
+    padding-left: 0;
+    border-left: none;
+  }
+}
+
+.reel-tool-danger:hover:not(:disabled) {
+  border-color: #d8a1a1;
+  color: #96322f;
+}
+
+.reel-hint {
+  margin: 0;
+  padding: 7px 10px;
+  border-radius: var(--radius-sm);
+  background: #fff8e6;
+  border: 1px solid #f0d795;
+  font-size: 0.78rem;
+  color: #7a5b06;
+}
+
+.reel-track-scroll {
+  overflow-x: auto;
+  overflow-y: hidden;
+  /* pan-x, not auto: the browser keeps one-finger sideways panning, and a
+     two-finger pinch is left to the editor to turn into a timeline zoom
+     rather than being eaten as a page zoom. */
+  touch-action: pan-x;
+  padding: 0 0 4px;
+  border-radius: var(--radius-md);
+  background: var(--color-charcoal);
+}
+
+.reel-track-inner {
+  position: relative;
+  min-width: 100%;
+  padding: 0 0 8px;
+}
+
+.reel-ruler {
+  position: relative;
+  height: 22px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+  cursor: ew-resize;
+  touch-action: none;
+}
+
+.reel-tick {
+  position: absolute;
+  top: 5px;
+  padding-left: 4px;
+  border-left: 1px solid rgba(255, 255, 255, 0.28);
+  font-size: 0.64rem;
+  font-variant-numeric: tabular-nums;
+  color: #a4917c;
+  pointer-events: none;
+  user-select: none;
+}
+
+.reel-track {
+  position: relative;
+  height: 76px;
+  margin-top: 8px;
+}
+
+.reel-block {
+  position: absolute;
+  top: 0;
+  height: 76px;
+  overflow: hidden;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: #1a1310;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+.reel-block-active {
+  border-color: var(--color-ember);
+  box-shadow: 0 0 0 2px var(--color-ember);
+}
+
+.reel-block-dragging {
+  z-index: 4;
+  opacity: 0.85;
+  cursor: grabbing;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
+}
+
+/* While one block is being dragged the others slide out of its way rather
+   than jumping, because the gap opening up in front of it *is* the drop
+   indicator and a gap that teleports is not read as one. Only during a drag:
+   an animated `left` on a trim would lag the handle by a tenth of a second,
+   which feels like a dropped frame. */
+.reel-track-shuffling .reel-block {
+  transition: left 120ms ease;
+}
+
+.reel-track-shuffling .reel-block-dragging {
+  transition: none;
+}
+
+/* The strip is the whole source file laid out end to end and slid left by the
+   clip's in-point, so the frames showing through the block are exactly the
+   ones the clip plays. Trim a head off and the picture slides under the
+   handle -- which is what makes it obvious that a head is what you trimmed. */
+.reel-block-strip {
+  display: flex;
+  height: 100%;
+  pointer-events: none;
+}
+
+.reel-block-strip img {
+  flex: 1 1 0;
+  min-width: 0;
+  height: 100%;
+  object-fit: cover;
+  opacity: 0.85;
+}
+
+/* Clear of the trim handles at both ends — a label whose first character is
+   under the handle reads as a rendering fault. */
+.reel-block-label {
+  position: absolute;
+  left: 16px;
+  right: 16px;
+  bottom: 5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: #fff;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9);
+  pointer-events: none;
+}
+
+.reel-block-caption,
+.reel-block-zoom,
+.reel-block-silent {
+  position: absolute;
+  top: 5px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.62);
+  font-size: 0.62rem;
+  font-weight: 700;
+  color: #fff;
+  pointer-events: none;
+}
+
+.reel-block-caption {
+  left: 16px;
+}
+
+.reel-block-zoom {
+  left: 38px;
+  background: rgba(53, 80, 122, 0.85);
+}
+
+.reel-block-silent {
+  right: 16px;
+}
+
+/* Wide enough to grab on a tablet without swallowing a short block whole. */
+.reel-handle {
+  position: absolute;
+  top: 0;
+  width: 11px;
+  height: 100%;
+  padding: 0;
+  border: none;
+  background: rgba(217, 72, 15, 0.9);
+  cursor: ew-resize;
+  touch-action: none;
+}
+
+.reel-handle::after {
+  content: '';
+  position: absolute;
+  left: 4px;
+  top: 50%;
+  width: 3px;
+  height: 22px;
+  margin-top: -11px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.85);
+}
+
+.reel-handle:hover,
+.reel-handle:focus-visible {
+  background: var(--color-ember);
+  outline: none;
+}
+
+.reel-handle-in {
+  left: 0;
+  border-radius: 5px 0 0 5px;
+}
+
+.reel-handle-out {
+  right: 0;
+  border-radius: 0 5px 5px 0;
+}
+
+/* The caption lane. Under the video track and read against it: the only way
+   to see that a caption covers the right stretch of the right shot is to draw
+   it below that shot, on the same ruler. */
+.reel-caption-track {
+  position: relative;
+  height: 26px;
+  margin-top: 6px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.04);
+  cursor: ew-resize;
+  touch-action: none;
+}
+
+.reel-caption-bar {
+  position: absolute;
+  top: 3px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  overflow: hidden;
+  border-radius: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: #35507a;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+.reel-caption-bar-on {
+  border-color: #ffd08a;
+  box-shadow: 0 0 0 2px #ffd08a;
+}
+
+.reel-caption-bar-dragging {
+  z-index: 3;
+  opacity: 0.9;
+  cursor: grabbing;
+}
+
+.reel-caption-bar-text {
+  flex: 1;
+  min-width: 0;
+  padding: 0 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.66rem;
+  font-weight: 600;
+  color: #fff;
+  pointer-events: none;
+}
+
+/* Narrower than the clip handles: a caption bar is a third the height of a
+   block, and an 11px grip on a 20px bar leaves nothing in the middle to drag
+   the whole thing by. */
+.reel-caption-handle {
+  width: 7px;
+  height: 100%;
+  flex: none;
+  padding: 0;
+  border: none;
+  background: rgba(255, 208, 138, 0.9);
+  cursor: ew-resize;
+  touch-action: none;
+}
+
+.reel-caption-handle:hover,
+.reel-caption-handle:focus-visible {
+  background: #ffd08a;
+  outline: none;
+}
+
+.reel-playhead {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--color-ember);
+  pointer-events: none;
+  z-index: 5;
+}
+
+.reel-playhead-grip {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  width: 16px;
+  height: 16px;
+  margin-left: -8px;
+  border-radius: 3px;
+  background: var(--color-ember);
+  cursor: ew-resize;
+  pointer-events: auto;
+  touch-action: none;
 }
 
 .reel-clip-index {
@@ -7719,56 +8734,6 @@ html {
   font-size: 0.72rem;
   font-weight: 700;
   color: #fff;
-}
-
-.reel-clip-name {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 0.86rem;
-  font-weight: 600;
-}
-
-.reel-clip-len {
-  flex: none;
-  font-size: 0.78rem;
-  font-variant-numeric: tabular-nums;
-  color: var(--color-text-muted);
-}
-
-.reel-clip-move {
-  display: flex;
-  gap: 4px;
-  flex: none;
-}
-
-.reel-clip-move button {
-  width: 26px;
-  height: 26px;
-  border: 1px solid var(--color-border-strong);
-  border-radius: var(--radius-sm);
-  background: var(--color-surface);
-  font-family: inherit;
-  font-size: 0.8rem;
-  color: var(--color-text-muted);
-  cursor: pointer;
-}
-
-.reel-clip-move button:hover:not(:disabled) {
-  border-color: var(--color-ember);
-  color: var(--color-ember-dark);
-}
-
-.reel-clip-move button:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
-
-.reel-clip-remove:hover:not(:disabled) {
-  border-color: #d8a1a1 !important;
-  color: #96322f !important;
 }
 
 .reel-clip-flags {
@@ -7793,27 +8758,61 @@ html {
   color: #2f6b34;
 }
 
-.reel-trim {
-  display: grid;
-  grid-template-columns: 120px minmax(0, 1fr);
-  align-items: center;
-  gap: 10px;
-  font-size: 0.76rem;
-  color: var(--color-text-muted);
+.mkt-chip-sm {
+  padding: 4px 9px;
+  font-size: 0.72rem;
 }
 
-.reel-trim b {
-  font-variant-numeric: tabular-nums;
-  color: var(--color-text);
-}
-
-.reel-trim input[type='range'] {
-  width: 100%;
-  accent-color: var(--color-ember);
-}
-
-.reel-trim-actions {
+.reel-zoom-row {
   display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.reel-zoom-row input[type='range'] {
+  flex: 1;
+  min-width: 90px;
+}
+
+.reel-zoom-value {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Captions are a list, not a field, so the panel holds the list first and the
+   editor for whichever one is picked underneath it. A clip with no captions
+   still shows the row, because "+ Add" is how the first one gets made. */
+.reel-caption-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--color-border);
+}
+
+.reel-caption-list {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.reel-caption-list .mkt-chip-sm {
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.reel-caption-chip-on {
+  border-color: var(--color-ember);
+  color: var(--color-ember-dark);
+  background: #fff3e8;
+}
+
+.reel-caption-timing {
+  display: flex;
+  align-items: center;
   flex-wrap: wrap;
   gap: 6px;
 }
@@ -7836,43 +8835,36 @@ html {
   min-width: 0;
 }
 
-/* The preview column. The 9:16 box is the export's real shape, so a clip that
-   will get black bars shows them here rather than filling the frame and
-   flattering itself. */
-.reel-preview {
-  position: sticky;
-  top: 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
+/* The box is the export's real shape, so a clip that will get black bars shows
+   them here rather than filling the frame and flattering itself. Three of the
+   four targets are 9:16 and the YouTube video is 16:9, so the shape is set by
+   whoever renders the frame; the fallback is the one it is most of the time. */
 .reel-phone {
   position: relative;
   width: 100%;
-  aspect-ratio: 9 / 16;
+  aspect-ratio: var(--reel-frame-aspect, 9 / 16);
   border-radius: var(--radius-md);
   background: #000;
   overflow: hidden;
 }
 
+/* The crop layer is the preview's half of the zoom. contain fits the whole
+   frame in, exactly as scale=...:decrease + pad does in the export, and the
+   transform then blows it up about the centre with the 9:16 box clipping what
+   falls outside -- which is what crop= does on the far end. Same two steps, so
+   what is cut off here is what is cut off in the file. */
+.reel-phone-crop {
+  width: 100%;
+  height: 100%;
+  transform-origin: 50% 50%;
+}
+
 .reel-phone video {
+  display: block;
   width: 100%;
   height: 100%;
   object-fit: contain;
   background: #000;
-}
-
-.reel-phone-empty {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 20px;
-  text-align: center;
-  font-size: 0.8rem;
-  color: #cbb9a4;
 }
 
 .reel-overlay {
@@ -7899,15 +8891,18 @@ html {
   transform: translateY(-50%);
 }
 
+/* The bottom margin clears Instagram's own reply bar, which is a fifth of a
+   Story. A landscape YouTube video has nothing down there, so the export uses
+   a tighter margin and the preview has to say so too. */
 .reel-overlay-bottom {
-  bottom: 20%;
+  bottom: var(--reel-caption-bottom, 20%);
 }
 
-.reel-preview-actions {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
+/* Sits under the target picker and says what that target does to the file.
+   Full width so it does not squeeze the export button beside it. */
+.reel-target-hint {
+  flex-basis: 100%;
+  margin: -4px 0 0;
 }
 
 .reel-preview-note {
@@ -7937,6 +8932,136 @@ html {
   accent-color: var(--color-ember);
 }
 
+/* ---- Share step: where a finished reel goes --------------------------- */
+/* Four tiles that toggle, then only the fields the ticked ones need. The
+   grid auto-fits so it is one row on a laptop and two on a phone without a
+   breakpoint deciding for it. */
+.share-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 10px;
+  margin: 4px 0 16px;
+}
+
+.share-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  padding: 12px 14px;
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  transition: border-color 0.12s, background 0.12s;
+}
+
+.share-tile:hover:not(:disabled) {
+  border-color: var(--color-ember);
+}
+
+/* Ticked reads as filled, not merely outlined — with four of these on screen
+   at once a 1px border change is not enough to count them at a glance. */
+.share-tile-on {
+  border-color: var(--color-ember);
+  background: var(--color-ember-light);
+}
+
+.share-tile-on .share-tile-label {
+  color: var(--color-ember-dark);
+}
+
+/* Unavailable, not hidden: the sub-line carries the reason. */
+.share-tile-off {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.share-tile-emoji {
+  font-size: 1.15rem;
+  line-height: 1;
+}
+
+.share-tile-label {
+  font-weight: 700;
+  font-size: 0.9rem;
+  color: var(--color-text);
+}
+
+.share-tile-sub {
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
+  line-height: 1.35;
+}
+
+.share-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.share-options {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  flex-wrap: wrap;
+}
+
+.share-options select {
+  font: inherit;
+  font-size: 0.85rem;
+  margin-left: 8px;
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border-strong);
+  background: var(--color-surface);
+}
+
+/* One line per destination, appearing as each finishes on its own. */
+.share-results {
+  list-style: none;
+  margin: 14px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.share-result {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-alt);
+  border: 1px solid var(--color-border);
+  font-size: 0.85rem;
+}
+
+.share-result-done {
+  border-color: var(--color-ember-light);
+}
+
+.share-result-failed {
+  border-color: #e0b4ae;
+}
+
+.share-result-name {
+  font-weight: 700;
+  min-width: 130px;
+}
+
+.share-checks {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 16px;
+}
+
 .reel-export-actions {
   display: flex;
   align-items: flex-end;
@@ -7950,30 +9075,166 @@ html {
   margin-top: 12px;
 }
 
-.reel-done {
-  display: grid;
-  grid-template-columns: 200px minmax(0, 1fr);
-  gap: 16px;
-  align-items: start;
-}
+/* The final-cut review — the layer that covers the editor from the moment
+   Export is pressed until the reel has gone somewhere. See
+   src/pages/marketing/ReelExportReview.tsx for why it is a layer.
 
-.reel-phone-sm {
-  width: 200px;
-}
-
-.reel-done-side {
+   The scrim is dark rather than the usual cream: the thing being judged on
+   this screen is a video, and a bright surround changes how its exposure
+   reads. The one place in the app that goes dark is the one place showing
+   footage. */
+.reel-review {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
   display: flex;
   flex-direction: column;
-  align-items: flex-start;
-  gap: 8px;
+  background: rgba(20, 14, 10, 0.86);
+  backdrop-filter: blur(3px);
 }
 
-.reel-done-side p {
+.reel-review-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 20px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(20, 14, 10, 0.6);
+  color: #fff;
+}
+
+.reel-review-bar > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.reel-review-bar strong {
+  font-family: var(--font-display);
+  font-size: 1rem;
+}
+
+/* .reel-dim is muted brown against cream everywhere else in the app. Only
+   the bar sits directly on the scrim, so only the bar's copy is lightened —
+   scoping this to .reel-review would have washed out every hint inside the
+   white cards below it too. */
+.reel-review-bar .reel-dim {
+  color: rgba(255, 255, 255, 0.66);
+  font-size: 0.82rem;
+}
+
+.reel-review-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  align-items: center;
+}
+
+.reel-review-body > * {
+  width: 100%;
+  max-width: 980px;
+}
+
+/* Centred rather than pinned to the top: while it is encoding there is
+   nothing else on this screen, and a small card in the top corner of a dark
+   window reads as something that has gone wrong. */
+.reel-review-wait {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 22px;
+  margin: auto 0;
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-md);
+}
+
+.reel-review-wait p {
   margin: 0;
 }
 
-.reel-done-side a {
+.reel-review-cut {
+  display: grid;
+  grid-template-columns: auto minmax(260px, 1fr);
+  gap: 20px;
+  align-items: start;
+  padding: 20px;
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-md);
+}
+
+/* Sized off the viewport height rather than a column width, because the file
+   is upright three times in four: a 9:16 box that fills its column is taller
+   than the screen, and one that fits the screen is what you can actually
+   judge a caption's placement in. The aspect ratio comes in as an inline
+   custom property from the render's own dimensions. */
+.reel-review-frame {
+  width: auto;
+  height: min(66vh, 700px);
+  box-shadow: var(--shadow-lg);
+}
+
+.reel-review-facts {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  min-width: 0;
+}
+
+.reel-review-facts h4 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 1.05rem;
+}
+
+.reel-review-facts p {
+  margin: 0;
+}
+
+.reel-review-facts a {
   text-decoration: none;
+}
+
+.reel-review-facts .mkt-alert {
+  width: 100%;
+}
+
+.reel-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0;
+  width: 100%;
+}
+
+.reel-facts > div {
+  flex: 1 1 90px;
+  padding: 8px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-alt);
+}
+
+.reel-facts dt {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-text-soft);
+}
+
+.reel-facts dd {
+  margin: 2px 0 0;
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 0.95rem;
 }
 
 .reel-ig-status {
@@ -8008,28 +9269,40 @@ html {
 }
 
 @media (max-width: 900px) {
-  .reel-editor {
+  /* Player above the controls rather than beside them, and capped: on a
+     tablet a 9:16 box given a whole column is taller than the screen, and the
+     track it is meant to be read against ends up below the fold. */
+  .reel-stage {
     grid-template-columns: minmax(0, 1fr);
+    justify-items: center;
   }
 
-  /* Preview first on a narrow screen: it is the thing being judged, and a
-     sticky column that is no longer a column is just something in the way. */
-  .reel-preview {
-    position: static;
-    order: -1;
-    max-width: 260px;
+  /* Capped at whatever size the preview buttons were left on rather than at a
+     flat 220px, so asking for a bigger picture on a tablet gets one. */
+  .reel-preview-col {
+    width: 100%;
+    max-width: min(var(--reel-preview-w, 220px), 100%);
   }
 
-  .reel-done {
+  .reel-stage-side {
+    width: 100%;
+  }
+
+  /* Below this the facts have nowhere to sit beside the video, so they go
+     under it and the frame is capped by width instead of height. */
+  .reel-review-cut {
     grid-template-columns: minmax(0, 1fr);
+    justify-items: center;
+  }
+
+  .reel-review-frame {
+    height: auto;
+    width: 100%;
+    max-width: 320px;
   }
 }
 
 @media (max-width: 520px) {
-  .reel-trim {
-    grid-template-columns: 96px minmax(0, 1fr);
-  }
-
   .reel-caption-row {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -8209,4 +9482,1773 @@ html {
 .purch-match-conf-low {
   background: #efece7;
   color: #6b6459;
+}
+
+/* ------------------------------------------------------------------ */
+/* WhatsApp inbox + its notification bubble                            */
+/* ------------------------------------------------------------------ */
+
+/* The bubble is the same element in three places — the sidebar entry, the
+   mobile top bar, and beside the screen's own heading — so it is styled once
+   and positioned by whichever context it lands in. Red on purpose: it is the
+   only red count in the app, so it never has to compete to be read. */
+.wa-bubble {
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: #e5342a;
+  color: #ffffff;
+  font-size: 0.7rem;
+  font-weight: 800;
+  font-family: var(--font-body);
+  line-height: 20px;
+  text-align: center;
+  /* Pins it to the right end of the sidebar button whatever the label's
+     length, so the counts line up as a column down the menu. */
+  margin-left: auto;
+  box-shadow: 0 0 0 2px rgba(229, 52, 42, 0.25);
+}
+
+/* A single soft pulse ring — slow enough to catch peripheral vision from
+   across the kitchen without turning the sidebar into a fairground. */
+@keyframes wa-bubble-pulse {
+  0% { box-shadow: 0 0 0 0 rgba(229, 52, 42, 0.5); }
+  70% { box-shadow: 0 0 0 7px rgba(229, 52, 42, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(229, 52, 42, 0); }
+}
+
+.app-sidebar .wa-bubble,
+.wa-bubble-topbar {
+  animation: wa-bubble-pulse 2.4s ease-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-sidebar .wa-bubble,
+  .wa-bubble-topbar {
+    animation: none;
+  }
+}
+
+.sidebar-item-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Right end of the mobile bar, away from the drawer toggle. */
+.wa-bubble-topbar {
+  margin-left: auto;
+  flex: 0 0 auto;
+}
+
+/* Inline after the page heading, where it labels a screen you are already
+   looking at rather than calling you to one — no auto margin, so it hugs the
+   words, and no pulse. The heading strip is dark, so it gets a light ring to
+   keep the red from vibrating against the charcoal. */
+.wa-bubble-inline {
+  margin-left: 10px;
+  vertical-align: middle;
+  display: inline-block;
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.18);
+}
+
+.wa-inbox {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+/* Filters on the left, freshness and the manual refresh on the right. The
+   list reloads itself on a timer, so the button is a reassurance rather than
+   the way the screen is meant to be used. */
+.wa-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.wa-inbox-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.wa-refresh {
+  border: 1px solid var(--color-border-strong);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-family: var(--font-body);
+  font-weight: 600;
+  font-size: 0.85rem;
+  padding: 7px 14px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.wa-refresh:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.wa-fetched {
+  font-size: 0.78rem;
+  color: var(--color-text-soft);
+}
+
+.wa-error,
+.wa-notice {
+  margin: 0;
+  padding: 12px 14px;
+  border-radius: var(--radius-md);
+  font-size: 0.88rem;
+}
+
+.wa-error {
+  background: #fdecea;
+  color: #8a2019;
+  border: 1px solid #f5c6c1;
+}
+
+.wa-notice {
+  background: var(--color-surface-alt);
+  color: var(--color-text-muted);
+  border: 1px solid var(--color-border);
+}
+
+.wa-summary {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.wa-stat {
+  flex: 1 1 130px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: 12px 16px;
+  box-shadow: var(--shadow-sm);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* Only a non-zero count is coloured. A tile reading 0 in alarm red would
+   train people to stop seeing the colour. */
+.wa-stat.is-hot {
+  border-color: #f0b9a4;
+  background: #fff4ef;
+}
+
+.wa-stat.is-bad {
+  border-color: #f5c6c1;
+  background: #fdecea;
+}
+
+.wa-stat-value {
+  font-family: var(--font-display);
+  font-size: 1.6rem;
+  font-weight: 700;
+  line-height: 1.1;
+}
+
+.wa-stat-label {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--color-text-muted);
+  font-weight: 700;
+}
+
+.wa-filter {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.wa-filter-pill {
+  border: 1px solid var(--color-border-strong);
+  background: var(--color-surface);
+  color: var(--color-text-muted);
+  font-family: var(--font-body);
+  font-weight: 600;
+  font-size: 0.85rem;
+  padding: 7px 14px;
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.wa-filter-pill.is-on {
+  background: var(--color-ember);
+  border-color: var(--color-ember);
+  color: #ffffff;
+}
+
+.wa-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 40px 20px;
+  background: var(--color-surface);
+  border: 1px dashed var(--color-border-strong);
+  border-radius: var(--radius-lg);
+  color: var(--color-text-muted);
+}
+
+.wa-empty span {
+  font-size: 1.8rem;
+}
+
+.wa-empty p {
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+.wa-thread-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.wa-thread {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-sm);
+  overflow: hidden;
+  /* The left edge carries the verdict, so the state of a dozen threads reads
+     down the page without stopping to read any of them. */
+  border-left: 4px solid var(--color-border-strong);
+}
+
+.wa-thread-waiting {
+  border-left-color: var(--color-ember);
+}
+
+.wa-thread-failed {
+  border-left-color: #e5342a;
+}
+
+.wa-thread-clear {
+  border-left-color: #cfe3d2;
+}
+
+.wa-thread-main {
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.wa-thread-who {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.wa-thread-name {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 1rem;
+}
+
+.wa-thread-phone {
+  font-size: 0.8rem;
+  color: var(--color-text-soft);
+}
+
+.wa-thread-tags {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.wa-status,
+.wa-window,
+.wa-unread {
+  padding: 2px 9px;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.wa-status-waiting {
+  background: var(--color-ember-light);
+  color: var(--color-ember-dark);
+}
+
+.wa-status-failed {
+  background: #fdecea;
+  color: #8a2019;
+}
+
+.wa-status-clear {
+  background: #e3f4e6;
+  color: #1f6b34;
+}
+
+.wa-window-open {
+  background: #eef3fb;
+  color: #2f4f7a;
+}
+
+/* Amber, not red: a closed window is a constraint on how you reply, not a
+   fault — the customer is still reachable with an approved template. */
+.wa-window-shut {
+  background: #fff1cc;
+  color: #7a5b06;
+}
+
+.wa-unread {
+  background: #efece7;
+  color: #6b6459;
+}
+
+.wa-thread-preview {
+  margin: 0;
+  font-size: 0.92rem;
+  color: var(--color-text);
+  display: flex;
+  gap: 8px;
+}
+
+.wa-thread-from {
+  flex: 0 0 auto;
+}
+
+.wa-thread-failure {
+  margin: 0;
+  font-size: 0.82rem;
+  color: #8a2019;
+}
+
+.wa-thread-foot {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  font-size: 0.82rem;
+}
+
+.wa-thread-time {
+  color: var(--color-text-soft);
+  margin-right: auto;
+}
+
+.wa-thread-toggle {
+  border: none;
+  background: none;
+  padding: 0;
+  color: var(--color-text-muted);
+  font-family: var(--font-body);
+  font-weight: 600;
+  font-size: 0.82rem;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.wa-thread-open {
+  color: var(--color-ember-dark);
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.wa-thread-open:hover {
+  text-decoration: underline;
+}
+
+.wa-messages {
+  list-style: none;
+  margin: 0;
+  padding: 14px 16px;
+  border-top: 1px solid var(--color-border);
+  background: var(--color-surface-alt);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* Customer left, us right — the arrangement every messaging app uses, so who
+   said what needs no legend. */
+.wa-message {
+  max-width: 78%;
+  padding: 8px 12px;
+  border-radius: var(--radius-md);
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.wa-message-customer {
+  align-self: flex-start;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-bottom-left-radius: 3px;
+}
+
+.wa-message-us {
+  align-self: flex-end;
+  background: var(--color-ember-light);
+  border: 1px solid #f3d3bf;
+  border-bottom-right-radius: 3px;
+}
+
+.wa-message-text {
+  font-size: 0.88rem;
+  white-space: pre-wrap;
+}
+
+.wa-message-meta {
+  font-size: 0.68rem;
+  color: var(--color-text-soft);
+}
+
+@media (max-width: 720px) {
+  .wa-message {
+    max-width: 90%;
+  }
+
+  .wa-inbox-actions {
+    width: 100%;
+  }
+}
+/* ---- Customer Map (Marketing > Customer Map) ---------------------------- */
+/* The map itself and the few things around it that the shared .mkt-* report
+   language has no equivalent for. Leaflet brings its own stylesheet (imported
+   by the page); everything here either sits outside it or overrides it back
+   into this app's type and colour. */
+
+.cmap-toggles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+/* A fixed height rather than an aspect ratio: a map is read at a size, and a
+   tall thin one on a narrow screen shows a strip of city with the circles cut
+   off either side. 62vh keeps the tiles above it and the table below it both
+   within reach on a laptop. */
+.cmap-map {
+  height: clamp(360px, 62vh, 620px);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  /* Leaflet's own panes sit above anything that isn't stacked, and the
+     rounded corners are only visible if the tiles are clipped to them. */
+  overflow: hidden;
+  z-index: 0;
+}
+
+.cmap-map.is-pinning {
+  cursor: crosshair;
+  box-shadow: 0 0 0 2px var(--color-ember);
+}
+
+/* Leaflet's default tooltip is a white box with a 12px system font; these
+   pull it back to the app's body font and the same charcoal the .mkt-tooltip
+   uses, so a hover on the map reads like a hover on a bar chart. */
+.cmap-tip {
+  font-family: var(--font-body);
+  font-size: 0.78rem;
+  line-height: 1.45;
+  color: #f6ece2;
+  background: rgba(36, 26, 20, 0.95);
+  border: none;
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-md);
+  padding: 8px 10px;
+}
+
+.cmap-tip strong {
+  font-family: var(--font-display);
+  font-size: 0.84rem;
+}
+
+.cmap-tip::before {
+  border-top-color: rgba(36, 26, 20, 0.95);
+}
+
+/* The legend's third entry: a hollow dashed ring, matching how a circle whose
+   position is only locality- or PIN-code-accurate is drawn. It is a different
+   claim from the filled ones and has to look like one in the key too. */
+.cmap-swatch-vague {
+  width: 12px;
+  height: 12px;
+  border: 1.5px dashed var(--color-text-muted);
+  border-radius: 50%;
+}
+
+.cmap-pin-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.cmap-pin-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+/* The neighbourhood table's rows fly the map to that area, so they have to
+   look like something you can press. */
+.cmap-row {
+  cursor: pointer;
+}
+/* ---- Insta Reel: the rough cut ----------------------------------------- */
+/* Sits above the timeline inside step 2. Deliberately quiet — it is an offer,
+   not the main event, and the timeline under it is what the eye should land
+   on once the cut has been made. */
+
+.reel-roughcut {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 14px;
+  padding: 12px 14px;
+  border: 1px dashed var(--color-border-strong);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-alt);
+}
+
+.reel-roughcut-head {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.reel-roughcut-head strong {
+  font-family: var(--font-display);
+  font-size: 0.94rem;
+}
+
+.reel-roughcut-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px;
+}
+
+/* The notes are the reason the cut is arguable rather than mysterious: what
+   was skipped, and why. Kept small — this is a receipt, not a report. */
+.reel-roughcut-notes {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 0.78rem;
+  line-height: 1.5;
+  color: var(--color-text-muted);
+}
+
+/* ---------------------------------------------------------------------------
+   The Insta Reel Generator, in its automatic form.
+
+   The screen is three questions and a button, so the styling has one job: make
+   the footage grid scannable at a glance and keep everything else quiet enough
+   that the grid is obviously the thing to look at. A cook produces twenty
+   near-identical clips with names like VID_20260904_141233.mp4, so the tile is
+   mostly thumbnail — the picture is the only thing that tells two of them
+   apart — and the pick order is stamped on it, because that order is the play
+   order and it is the one decision left to a person.
+--------------------------------------------------------------------------- */
+
+.reel-step {
+  border: 1px solid var(--color-border);
+  border-radius: 14px;
+  background: var(--color-surface);
+  padding: 18px 20px;
+  margin-top: 16px;
+  box-shadow: var(--shadow-sm);
+}
+
+.reel-step-head {
+  margin-bottom: 14px;
+}
+
+.reel-step-head h4 {
+  margin: 0 0 4px;
+  font-size: 1rem;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.reel-step-head p {
+  margin: 0;
+}
+
+.reel-step-n {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--color-ember-light);
+  color: var(--color-ember-dark);
+  font-size: 0.78rem;
+  font-weight: 700;
+  flex: none;
+}
+
+/* auto-fill rather than auto-fit: with two clips in the folder the tiles
+   should stay tile-sized rather than stretching to half the screen each. */
+.reel-library {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
+  gap: 12px;
+}
+
+.reel-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 0;
+  border: 2px solid var(--color-border);
+  border-radius: 12px;
+  background: var(--color-surface-alt);
+  text-align: left;
+  overflow: hidden;
+  cursor: pointer;
+  transition: border-color 0.12s ease, transform 0.12s ease;
+}
+
+.reel-tile:hover:not(:disabled) {
+  border-color: var(--color-border-strong);
+  transform: translateY(-1px);
+}
+
+.reel-tile:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.reel-tile.is-picked {
+  border-color: var(--color-ember);
+}
+
+/* 9:16, because that is what nearly everything in the folder was shot as and
+   a grid of boxes that each match their own clip's aspect does not scan. */
+.reel-tile-shot {
+  position: relative;
+  display: block;
+  aspect-ratio: 9 / 16;
+  max-height: 190px;
+  background: var(--color-charcoal);
+}
+
+.reel-tile-shot img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.reel-tile-order {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 6px;
+  border-radius: 11px;
+  background: var(--color-ember);
+  color: #fff;
+  font-size: 0.78rem;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.reel-tile-time {
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  padding: 1px 6px;
+  border-radius: 8px;
+  background: rgba(36, 26, 20, 0.78);
+  color: #fff;
+  font-size: 0.7rem;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The filename is the only thing distinguishing two clips shot a minute
+   apart, so it wraps to two lines and then stops rather than being ellipsed
+   at the point where they differ. */
+.reel-tile-name {
+  padding: 0 8px;
+  font-size: 0.74rem;
+  line-height: 1.3;
+  word-break: break-all;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.reel-tile-meta {
+  padding: 0 8px 8px;
+  font-size: 0.68rem;
+  color: var(--color-text-muted);
+}
+
+.reel-songs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.reel-song {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 12px;
+  border: 2px solid var(--color-border);
+  border-radius: 10px;
+  background: var(--color-surface-alt);
+  text-align: left;
+  cursor: pointer;
+}
+
+.reel-song.is-picked {
+  border-color: var(--color-ember);
+}
+
+.reel-song:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.reel-song-name {
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.reel-music-mode {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 12px;
+  font-size: 0.82rem;
+}
+
+.reel-music-mode label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.reel-settings {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  margin-bottom: 10px;
+}
+
+.reel-settings label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--color-text-muted);
+}
+
+.reel-settings select,
+.reel-settings input {
+  font-size: 0.88rem;
+  padding: 7px 10px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 8px;
+  background: var(--color-surface);
+  color: var(--color-text);
+}
+
+.reel-hint-field {
+  flex: 1 1 220px;
+}
+
+.reel-go {
+  margin-top: 14px;
+  font-size: 0.95rem;
+  padding: 11px 22px;
+}
+
+/* The build panel. Stages rather than a percentage: only the render knows a
+   real number, and a fabricated bar across five steps of wildly different
+   length is a bar that stalls at 60% and stays there. */
+.reel-stages {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.reel-stages li {
+  padding: 5px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--color-border);
+  font-size: 0.76rem;
+  color: var(--color-text-soft);
+  background: var(--color-surface-alt);
+}
+
+.reel-stages li.is-done {
+  color: var(--color-text-muted);
+  border-color: var(--color-border-strong);
+}
+
+.reel-stages li.is-now {
+  border-color: var(--color-ember);
+  background: var(--color-ember-light);
+  color: var(--color-ember-dark);
+  font-weight: 700;
+}
+
+.reel-cut {
+  margin-top: 14px;
+}
+
+.reel-shots {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.reel-shots li {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 5px 0;
+  border-bottom: 1px solid var(--color-border);
+  font-size: 0.8rem;
+}
+
+.reel-shot-time {
+  flex: none;
+  width: 44px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  color: var(--color-text-muted);
+}
+
+.reel-shot-name {
+  flex: none;
+  max-width: 190px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-text-muted);
+}
+
+.reel-shot-caption {
+  font-style: italic;
+}
+
+.reel-notes {
+  margin: 12px 0 0;
+  padding-left: 18px;
+  font-size: 0.78rem;
+  line-height: 1.5;
+  color: var(--color-text-muted);
+}
+
+.mkt-head-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* ===========================================================================
+   Shared notes bubble
+   ---------------------------------------------------------------------------
+   The button pinned to the top-right corner of every screen, and the panel it
+   opens. See src/components/NotesBubble.tsx for what it is for; what is worth
+   knowing here is the stacking, which is the only part that interacts with
+   anything else on the page.
+
+   z-index 45 is chosen, not arbitrary. It sits above the sticky mobile topbar
+   (40) so the bubble is reachable at the top of a scrolled page, and below the
+   sidebar backdrop (50) and the off-canvas drawer (60) so an open menu covers
+   it rather than having a note bubble floating over the navigation.
+   ======================================================================== */
+
+.notes-bubble-root {
+  position: fixed;
+  top: 18px;
+  right: 22px;
+  z-index: 45;
+}
+
+.notes-toggle {
+  width: 46px;
+  height: 46px;
+  display: grid;
+  place-items: center;
+  position: relative;
+  font-size: 1.2rem;
+  line-height: 1;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: linear-gradient(180deg, var(--color-charcoal-soft) 0%, var(--color-charcoal) 100%);
+  color: #f3e9de;
+  box-shadow: var(--shadow-md);
+  cursor: pointer;
+  transition: transform 140ms ease, box-shadow 140ms ease;
+}
+
+.notes-toggle:hover {
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-lg);
+}
+
+.notes-toggle:focus-visible {
+  outline: 2px solid var(--color-ember);
+  outline-offset: 3px;
+}
+
+.notes-toggle.is-open {
+  background: linear-gradient(180deg, var(--color-ember) 0%, var(--color-ember-dark) 100%);
+  border-color: rgba(255, 255, 255, 0.24);
+}
+
+/* Ember rather than the WhatsApp badge's red, and no pulse. Both bubbles can
+   be lit at once, and two pulsing red dots in the same corner of the screen
+   read as one alarm rather than as two different things wanting attention. */
+.notes-badge {
+  position: absolute;
+  top: -3px;
+  right: -3px;
+  min-width: 19px;
+  height: 19px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--color-ember);
+  color: #ffffff;
+  font-family: var(--font-body);
+  font-size: 0.66rem;
+  font-weight: 800;
+  line-height: 19px;
+  text-align: center;
+  box-shadow: 0 0 0 2px var(--color-charcoal);
+}
+
+.notes-panel {
+  position: absolute;
+  top: calc(100% + 10px);
+  right: 0;
+  width: min(440px, calc(100vw - 32px));
+  /* A column that grows to its content and stops: the header and composer are
+     fixed height, and .notes-scroll takes whatever is left. Capped against the
+     viewport so a long board never runs off the bottom of a phone. */
+  max-height: min(80vh, 760px);
+  display: flex;
+  flex-direction: column;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+}
+
+/* The on-screen keyboard is up, and the panel has been pinned to the strip of
+   screen it leaves visible. `top` and `max-height` arrive as inline styles
+   from NotesBubble.tsx, because CSS has no unit that can express this: on
+   Android the keyboard shrinks only the visual viewport, while vh, dvh and
+   `position: fixed` all measure the layout viewport, which stays full height
+   and simply scrolls up underneath — taking the panel's header off the top of
+   the screen with it. Only the VisualViewport API reports the visible strip.
+
+   Fixed rather than absolute so the panel stops moving with the page the
+   browser has just scrolled out from under it. */
+.notes-panel.is-lifted {
+  position: fixed;
+  right: 22px;
+  left: auto;
+}
+
+/* No empty floor while the keyboard is up. The reserved 260/320px that stops
+   a quiet board opening as a letterbox is exactly the wrong trade here: with
+   half the screen gone, the space is worth more to the note being typed than
+   to a blank cream panel. */
+.notes-panel.is-lifted .notes-scroll {
+  min-height: 0;
+}
+
+.notes-panel-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 14px 16px;
+  background: linear-gradient(180deg, var(--color-charcoal) 0%, #1d150f 100%);
+  color: #f3e9de;
+}
+
+.notes-panel-head h2 {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 700;
+}
+
+.notes-panel-head p {
+  margin: 3px 0 0;
+  font-size: 0.72rem;
+  color: rgba(243, 233, 222, 0.66);
+}
+
+.notes-close {
+  margin-left: auto;
+  flex: none;
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.08);
+  color: #f3e9de;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.notes-close:hover {
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.notes-alert {
+  margin: 0;
+  padding: 8px 16px;
+  background: var(--color-ember-light);
+  color: var(--color-ember-dark);
+  font-size: 0.75rem;
+  border-bottom: 1px solid var(--color-border);
+}
+
+/* The search row, between the header and the list. Its own strip rather than
+   something tucked into the header: the header is charcoal and holds the
+   close button, and a field in there would be one more thing to hit by
+   accident on a phone while reaching for the X. */
+.notes-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--color-surface);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.notes-search-icon {
+  flex: none;
+  font-size: 0.8rem;
+  opacity: 0.55;
+}
+
+.notes-search input {
+  flex: 1;
+  min-width: 0;
+  padding: 7px 10px;
+  font-family: var(--font-body);
+  font-size: 0.82rem;
+  color: var(--color-text);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-alt);
+  /* Safari draws its own clear button on type=search, which would sit beside
+     the one this actually uses. */
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.notes-search input::-webkit-search-cancel-button {
+  display: none;
+}
+
+.notes-search input:focus-visible {
+  outline: 2px solid var(--color-ember);
+  outline-offset: 1px;
+  border-color: transparent;
+}
+
+.notes-search-clear {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text-muted);
+  font-size: 0.72rem;
+  cursor: pointer;
+}
+
+.notes-search-clear:hover {
+  background: var(--color-ember-light);
+  border-color: var(--color-border-strong);
+  color: var(--color-ember-dark);
+}
+
+/* The row of names under the search box. Scrolls sideways rather than wrapping
+   — the panel is a phone-width column, and a roster that grew to two rows
+   would push the notes themselves off the screen every time someone new
+   posted. */
+.notes-people {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  padding: 8px 12px;
+  overflow-x: auto;
+  background: var(--color-surface);
+  border-bottom: 1px solid var(--color-border);
+  scrollbar-width: none;
+}
+
+.notes-people::-webkit-scrollbar {
+  display: none;
+}
+
+.notes-person {
+  flex: none;
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 5px 11px;
+  font-family: var(--font-body);
+  font-size: 0.74rem;
+  line-height: 1.2;
+  color: var(--color-text-muted);
+  background: var(--color-surface-alt);
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.notes-person:hover {
+  border-color: var(--color-border-strong);
+  color: var(--color-text);
+}
+
+/* The one in force. Filled rather than outlined, because the whole point of
+   this row is to be able to tell at a glance that the board you are reading is
+   not the whole board. */
+.notes-person.is-on {
+  background: var(--color-ember);
+  border-color: var(--color-ember);
+  color: #fff;
+  font-weight: 600;
+}
+
+.notes-person:focus-visible {
+  outline: 2px solid var(--color-ember);
+  outline-offset: 1px;
+}
+
+/* Today's cadence, pinned above the board. Tinted rather than plain so the two
+   halves of the panel are told apart at a glance: this one comes back every
+   week on its own, the notes below it were typed by someone. */
+.notes-tasks {
+  /* Shrinkable, not fixed. .notes-scroll below has a 260px floor it will not
+     go under, so on a short screen with the keyboard up something has to give
+     — and it should be the pinned strip, which scrolls inside itself, rather
+     than the composer, which would be pushed out of the panel entirely. */
+  flex: 0 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--color-surface-alt);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.notes-tasks-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 9px 12px;
+  font-family: var(--font-body);
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+
+.notes-tasks-title {
+  font-weight: 700;
+  color: var(--color-text);
+}
+
+.notes-tasks-count {
+  margin-left: auto;
+  font-weight: 600;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--color-ember-dark);
+}
+
+/* Nothing left today. Said in the muted colour rather than the ember one, so
+   the header stops asking for attention once there is nothing to act on. */
+.notes-tasks-count.is-clear {
+  color: var(--color-text-muted);
+  font-weight: 500;
+}
+
+.notes-tasks-chevron {
+  flex: none;
+  font-size: 0.6rem;
+  opacity: 0.6;
+}
+
+/* Capped and scrollable. A Saturday with nine jobs on it would otherwise push
+   the notes off the bottom of the panel, and the notes are what the bubble is
+   for. Deep enough that the cap only bites on a long day, and padded at the
+   bottom so the last row never sits flush against the cut. */
+.notes-tasks-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: min(46vh, 340px);
+  overflow-y: auto;
+  padding: 0 12px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.notes-task {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  cursor: pointer;
+}
+
+.notes-task:hover {
+  border-color: var(--color-border-strong);
+}
+
+.notes-task-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.notes-task-label {
+  font-size: 0.82rem;
+  line-height: 1.35;
+  color: var(--color-text);
+}
+
+.notes-task-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 0.68rem;
+  color: var(--color-text-muted);
+}
+
+.notes-task-time {
+  font-variant-numeric: tabular-nums;
+}
+
+.notes-task-who {
+  font-weight: 600;
+  color: var(--color-ember-dark);
+}
+
+/* What kind of job it is. Marketing gets the ember tint because it is the
+   half of the list that is nobody's kitchen shift and therefore the half that
+   gets forgotten; everything else stays neutral so the strip does not turn
+   into a row of competing colours. */
+.notes-task-tag {
+  padding: 0 6px;
+  border-radius: 999px;
+  border: 1px solid var(--color-border);
+  background: var(--color-surface-alt);
+  color: var(--color-text-soft);
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  line-height: 1.6;
+}
+
+.notes-task-tag.is-marketing {
+  border-color: var(--color-ember);
+  background: var(--color-ember-light);
+  color: var(--color-ember-dark);
+}
+
+/* A ticked job, still in the list where it was. Faded and struck through, the
+   same way a ticked note is, so the two lists agree on what finished looks
+   like. */
+.notes-task.is-done {
+  opacity: 0.6;
+}
+
+.notes-task.is-done .notes-task-label {
+  text-decoration: line-through;
+}
+
+.notes-tasks-clear {
+  margin: 0;
+  padding: 2px 0 4px;
+  font-size: 0.76rem;
+  color: var(--color-text-muted);
+}
+
+/* The matched run inside a note. Amber rather than the ember used for actions,
+   so a highlight never reads as something to press, and the text keeps its own
+   colour so a struck-through done item still looks done where it is marked. */
+.notes-item mark {
+  background: #ffe08a;
+  color: inherit;
+  border-radius: 3px;
+  padding: 0 1px;
+}
+
+.notes-scroll {
+  flex: 1;
+  /* A floor, not just the flex minimum. Without it the panel collapses to the
+     height of its contents, so a board with two things on it opens as a
+     letterbox — which reads as broken rather than as empty, and gives the
+     composer nowhere to sit. The max-height above still caps it. */
+  min-height: 260px;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 10px 14px 14px;
+  background: var(--color-surface-alt);
+}
+
+.notes-empty,
+.notes-truncated {
+  margin: 12px 2px;
+  font-size: 0.78rem;
+  color: var(--color-text-muted);
+  line-height: 1.5;
+}
+
+.notes-truncated {
+  text-align: center;
+  font-size: 0.7rem;
+  color: var(--color-text-soft);
+}
+
+.notes-day-label {
+  margin: 14px 0 8px;
+  font-family: var(--font-body);
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-text-soft);
+  text-align: center;
+}
+
+.notes-day:first-child .notes-day-label {
+  margin-top: 4px;
+}
+
+/* Tick box in its own column, text and byline in the other, so the boxes line
+   up down the left edge however long the notes are — which is what makes a
+   column of these read as a list of jobs rather than as a chat. */
+.notes-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: 10px 11px;
+  margin-bottom: 8px;
+  box-shadow: var(--shadow-sm);
+}
+
+/* A real <input type=checkbox>, only resized and recoloured: the native
+   control is the one that a screen reader announces as a checkbox and that the
+   space bar ticks. accent-color does the whole job in every browser this runs
+   in, so there is no hand-built box to keep in step with it. */
+.notes-check {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  margin: 1px 0 0;
+  accent-color: var(--color-ember);
+  cursor: pointer;
+}
+
+.notes-check:disabled {
+  cursor: progress;
+  opacity: 0.5;
+}
+
+.notes-check:focus-visible {
+  outline: 2px solid var(--color-ember);
+  outline-offset: 2px;
+}
+
+.notes-item-main {
+  flex: 1;
+  min-width: 0;
+}
+
+/* A done job stays exactly where it was written — it does not sink to the
+   bottom — so it has to be legible as done at a glance without moving. */
+.notes-item.is-done {
+  background: var(--color-surface-alt);
+  border-style: dashed;
+  box-shadow: none;
+}
+
+.notes-item.is-done .notes-item-body {
+  text-decoration: line-through;
+  color: var(--color-text-soft);
+}
+
+.notes-item-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 5px;
+}
+
+.notes-item-doneby {
+  font-size: 0.68rem;
+  font-weight: 700;
+  color: #2f7d4f;
+}
+
+.notes-item-author {
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--color-ember-dark);
+}
+
+.notes-item-time {
+  font-size: 0.68rem;
+  color: var(--color-text-soft);
+}
+
+/* Only visible once the note is hovered or the button itself is focused, so a
+   column of notes reads as text rather than as a column of delete crosses. On
+   a touch screen there is no hover, so it stays visible — which is the right
+   way round: that is where mis-taps matter and where the confirm step earns
+   its keep. */
+.notes-item-delete {
+  margin-left: auto;
+  flex: none;
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--color-text-soft);
+  font-size: 0.7rem;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.notes-item:hover .notes-item-delete,
+.notes-item-delete:focus-visible {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .notes-item-delete {
+    opacity: 1;
+  }
+}
+
+.notes-item-delete:hover {
+  background: var(--color-ember-light);
+  border-color: var(--color-border-strong);
+  color: var(--color-ember-dark);
+}
+
+.notes-item-confirm {
+  margin-left: auto;
+  display: flex;
+  gap: 6px;
+}
+
+.notes-confirm-yes,
+.notes-confirm-no {
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  font-family: var(--font-body);
+  font-size: 0.68rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.notes-confirm-yes {
+  border: 1px solid var(--color-ember-dark);
+  background: var(--color-ember);
+  color: #ffffff;
+}
+
+.notes-confirm-no {
+  border: 1px solid var(--color-border-strong);
+  background: var(--color-surface);
+  color: var(--color-text-muted);
+}
+
+.notes-item-body {
+  margin: 0;
+  font-size: 0.88rem;
+  line-height: 1.45;
+  color: var(--color-text);
+  /* Notes are typed, so they carry the line breaks they were typed with, and a
+     pasted order number with no spaces must wrap rather than widen the panel
+     past its own edge. */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.notes-composer {
+  border-top: 1px solid var(--color-border);
+  padding: 10px 14px 12px;
+  background: var(--color-surface);
+}
+
+/* Note or task. A two-tab segment rather than a checkbox or a dropdown: there
+   are exactly two things this box can write, and which one is armed has to be
+   readable without opening anything, because the two go to different tables
+   and only one of them comes back next week. */
+.notes-mode {
+  display: inline-flex;
+  gap: 2px;
+  margin-bottom: 8px;
+  padding: 2px;
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-alt);
+  border: 1px solid var(--color-border);
+}
+
+.notes-mode-tab {
+  padding: 4px 14px;
+  border: 0;
+  border-radius: calc(var(--radius-sm) - 2px);
+  background: none;
+  font-family: var(--font-body);
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--color-text-muted);
+  cursor: pointer;
+}
+
+.notes-mode-tab.is-on {
+  background: var(--color-surface);
+  color: var(--color-text);
+  box-shadow: var(--shadow-sm);
+}
+
+.notes-mode-tab:focus-visible {
+  outline: 2px solid var(--color-ember);
+  outline-offset: 1px;
+}
+
+/* Category, time and assignee: one row of small fields under the task box.
+   All three read as details of the line above rather than as three more
+   things that have to be filled in — only the category is ever set, and it
+   already has the answer in it. */
+.notes-task-fields {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.notes-task-fields input,
+.notes-task-fields select {
+  flex: 1;
+  min-width: 0;
+  padding: 5px 8px;
+  font-family: var(--font-body);
+  font-size: 0.76rem;
+  color: var(--color-text);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-alt);
+}
+
+/* The time is the shortest thing on the row and the category the longest, so
+   they do not each get a third of it. */
+.notes-task-fields input:first-of-type {
+  flex: 0 1 84px;
+}
+
+.notes-task-hint {
+  margin: 7px 0 0;
+  font-size: 0.68rem;
+  line-height: 1.4;
+  color: var(--color-text-muted);
+}
+
+/* The same line, once it is reporting what just happened rather than warning
+   what will. */
+.notes-task-hint.is-added {
+  color: var(--color-ember-dark);
+  font-weight: 600;
+}
+
+.notes-author {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.notes-author span {
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--color-text-soft);
+  flex: none;
+}
+
+.notes-author input {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 8px;
+  font-family: var(--font-body);
+  font-size: 0.76rem;
+  color: var(--color-text);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-alt);
+}
+
+.notes-composer-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+/* The note's textarea and the task's single line share this: both are the
+   main box of the composer, and a task that looked like a smaller input than
+   a note would read as the lesser of the two things you can add. */
+.notes-composer-row textarea,
+.notes-composer-row input[type='text'] {
+  flex: 1;
+  min-width: 0;
+  resize: none;
+  padding: 8px 10px;
+  font-family: var(--font-body);
+  font-size: 0.84rem;
+  line-height: 1.4;
+  color: var(--color-text);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+}
+
+.notes-composer-row textarea:focus-visible,
+.notes-composer-row input[type='text']:focus-visible,
+.notes-task-fields input:focus-visible,
+.notes-task-fields select:focus-visible,
+.notes-author input:focus-visible {
+  outline: 2px solid var(--color-ember);
+  outline-offset: 1px;
+  border-color: transparent;
+}
+
+.notes-send {
+  flex: none;
+  padding: 9px 16px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: linear-gradient(180deg, var(--color-ember) 0%, var(--color-ember-dark) 100%);
+  color: #ffffff;
+  font-family: var(--font-body);
+  font-size: 0.78rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.notes-send:disabled {
+  background: var(--color-border-strong);
+  color: var(--color-surface);
+  cursor: not-allowed;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .notes-toggle,
+  .notes-item-delete {
+    transition: none;
+  }
+}
+
+@media (max-width: 720px) {
+  /* Sits in the topbar's band rather than below it, so "the bubble at the top"
+     means the same thing on a phone as on a desktop. */
+  .notes-bubble-root {
+    top: 12px;
+    right: 12px;
+  }
+
+  .notes-toggle {
+    width: 40px;
+    height: 40px;
+    font-size: 1.05rem;
+  }
+
+  /* Room for the bubble that now overlaps the bar's right end, so neither the
+     screen title nor the WhatsApp count ever runs underneath it. */
+  .mobile-topbar {
+    padding-right: 62px;
+  }
+
+  .notes-panel {
+    width: calc(100vw - 16px);
+    max-height: min(84vh, 820px);
+  }
+
+  /* Both edges, so the shortened panel uses the width it has left rather than
+     hanging off the bubble in the corner. */
+  .notes-panel.is-lifted {
+    left: 8px;
+    right: 8px;
+    width: auto;
+  }
+
+  /* Taller on a phone than on a desktop, because this is where the board is
+     actually worked from and where the panel has the whole screen to use. */
+  .notes-scroll {
+    min-height: 320px;
+  }
+
+  /* Fingers, not a mouse pointer. */
+  .notes-check {
+    width: 24px;
+    height: 24px;
+  }
 }

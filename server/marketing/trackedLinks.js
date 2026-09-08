@@ -89,6 +89,15 @@ const PLACEMENTS = [
 const SOURCE_DETAILS = {
   instagram: { prompt: 'Where on Instagram?', examples: ['Link in bio', 'Story', 'DM', 'Post caption', 'Reel'] },
   reddit: { prompt: 'Which subreddit or thread?', examples: ['Indiranagar group', 'Bangalore foodies', 'r/bangalore'] },
+  // YouTube splits the same way Instagram does, and for the same reason: a
+  // Short, a community post and a description link are three different pieces
+  // of work that report as one row until utm_content separates them. A Short
+  // is also the only one of the three that can't carry a clickable link in
+  // the frame, which is exactly why its scans are worth counting apart.
+  youtube: {
+    prompt: 'Where on YouTube?',
+    examples: ['Shorts', 'Community post', 'Video description', 'Pinned comment', 'Channel banner', 'Live chat'],
+  },
   whatsapp: {
     prompt: 'Which group or broadcast?',
     examples: ['Whats cooking Bangalore', 'WhatsApp community', 'Broadcast list', 'One-to-one'],

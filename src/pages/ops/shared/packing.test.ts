@@ -48,6 +48,9 @@ const order = (orderId: number, items: { itemId: string; qty: number }[]): PackO
   packBy: null,
   odooFulfilment: null,
   note: null,
+  phone: '',
+  address: '',
+  addressName: '',
   itemCount: items.reduce((sum, i) => sum + i.qty, 0),
   items: items.map((i) => ({ ...i, name: i.itemId })),
 });
@@ -197,14 +200,16 @@ const MEAT: MeatByItem = {
   'pork-bbq-burger': [{ category: 'pulledPork', label: 'Pulled Pork', productName: 'Pulled pork' }],
   'bbq-ribs-250g': [{ category: 'ribs', label: 'Pork Ribs', productName: 'Smoked pork ribs' }],
   'jackfruit-burger': [{ category: 'jackfruit', label: 'Pulled Jackfruit', productName: 'Pulled jackfruit' }],
+  'beef-ribs-250g': [{ category: 'beefRibs', label: 'Beef Ribs', productName: 'Smoked beef ribs' }],
   // A dish carrying both — one order of it belongs to both smoker loads.
   'combo-platter': [
-    { category: 'chicken', label: 'Shredded Chicken', productName: 'Pulled chicken' },
+    { category: 'beefRibs', label: 'Beef Ribs', productName: 'Smoked beef ribs' },
     { category: 'porkBelly', label: 'Pork Belly', productName: 'Pork belly burnt ends' },
   ],
 };
 
 const PORK = SMOKER_LOADS.find((l) => l.id === 'pork')!;
+const BEEF = SMOKER_LOADS.find((l) => l.id === 'beef')!;
 const CHICKEN = SMOKER_LOADS.find((l) => l.id === 'chicken')!;
 
 describe('smoker loads', () => {
@@ -214,7 +219,7 @@ describe('smoker loads', () => {
       { itemId: 'bbq-ribs-250g', qty: 1 },
       { itemId: 'combo-platter', qty: 1 },
     ]);
-    expect([...orderMeatCategories(both, MEAT)].sort()).toEqual(['chicken', 'porkBelly', 'ribs']);
+    expect([...orderMeatCategories(both, MEAT)].sort()).toEqual(['beefRibs', 'chicken', 'porkBelly', 'ribs']);
   });
 
   it('puts every pork cut behind the one pork switch', () => {
@@ -226,17 +231,32 @@ describe('smoker loads', () => {
   it('counts an order in both loads when it carries both meats', () => {
     const combo = order(1, [{ itemId: 'combo-platter', qty: 1 }]);
     expect(orderNeedsLoad(combo, MEAT, PORK)).toBe(true);
-    expect(orderNeedsLoad(combo, MEAT, CHICKEN)).toBe(true);
+    expect(orderNeedsLoad(combo, MEAT, BEEF)).toBe(true);
+  });
+
+  it('puts beef ribs behind the beef switch and nothing else', () => {
+    const beefOnly = order(1, [{ itemId: 'beef-ribs-250g', qty: 2 }]);
+    expect(orderNeedsLoad(beefOnly, MEAT, BEEF)).toBe(true);
+    expect(orderNeedsLoad(beefOnly, MEAT, PORK)).toBe(false);
+  });
+
+  it('puts chicken behind its own switch, not pork’s', () => {
+    // Chicken is a much shorter smoke than the shoulders, so it is its own
+    // load — sweeping it with pork would stamp the wrong time on a
+    // chicken-only order.
+    const chickenOnly = order(1, [{ itemId: 'chicken-bbq-burger', qty: 3 }]);
+    expect(orderNeedsLoad(chickenOnly, MEAT, CHICKEN)).toBe(true);
+    expect(orderNeedsLoad(chickenOnly, MEAT, PORK)).toBe(false);
+    expect(orderNeedsLoad(chickenOnly, MEAT, BEEF)).toBe(false);
+    // ...and a pork order is not swept onto the chicken switch either.
+    expect(orderNeedsLoad(order(2, [{ itemId: 'pork-bbq-burger', qty: 1 }]), MEAT, CHICKEN)).toBe(false);
   });
 
   it('leaves out orders with none of that load, and meats with no switch', () => {
-    const chickenOnly = order(1, [{ itemId: 'chicken-bbq-burger', qty: 3 }]);
-    expect(orderNeedsLoad(chickenOnly, MEAT, PORK)).toBe(false);
-    // Jackfruit has no switch — it belongs to neither load, so it's driven
-    // from the per-order dropdown instead of being swept into one.
-    const jackfruit = order(2, [{ itemId: 'jackfruit-burger', qty: 1 }]);
-    expect(orderNeedsLoad(jackfruit, MEAT, PORK)).toBe(false);
-    expect(orderNeedsLoad(jackfruit, MEAT, CHICKEN)).toBe(false);
+    // Jackfruit has no switch — it belongs to no load, so it is driven from
+    // the per-order dropdown instead of being swept into one.
+    const jackfruit = order(1, [{ itemId: 'jackfruit-burger', qty: 1 }]);
+    expect(SMOKER_LOADS.every((load) => !orderNeedsLoad(jackfruit, MEAT, load))).toBe(true);
   });
 
   it('matches nothing rather than guessing while the reference data is missing', () => {

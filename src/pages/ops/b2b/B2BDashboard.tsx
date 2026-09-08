@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { usePersistedChoice } from '../../../lib/usePersistedChoice';
 import B2BClients from './B2BClients';
 import B2BSales from './B2BSales';
 import SmokingSession from '../shared/SmokingSession';
@@ -58,8 +58,16 @@ const MODULES: { id: B2BModule; label: string; icon: string; stage: string; desc
   },
 ];
 
+// Derived from MODULES so a module added or renamed there needs no second edit.
+const B2B_MODULES = ['home', ...MODULES.map((mod) => mod.id)] as B2BModule[];
+
 const B2BDashboard = () => {
-  const [openModule, setOpenModule] = useState<B2BModule>('home');
+  // Which module you had open, kept across a reload — see usePersistedChoice.
+  const [openModule, setOpenModule] = usePersistedChoice<B2BModule>(
+    'smokerings.b2b.module',
+    'home',
+    B2B_MODULES,
+  );
 
   const renderModule = () => {
     switch (openModule) {

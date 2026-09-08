@@ -26,6 +26,15 @@ export type PackOrder = {
   // checkout summary, and its last line is whatever the customer typed into
   // the note box — which is the only place they can ask for a delivery time.
   note: string | null;
+  // The delivery contact, read off the order's shipping partner in Odoo and
+  // falling back to the account's own (server/integrations/odoo.js contactOf).
+  // '' rather than null where Odoo has nothing on file, so a card renders what
+  // it is given. `addressName` is set only when the drop is to a different
+  // partner than the account — a website order's typed-in address — because
+  // that is the case worth a second look before it goes out.
+  phone: string;
+  address: string;
+  addressName: string;
   itemCount: number;
   items: PackOrderItem[];
 };
@@ -285,16 +294,20 @@ export type MeatByItemLine = {
 };
 export type MeatByItem = Record<string, MeatByItemLine[]>;
 
-// A smoker "load": one switch on the Order Management board, covering every
+// A smoker "load": one switch on the Set Smoker Status board, covering every
 // meatConfig category that goes in together. Pork is one load whatever cut it
 // is — shoulder, ribs and belly all go on the same smoke — so all three
-// categories sit behind the single pork switch. Chicken is its own.
+// categories sit behind the single pork switch. Beef is its own.
+//
+// Chicken is its own switch rather than sharing pork's: it is a much shorter
+// smoke, so it goes on well after the shoulders and flipping both at once
+// would stamp a chicken-only order with the wrong time.
 //
 // A category missing from every group here simply has no switch (jackfruit
-// and beef ribs today); those orders are still driven one at a time from the
+// today); those orders are still driven one at a time from Order Management's
 // per-order dropdown, which is unchanged.
 export type SmokerLoad = {
-  id: 'pork' | 'chicken';
+  id: 'pork' | 'beef' | 'chicken';
   label: string;
   emoji: string;
   categories: string[];
@@ -302,6 +315,7 @@ export type SmokerLoad = {
 
 export const SMOKER_LOADS: SmokerLoad[] = [
   { id: 'pork', label: 'Pork', emoji: '🐖', categories: ['pulledPork', 'ribs', 'porkBelly'] },
+  { id: 'beef', label: 'Beef', emoji: '🐄', categories: ['beefRibs'] },
   { id: 'chicken', label: 'Chicken', emoji: '🐔', categories: ['chicken'] },
 ];
 
@@ -322,6 +336,103 @@ export const orderMeatCategories = (order: PackOrder, meatByItem: MeatByItem | n
 export const orderNeedsLoad = (order: PackOrder, meatByItem: MeatByItem | null, load: SmokerLoad): boolean => {
   const categories = orderMeatCategories(order, meatByItem);
   return load.categories.some((category) => categories.has(category));
+};
+
+// ---- The service window both order boards fetch --------------------------
+// The Odoo fetch filters on the PROMISED time (commitment_date), so this
+// window picks a SERVICE weekend — not "when the order was typed in". Shared
+// by Order Management and Set Smoker Status so the two always open on the
+// same weekend: a smoker switch flipped for a range the board below isn't
+// showing would be a very quiet way to smoke the wrong day's meat.
+//
+// The Monday start is load-bearing, not padding: an order with no promised
+// time falls back to its date_order (server/integrations/odoo.js
+// weekendOrderDomain), so the window must still cover the week it was placed
+// in or it drops out entirely instead of surfacing as needs-fixing. The
+// Weekend Prep Planner keeps its own copy of this default — keep the two in
+// sync.
+export const formatDateInput = (d: Date) =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+
+// The Mon→Sun week containing the next Sat/Sun (the current weekend once it's
+// Sat or Sun), since that's the weekend being prepped, smoked and packed for.
+export const defaultWeekendRange = () => {
+  const today = new Date();
+  const sunday = new Date(today);
+  sunday.setDate(today.getDate() + ((7 - today.getDay()) % 7));
+  const monday = new Date(sunday);
+  monday.setDate(sunday.getDate() - 6);
+  return { from: formatDateInput(monday), to: formatDateInput(sunday) };
+};
+
+// B2B deliveries land on whatever weekday the account ordered for, so the
+// range that matters is the week ahead rather than the coming weekend.
+export const defaultB2BRange = () => {
+  const today = new Date();
+  const weekOut = new Date(today);
+  weekOut.setDate(today.getDate() + 7);
+  return { from: formatDateInput(today), to: formatDateInput(weekOut) };
+};
+
+// ---- Which slot is happening now? ---------------------------------------
+//
+// The board opens on the service the kitchen is actually in. Before this it
+// opened on the first slot that had orders in it, which on a Sunday evening
+// meant Saturday Lunch — a service two days done — and the packer's first
+// action every time was to click three slots along.
+//
+// The cutoff is the server's: before 16:00 is Lunch, 16:00 onwards is Dinner
+// (LUNCH_END_HOUR_IST in server/integrations/odoo.js, which is what decides
+// the slot an order is filed under in the first place). Keep the two in step
+// — a board suggesting a slot the orders are not in would be worse than no
+// suggestion.
+export const LUNCH_END_HOUR = 16;
+
+// Everything here reads a clock, so the clock is a parameter: these are the
+// functions that decide what a user sees on opening the screen, and a test
+// that has to wait until Sunday evening to run is a test nobody runs.
+export const slotForNow = (now: Date = new Date()): PackSlotId => {
+  const isLunch = now.getHours() < LUNCH_END_HOUR;
+  switch (now.getDay()) {
+    case 6:
+      return isLunch ? 'satLunch' : 'satEvening';
+    case 0:
+      return isLunch ? 'sunLunch' : 'sunEvening';
+    default:
+      // Any weekday is prep for the weekend ahead, and the weekend starts at
+      // Saturday lunch. Not "the nearest slot" — on a Wednesday there is no
+      // service in progress to be nearest to, and the first one coming is
+      // what anybody opening the board is working towards.
+      return 'satLunch';
+  }
+};
+
+// The B2B equivalent. Groups there are delivery days ('YYYY-MM-DD'), so the
+// answer is today when today has a delivery, else the next day that does —
+// and failing that the most recent past one, so a board opened after the
+// week's last drop still lands somewhere with orders on it rather than on the
+// oldest day in range.
+export const dayGroupForNow = (groupIds: string[], now: Date = new Date()): string | null => {
+  const days = groupIds.filter((id) => /^\d{4}-\d{2}-\d{2}$/.test(id)).sort();
+  if (!days.length) return null;
+  const today = formatDateInput(now);
+  return days.find((day) => day >= today) || days[days.length - 1];
+};
+
+// The group the board should open on, given what it actually fetched. Falls
+// through to what the board did before — the first group with orders, then
+// simply the first — so a suggestion that names a slot this range does not
+// have never leaves the board on nothing.
+export const suggestedGroupId = (groups: PackGroup[], channel: 'B2C' | 'B2B', now: Date = new Date()): string => {
+  if (!groups.length) return '';
+  if (channel === 'B2B') {
+    const day = dayGroupForNow(groups.map((g) => g.id), now);
+    if (day && groups.some((g) => g.id === day)) return day;
+  } else {
+    const slot = slotForNow(now);
+    if (groups.some((g) => g.id === slot)) return slot;
+  }
+  return (groups.find((g) => g.orders.length > 0) || groups[0]).id;
 };
 
 // ---- Smoker days --------------------------------------------------------

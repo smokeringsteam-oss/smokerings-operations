@@ -165,6 +165,7 @@ describe('presets', () => {
     const sources = presets.filter((p) => p.kind === 'channel').map((p) => p.source);
     expect(sources).toContain('instagram');
     expect(sources).toContain('reddit');
+    expect(sources).toContain('youtube');
     expect(sources).toContain('whatsapp');
   });
 
@@ -182,6 +183,7 @@ describe('presets', () => {
     expect(mapped.instagram).toBe('Instagram');
     expect(mapped.reddit).toBe('Reddit');
     expect(mapped.whatsapp).toBe('WhatsApp');
+    expect(mapped.youtube).toBe('YouTube');
     // Swiggy, specifically. GA sources are matched as substrings, and while
     // Instagram's pattern list contained a bare 'ig' every Swiggy source
     // matched it — sw-IG-gy — and reported as Instagram, on this screen and
@@ -191,6 +193,19 @@ describe('presets', () => {
     // A QR on the standee at an event is a pop-up order, and orderAttribution
     // matches the slug for exactly that reason.
     expect(mapped['popup-banner']).toBe('Pop-up Event');
+  });
+
+  it('resolves the spellings YouTube traffic actually arrives under', () => {
+    // The share sheet hands out youtu.be and the mobile app reports
+    // m.youtube.com. All three are one channel — a link published as a Short
+    // that came back as unattributed would be the one thing this preset is
+    // supposed to prevent.
+    expect(channelFor('youtube')).toBe('YouTube');
+    expect(channelFor('m.youtube.com')).toBe('YouTube');
+    expect(channelFor('youtu.be')).toBe('YouTube');
+    // ...and the shorthand, which is too short to be safe as a substring and
+    // so is matched whole, the same way 'ig' is.
+    expect(channelFor('yt')).toBe('YouTube');
   });
 
   it('offers one button per source, not one per channel that shares it', () => {
@@ -235,6 +250,7 @@ describe('the placement suggestions', () => {
     expect(details.instagram.prompt).toMatch(/Instagram/);
     expect(details.reddit.prompt).toMatch(/subreddit/i);
     expect(details.whatsapp.prompt).toMatch(/group|broadcast/i);
+    expect(details.youtube.prompt).toMatch(/YouTube/);
     expect(details.referral.prompt).toMatch(/passing it on/i);
   });
 
@@ -243,6 +259,11 @@ describe('the placement suggestions', () => {
     expect(details.instagram.options).toContain('Link in bio');
     expect(details.instagram.options).toContain('Story');
     expect(details.referral.options).toEqual(expect.arrayContaining(['Adarsh', 'Sowmya']));
+    // A Short and a community post are separate pieces of work with separate
+    // costs, and they report as one YouTube row until utm_content splits them.
+    expect(details.youtube.options).toEqual(
+      expect.arrayContaining(['Shorts', 'Community post', 'Video description']),
+    );
   });
 
   it('offers every source a preset exists for, so no tile opens an empty question', () => {

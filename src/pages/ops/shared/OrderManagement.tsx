@@ -9,12 +9,18 @@ import {
   type PackingStatus,
 } from './orderFulfilment';
 import {
+  defaultB2BRange,
+  defaultWeekendRange,
+  formatDateInput,
+  suggestedGroupId,
   type OrderTimePreference,
   type OrderTimePreferences,
   type PackOrder,
   type PackingResponse,
   type PackGroup,
 } from './packing';
+import { usePersistedState } from '../../../lib/usePersistedState';
+import { copyToClipboard } from '../../../lib/clipboard';
 
 // Order Management — the whole service-day board for individual orders (not
 // the aggregated totals the Weekend Prep Planner works with), off one fetch:
@@ -54,39 +60,10 @@ const CHANNEL_COPY: Record<
   },
 };
 
-const formatDateInput = (d: Date) =>
-  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-
-// The Odoo fetch filters on the PROMISED time (commitment_date), so this
-// window picks a SERVICE weekend — not "when the order was typed in", which is
-// what the old last-Fri-through-Mon default meant. Defaults to the Mon→Sun
-// week containing the next Sat/Sun (the current weekend once it's Sat or Sun),
-// since that's the weekend being prepped and packed for.
-//
-// The Monday start is load-bearing, not padding: an order with no promised
-// time falls back to its date_order (server/integrations/odoo.js weekendOrderDomain), so
-// the window must still cover the week it was placed in or it drops out
-// entirely instead of surfacing as needs-fixing. Same default in the Weekend
-// Prep Planner — keep the two in sync.
-const getDefaultOdooRange = () => {
-  const today = new Date();
-  const sunday = new Date(today);
-  sunday.setDate(today.getDate() + ((7 - today.getDay()) % 7));
-  const monday = new Date(sunday);
-  monday.setDate(sunday.getDate() - 6);
-  return { from: formatDateInput(monday), to: formatDateInput(sunday) };
-};
-const DEFAULT_ODOO_RANGE = getDefaultOdooRange();
-
-// B2B deliveries land on whatever weekday the account ordered for, so the
-// range that matters is the week ahead rather than the coming weekend.
-const getDefaultB2BRange = () => {
-  const today = new Date();
-  const weekOut = new Date(today);
-  weekOut.setDate(today.getDate() + 7);
-  return { from: formatDateInput(today), to: formatDateInput(weekOut) };
-};
-const DEFAULT_B2B_RANGE = getDefaultB2BRange();
+// Both defaults live in packing.ts so Set Smoker Status opens on the very
+// same window — see the note there for why the B2C one starts on Monday.
+const DEFAULT_ODOO_RANGE = defaultWeekendRange();
+const DEFAULT_B2B_RANGE = defaultB2BRange();
 
 // packBy is Odoo's naive-UTC 'YYYY-MM-DD HH:mm:ss', so it needs both the
 // space-to-T fixup and an explicit 'Z' — without the Z it parses as local time
@@ -118,6 +95,135 @@ const TimePreferenceCallout: React.FC<{ preference: OrderTimePreference | undefi
       {preference.quote && <span className="pack-time-pref-quote">“{preference.quote}”</span>}
       {preference.confidence !== 'high' && (
         <span className="pack-time-pref-hint">Read from a vague note — worth a look before you promise it.</span>
+      )}
+    </div>
+  );
+};
+
+// Where this order is going and who to ring when the rider cannot find it.
+//
+// Read off the order's Odoo delivery address rather than the account (see
+// contactOf in server/integrations/odoo.js), because on a website order those
+// are two different records: the account is whoever created the login, and the
+// delivery partner is what the customer actually typed at checkout. Rendered
+// on the card rather than behind a click - this is the one thing somebody
+// standing over a packed box needs and could not otherwise get without opening
+// Odoo on a phone with wet hands.
+//
+// Silent when Odoo has neither, which is normal for a walk-in or a B2B account
+// that collects. An empty "Phone: -" line on every card would be noise, and
+// noise is what makes people stop reading the block that matters.
+// Copies one field and says so, briefly.
+//
+// Beside the phone and the address rather than instead of them, because the
+// two gestures are different jobs: the tel: link rings the customer, and this
+// puts the same text into whatever the rider's delivery app wants pasted into
+// it. Selecting an address by dragging across it on a phone, with one hand,
+// mid-service, is not a thing anyone gets right first time.
+const CopyButton: React.FC<{ value: string; label: string }> = ({ value, label }) => {
+  const [state, setState] = useState<'idle' | 'copied' | 'failed'>('idle');
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // The timeout outlives the card when a re-fetch replaces the board mid-copy,
+  // and setting state on a card that is gone is a warning nobody can act on.
+  useEffect(
+    () => () => {
+      if (timer.current) clearTimeout(timer.current);
+    },
+    [],
+  );
+
+  const handleCopy = async () => {
+    const ok = await copyToClipboard(value);
+    // Says "Couldn't copy" rather than "Copied" on a webview that blocks it.
+    // A button that claims success and left the clipboard empty is worse than
+    // one that admits it, because the address then gets typed from memory.
+    setState(ok ? 'copied' : 'failed');
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = setTimeout(() => setState('idle'), 1600);
+  };
+
+  return (
+    <button
+      type="button"
+      className={`pack-copy-btn${state === 'copied' ? ' copied' : ''}${state === 'failed' ? ' failed' : ''}`}
+      onClick={handleCopy}
+      aria-label={`Copy ${label}`}
+    >
+      {state === 'copied' ? 'Copied' : state === 'failed' ? "Couldn't copy" : 'Copy'}
+    </button>
+  );
+};
+
+// The customer's own note on the order, exactly as Odoo has it.
+//
+// It was always fetched (server/integrations/odoo.js fetchOrderPackingList reads
+// sale.order.note) but until now the only thing on the card that came out of it
+// was the Gemini time-preference callout above — so a note that asked for
+// anything OTHER than a delivery time ("no spice", "leave with the guard")
+// showed up nowhere, and a note asking for a time vanished too whenever the
+// Gemini pass was rate-limited. This renders the text itself, with no model in
+// the way: if Odoo has a note, the packer sees it.
+//
+// Clamped rather than truncated, because a website checkout can write its whole
+// order dump into this same field and a card that is mostly boilerplate stops
+// being read. Anything past the first few lines is one tap away.
+const NOTE_CLAMP_CHARS = 180;
+
+const CustomerNote: React.FC<{ order: PackOrder }> = ({ order }) => {
+  const [expanded, setExpanded] = useState(false);
+  const note = order.note?.trim();
+  if (!note) return null;
+
+  const isLong = note.length > NOTE_CLAMP_CHARS;
+  const shown = isLong && !expanded ? `${note.slice(0, NOTE_CLAMP_CHARS).trimEnd()}…` : note;
+
+  return (
+    <div className="pack-order-note">
+      <span className="pack-order-note-label">📝 Customer note</span>
+      {/* pre-wrap: the note arrives as plain text with the customer's own line
+          breaks in it (htmlToText flattens Odoo's HTML to newlines), and a
+          list they typed on separate lines should stay on separate lines. */}
+      <span className="pack-order-note-text">{shown}</span>
+      {isLong && (
+        <button type="button" className="pack-order-note-toggle" onClick={() => setExpanded((v) => !v)}>
+          {expanded ? 'Show less' : 'Show the whole note'}
+        </button>
+      )}
+    </div>
+  );
+};
+
+const DeliveryContact: React.FC<{ order: PackOrder }> = ({ order }) => {
+  if (!order.phone && !order.address) return null;
+  return (
+    <div className="pack-order-contact">
+      {order.phone && (
+        <span className="pack-order-contact-row">
+          {/* A tel: link, because this is read on a phone and the alternative
+              is copying a number off a screen with one hand. Stripped to
+              digits and a leading +, since Odoo numbers carry spaces and
+              brackets. The copy button hands over what is PRINTED, not the
+              stripped form — that is what gets pasted somewhere a human
+              reads it. */}
+          <a className="pack-order-phone" href={`tel:${order.phone.replace(/[^0-9+]/g, '')}`}>
+            📞 {order.phone}
+          </a>
+          <CopyButton value={order.phone} label={`phone number for ${order.orderName}`} />
+        </span>
+      )}
+      {order.address && (
+        <span className="pack-order-contact-row">
+          <span className="pack-order-address">
+            📍 {order.address}
+            {/* Only when the drop is to a partner other than the account,
+                which is exactly the order worth checking before it leaves. */}
+            {order.addressName && <em className="pack-order-address-name"> — {order.addressName}</em>}
+          </span>
+          {/* The address alone, without the name beside it: the name is a
+              flag for the packer, not part of what anyone pastes. */}
+          <CopyButton value={order.address} label={`address for ${order.orderName}`} />
+        </span>
       )}
     </div>
   );
@@ -168,7 +274,15 @@ const OrdersBoard: React.FC<OrdersBoardProps> = ({
                 <span className="pack-order-time">{formatPackBy(order.packBy)}</span>
               </div>
 
+              <DeliveryContact order={order} />
+
               <TimePreferenceCallout preference={timePreferences[key]} />
+
+              {/* Below the time-preference callout: that one is the reading to
+                  act on, this is the source it was read from (and the only
+                  thing shown at all for the notes that asked for something
+                  other than a time). */}
+              <CustomerNote order={order} />
 
               <FulfilmentControl
                 order={order}
@@ -198,16 +312,57 @@ const OrdersBoard: React.FC<OrdersBoardProps> = ({
 const OrderManagement: React.FC<{ channel?: PackChannel }> = ({ channel = 'B2C' }) => {
   const defaultRange = channel === 'B2B' ? DEFAULT_B2B_RANGE : DEFAULT_ODOO_RANGE;
   const copy = CHANNEL_COPY[channel];
-  const [odooFrom, setOdooFrom] = useState(defaultRange.from);
-  const [odooTo, setOdooTo] = useState(defaultRange.to);
+
+  // The range survives the tab being evicted, which on a phone in a kitchen
+  // happens whenever the OS wants the memory. Both dates in one value because
+  // they are one decision, and because the staleness rule below needs to see
+  // them together.
+  //
+  // A range that has entirely finished does not come back: a board reopened
+  // next Friday should open on next Friday's orders, not on last weekend's,
+  // and a spent window sitting in the date boxes looks exactly like a live
+  // one. Judged on the `to` end — a `from` in the past is completely normal,
+  // since every weekend range starts on its Monday.
+  const [range, setRange] = usePersistedState(
+    `smokerings.orderBoard.${channel}.range`,
+    defaultRange,
+    (stored) => {
+      if (!stored || typeof stored !== 'object') return undefined;
+      const { from, to } = stored as Record<string, unknown>;
+      if (typeof from !== 'string' || typeof to !== 'string' || !from || !to) return undefined;
+      return to >= formatDateInput(new Date()) ? { from, to } : undefined;
+    },
+  );
+  const { from: odooFrom, to: odooTo } = range;
+  const setOdooFrom = (from: string) => setRange((current) => ({ ...current, from }));
+  const setOdooTo = (to: string) => setRange((current) => ({ ...current, to }));
+
   const [isFetching, setIsFetching] = useState(false);
   const [error, setError] = useState('');
   const [data, setData] = useState<PackingResponse | null>(null);
+
   // One group's dashboard at a time — the picker strip below chooses which.
   // Held as an id rather than an index so a re-fetch that adds or drops a B2B
   // delivery day doesn't silently slide whoever's packing onto another day;
-  // an id that's gone falls back to the first group instead.
-  const [activeGroupId, setActiveGroupId] = useState('');
+  // an id that's gone falls back to the suggestion instead.
+  //
+  // Stored with the suggestion that was live when it was made, which is what
+  // makes "remember my pick" and "open on the service happening now" both
+  // true. Pick Sunday Dinner during Saturday lunch and it stays put for as
+  // long as you are working; come back on Sunday evening and the clock has
+  // moved to a different service, so the pick is spent and the board opens on
+  // the new one. Without that pairing the screen would have to choose between
+  // ignoring the clock and ignoring the packer.
+  const [pick, setPick] = usePersistedState<{ groupId: string; forSuggestion: string } | null>(
+    `smokerings.orderBoard.${channel}.pick`,
+    null,
+    (stored) => {
+      if (!stored || typeof stored !== 'object') return undefined;
+      const { groupId, forSuggestion } = stored as Record<string, unknown>;
+      if (typeof groupId !== 'string' || typeof forSuggestion !== 'string' || !groupId) return undefined;
+      return { groupId, forSuggestion };
+    },
+  );
 
   const handleFetch = async () => {
     if (!odooFrom || !odooTo || isFetching) return;
@@ -247,13 +402,31 @@ const OrderManagement: React.FC<{ channel?: PackChannel }> = ({ channel = 'B2C' 
   }, [channel, odooFrom, odooTo]);
 
   const groups = useMemo<PackGroup[]>(() => data?.groups || [], [data]);
-  // The group being worked: whatever's selected, else the first one with
-  // orders in it (an empty Saturday Lunch shouldn't be what the board opens
-  // on), else just the first.
+
+  // The service the clock says is on right now — Saturday Dinner at 6pm on a
+  // Saturday, the coming Saturday Lunch on a Wednesday, today's delivery day
+  // on the B2B board. Recomputed whenever the groups change rather than held
+  // in state, so a board left open across the 4pm Lunch/Dinner boundary is
+  // right the moment anything refreshes it.
+  const suggestion = useMemo(() => suggestedGroupId(groups, channel), [groups, channel]);
+
+  // The group being worked: the packer's own pick while it is still current,
+  // else whatever the clock suggests, else — when the suggestion names a slot
+  // this range didn't return — the first group with orders in it, which is
+  // what suggestedGroupId already falls through to.
+  const activeGroupId = pick && pick.forSuggestion === suggestion ? pick.groupId : suggestion;
   const activeGroup = useMemo(
     () => groups.find((g) => g.id === activeGroupId) || groups.find((g) => g.orders.length > 0) || groups[0] || null,
     [groups, activeGroupId],
   );
+
+  // A pick is stamped with the suggestion it was made against, which is what
+  // lets it expire when the kitchen moves on to the next service. Clicking the
+  // suggested group clears the pick rather than storing it: there is nothing
+  // to remember, and a stored pick equal to the suggestion would come back as
+  // a manual override on a board that was going to open there anyway.
+  const chooseGroup = (groupId: string) =>
+    setPick(groupId === suggestion ? null : { groupId, forSuggestion: suggestion });
 
   // Pipeline state is loaded for every group in range, not just the visible
   // one, so switching groups costs nothing.
@@ -433,7 +606,7 @@ const OrderManagement: React.FC<{ channel?: PackChannel }> = ({ channel = 'B2C' 
                     className={`slot-picker-btn ${activeGroup?.id === group.id ? 'active' : ''} ${
                       group.orders.length === 0 ? 'empty' : ''
                     }`}
-                    onClick={() => setActiveGroupId(group.id)}
+                    onClick={() => chooseGroup(group.id)}
                   >
                     <span className="slot-picker-name">
                       {group.emoji} {group.label}

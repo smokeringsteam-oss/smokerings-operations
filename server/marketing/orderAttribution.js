@@ -64,6 +64,14 @@ const CHANNELS = [
   // the link builder's preset table made it visible.
   { odoo: 'Instagram', source: 'Instagram', medium: 'Social Media', ga: ['instagram', 'l.instagram'], exact: ['ig'] },
   { odoo: 'Reddit', source: 'Reddit', medium: 'Social Media', ga: ['reddit'] },
+  // 'youtu.be' because the share sheet hands out the short domain and GA
+  // reports it verbatim, and 'youtu-be' beside it for the same reason
+  // Pop-up Event lists both spellings of itself: channelFor() slugs before it
+  // matches, which turns the dot into a hyphen. Both are unambiguously this
+  // channel. Safe as substrings — none of them appears inside another source
+  // we see. 'yt' goes in `exact` on the 'ig' rule: too short to be safe as a
+  // substring.
+  { odoo: 'YouTube', source: 'YouTube', medium: 'Social Media', ga: ['youtube', 'youtu.be', 'youtu-be'], exact: ['yt'] },
   { odoo: 'WhatsApp', source: 'WhatsApp', medium: 'Phone', ga: ['whatsapp', 'wa.me'], exact: ['wa'] },
   { odoo: 'Website', source: '', medium: 'Website', ga: ['google', 'bing', 'direct', '(direct)', 'duckduckgo', '(none)'] },
   { odoo: 'Swiggy', source: 'Swiggy', medium: 'Marketplace', ga: ['swiggy'] },

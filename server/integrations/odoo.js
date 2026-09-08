@@ -608,6 +608,86 @@ function htmlToText(value) {
 // Pack-first ordering within a slot uses the same commitment_date the slot
 // itself came from, falling back to date_order for orders that only had a
 // slot tag, earliest first.
+// What a deliverable contact is made of on res.partner. Optional because the
+// set genuinely varies by Odoo version — `mobile` was a separate char field
+// for years and is merged into `phone` on this instance (Odoo 18), where
+// asking for it fails the whole search_read with "Invalid field 'mobile' on
+// 'res.partner'". So the columns are resolved against the database once
+// rather than assumed, the same way the Fulfilment Status field is.
+const PARTNER_CONTACT_FIELDS = ['name', 'phone', 'mobile', 'street', 'street2', 'city', 'zip'];
+
+// undefined = not looked yet. Resolved once per process, like
+// fulfilmentFieldCache — a board refresh must not cost a fields_get.
+let partnerContactFieldsCache;
+
+async function resolvePartnerContactFields() {
+  if (partnerContactFieldsCache !== undefined) return partnerContactFieldsCache;
+  const fields = await execute('res.partner', 'fields_get', [[], ['type']]);
+  partnerContactFieldsCache = ['id', ...PARTNER_CONTACT_FIELDS.filter((name) => fields[name])];
+  return partnerContactFieldsCache;
+}
+
+// Reads the partner rows behind a set of orders in one call. Both the invoice
+// partner and the delivery partner are wanted, and on a website order they are
+// two different records, so the ids are pooled and de-duplicated first — a
+// board with thirty orders is one search_read, not sixty.
+async function fetchOrderContacts(orders) {
+  const ids = new Set();
+  for (const order of orders) {
+    if (Array.isArray(order.partner_id)) ids.add(order.partner_id[0]);
+    if (Array.isArray(order.partner_shipping_id)) ids.add(order.partner_shipping_id[0]);
+  }
+  if (!ids.size) return new Map();
+
+  const fields = await resolvePartnerContactFields();
+  const partners = await execute('res.partner', 'search_read', [[['id', 'in', Array.from(ids)]], fields]);
+  return new Map(partners.map((partner) => [partner.id, partner]));
+}
+
+// Odoo writes an absent char field as `false`, not '' — and a partner form
+// saved with a space in the box gives ' '. Both have to read as "not on file".
+//
+// Newlines are collapsed too: a street pasted out of Google Maps arrives with
+// them still in, and on a card that renders as a broken block rather than the
+// one line the comma-joined address is meant to be.
+const partnerText = (value) =>
+  typeof value === 'string' ? value.replace(/\s+/g, ' ').trim() : '';
+
+// One partner's address as the rider would read it, or '' when there is none
+// on file. Deliberately not including the customer name: the card already
+// shows it, and repeating it in the address is the kind of noise that makes
+// people stop reading the block.
+function partnerAddress(partner) {
+  if (!partner) return '';
+  const cityLine = [partnerText(partner.city), partnerText(partner.zip)].filter(Boolean).join(' ');
+  return [partnerText(partner.street), partnerText(partner.street2), cityLine].filter(Boolean).join(', ');
+}
+
+// The phone and address to deliver this order to.
+//
+// The delivery partner wins per FIELD rather than wholesale: a checkout that
+// captured an address but no phone leaves a shipping partner with a blank
+// phone, and falling back to the account's number there is right — whereas
+// taking the whole contact from the account would throw away the address the
+// customer actually typed. Empty strings rather than nulls, because these go
+// straight to a card that renders what it is given.
+function contactOf(order, partnersById) {
+  const shipping = Array.isArray(order.partner_shipping_id) ? partnersById.get(order.partner_shipping_id[0]) : null;
+  const billing = Array.isArray(order.partner_id) ? partnersById.get(order.partner_id[0]) : null;
+
+  const phoneOf = (partner) =>
+    partner ? partnerText(partner.mobile) || partnerText(partner.phone) : '';
+
+  return {
+    phone: phoneOf(shipping) || phoneOf(billing),
+    address: partnerAddress(shipping) || partnerAddress(billing),
+    // Worth saying on the card when the drop is not the account's own address
+    // — that is the case a packer double-checks before it goes out.
+    addressName:
+      shipping && billing && shipping.id !== billing.id ? partnerText(shipping.name) : '',
+  };
+}
+
 async function fetchOrderPackingList({ fromDate, toDate, channel }) {
   requireDateRange(fromDate, toDate);
 
@@ -627,7 +707,21 @@ async function fetchOrderPackingList({ fromDate, toDate, channel }) {
   // instruction). Read here so the boards can show it; making sense of it is a
   // separate, optional Gemini pass (server/integrations/geminiContent.js
   // readOrderTimePreferences) rather than something this fetch waits on.
-  const orderFields = ['id', 'name', 'date_order', 'commitment_date', 'partner_id', 'tag_ids', 'note'];
+  // partner_shipping_id is the DELIVERY address, which for a website order
+  // is usually a child partner the checkout created from what the customer
+  // typed — a different phone and a different door from the account on
+  // partner_id. That typed-in pair is what the rider needs, so both are read
+  // and the shipping one wins where it has an answer (see contactOf).
+  const orderFields = [
+    'id',
+    'name',
+    'date_order',
+    'commitment_date',
+    'partner_id',
+    'partner_shipping_id',
+    'tag_ids',
+    'note',
+  ];
   if (fulfilmentField) orderFields.push(fulfilmentField);
 
   const [orders, slotTagMap] = await Promise.all([
@@ -670,12 +764,25 @@ async function fetchOrderPackingList({ fromDate, toDate, channel }) {
     });
   }
 
-  const lines = await execute('sale.order.line', 'search_read', [
-    [
-      ['order_id', 'in', orderIds],
-      ['display_type', '=', false],
-    ],
-    ['order_id', 'product_id', 'product_uom_qty', 'name'],
+  // In parallel: the order lines, and the partner rows the delivery contact
+  // comes off. Neither needs the other.
+  const [lines, partnersById] = await Promise.all([
+    execute('sale.order.line', 'search_read', [
+      [
+        ['order_id', 'in', orderIds],
+        ['display_type', '=', false],
+      ],
+      ['order_id', 'product_id', 'product_uom_qty', 'name'],
+    ]),
+    // Never fatal: a board with no phone numbers on it is still the board,
+    // whereas one that refuses to load because res.partner was unreadable is
+    // a service day nobody can run. Logged rather than swallowed, though —
+    // a silent catch here is what let an invalid field name look exactly like
+    // "no customer has a phone number on file".
+    fetchOrderContacts(orders).catch((err) => {
+      console.error('Could not read delivery contacts from Odoo (cards will show none):', err.message || err);
+      return new Map();
+    }),
   ]);
 
   const itemsByOrderId = new Map(); // orderId -> [{ itemId, name, qty }]
@@ -724,6 +831,10 @@ async function fetchOrderPackingList({ fromDate, toDate, channel }) {
       orderId,
       orderName: order.name,
       customer: order.partner_id ? order.partner_id[1] : 'Unknown customer',
+      // The number to ring and the door to knock on, taken from the delivery
+      // address where the checkout captured one — see contactOf. '' where
+      // Odoo has nothing, never null, so the card renders what it is given.
+      ...contactOf(order, partnersById),
       packBy: order.commitment_date || order.date_order || null,
       // Odoo's selection value ('prepping', 'partner_assigned', ...) or null
       // when unset / the field doesn't exist on this database.
@@ -846,6 +957,86 @@ async function fetchRecentOrders({ fromDate, toDate, isCompany }) {
     .sort((a, b) => (a.dateOrder < b.dateOrder ? 1 : a.dateOrder > b.dateOrder ? -1 : 0));
 
   return { orders: resultOrders, ordersFound: orders.length };
+}
+
+// ---- Customer geography — one row per confirmed order, with its address ----
+//
+// What the Customer Map screen (server/marketing/customerGeography.js) is
+// built on. It is deliberately NOT fetchOrderPackingList with a wider date
+// range: that one is about a weekend's parcels and carries slots, items and
+// packing state; this one wants twelve months of orders and only three things
+// about each — who, where, and how much.
+//
+// Dated by date_order, matching Sales by Item and Spending vs Sales, so "the
+// last twelve weeks" means the same twelve weeks on all three screens.
+//
+// Both sides of the business come back in one call, split by the partner's
+// is_company flag rather than by two queries — the map shows the wholesale
+// accounts alongside the weekend customers, and reading the partners is the
+// same read either way.
+//
+// The address is the DELIVERY address where there is one, falling back to the
+// account's. That is the whole question this screen asks: not where a
+// customer's billing contact is filed, but where the food actually goes.
+async function fetchCustomerLocations({ fromDate, toDate }) {
+  requireDateRange(fromDate, toDate);
+
+  const orders = await execute('sale.order', 'search_read', [
+    [
+      ['state', 'in', CONFIRMED_STATES],
+      ['date_order', '>=', istDayStartAsOdooUtc(fromDate)],
+      ['date_order', '<', istDayStartAsOdooUtc(toDate, 1)],
+    ],
+    ['id', 'name', 'date_order', 'partner_id', 'partner_shipping_id', 'amount_total'],
+  ]);
+  if (!orders.length) return { orders: [], ordersFound: 0 };
+
+  // is_company rides along with the address fields rather than costing a
+  // second read — the partners are being fetched anyway, and the flag is what
+  // decides which side of the business a pin belongs to.
+  const ids = new Set();
+  for (const order of orders) {
+    if (Array.isArray(order.partner_id)) ids.add(order.partner_id[0]);
+    if (Array.isArray(order.partner_shipping_id)) ids.add(order.partner_shipping_id[0]);
+  }
+  const fields = await resolvePartnerContactFields();
+  const partners = await execute('res.partner', 'search_read', [
+    [['id', 'in', Array.from(ids)]],
+    Array.from(new Set([...fields, 'is_company'])),
+  ]);
+  const partnersById = new Map(partners.map((partner) => [partner.id, partner]));
+
+  // A house is a house whichever partner record points at it, so the identity
+  // of a "customer" here is the account (partner_id), not the shipping
+  // contact — a website checkout makes a fresh child partner per order, and
+  // counting those would report every repeat customer as several new ones.
+  return {
+    ordersFound: orders.length,
+    orders: orders.map((order) => {
+      const billing = Array.isArray(order.partner_id) ? partnersById.get(order.partner_id[0]) : null;
+      const shipping = Array.isArray(order.partner_shipping_id)
+        ? partnersById.get(order.partner_shipping_id[0])
+        : null;
+      // Per record, not per field: a shipping partner with any address at all
+      // is the address the order went to, and half of it merged with half of
+      // the account's would be a place that does not exist.
+      const located = partnerAddress(shipping) ? shipping : billing;
+      return {
+        orderId: order.id,
+        orderName: order.name,
+        day: istDayOf(order.date_order),
+        customerId: Array.isArray(order.partner_id) ? order.partner_id[0] : null,
+        customer: Array.isArray(order.partner_id) ? order.partner_id[1] : 'Unknown customer',
+        channel: billing && billing.is_company ? 'B2B' : 'B2C',
+        revenue: Number(order.amount_total) || 0,
+        address: partnerAddress(located),
+        street: partnerText(located && located.street),
+        street2: partnerText(located && located.street2),
+        city: partnerText(located && located.city),
+        zip: partnerText(located && located.zip),
+      };
+    }),
+  };
 }
 
 // ---- Item-level sales — one row per sold line ------------------------------
@@ -1780,6 +1971,9 @@ export {
   // Odoo product name -> our menu_id, shared with menuCsvMirror.js so a
   // renamed product can still find its knowledge-base row.
   matchProduct,
+  // Odoo stores every body as HTML; odooWhatsapp.js renders message text as
+  // plain strings and needs the same flattening the contact fields get.
+  htmlToText,
   getConfig,
   fetchWeekendOrders,
   confirmSaleOrder,
@@ -1788,6 +1982,8 @@ export {
   // Line-grain sales for the Sales by Item screen. B2C only by construction —
   // see the note on the function.
   fetchSoldItems,
+  // Confirmed orders with the address each went to, for the Customer Map.
+  fetchCustomerLocations,
   createPurchaseOrder,
   removePurchaseOrderLine,
   createVendorInOdoo,

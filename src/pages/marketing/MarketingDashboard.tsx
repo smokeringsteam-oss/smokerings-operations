@@ -1,12 +1,14 @@
 import RedditPostingPage from './RedditPostingPage';
 import MarketingROI from './MarketingROI';
 import QRLinkBuilder from './QRLinkBuilder';
+import CustomerMap from './CustomerMap';
 import InstaReelGenerator from './InstaReelGenerator';
 
-export type MarketingSub = 'roi' | 'qrLinks' | 'redditPosting' | 'insta' | 'meta';
+export type MarketingSub = 'roi' | 'customerMap' | 'qrLinks' | 'redditPosting' | 'insta' | 'meta';
 
 export const marketingTools: { id: MarketingSub; label: string; icon: string }[] = [
   { id: 'roi', label: 'Marketing ROI', icon: '📈' },
+  { id: 'customerMap', label: 'Customer Map', icon: '📍' },
   { id: 'qrLinks', label: 'QR & Link Builder', icon: '🔗' },
   { id: 'redditPosting', label: 'Reddit Posting', icon: '📮' },
   { id: 'insta', label: 'Insta Reel Generator', icon: '🎬' },
@@ -27,6 +29,8 @@ const MarketingDashboard = ({ activeTool }: { activeTool: MarketingSub }) => {
     switch (activeTool) {
       case 'roi':
         return <MarketingROI />;
+      case 'customerMap':
+        return <CustomerMap />;
       case 'qrLinks':
         return <QRLinkBuilder />;
       case 'redditPosting':
@@ -45,9 +49,9 @@ const MarketingDashboard = ({ activeTool }: { activeTool: MarketingSub }) => {
       <header>
         <h2>Marketing & Digital Presence</h2>
         <p>
-          Choose a tool from the panel — Marketing ROI for what each channel earned against what it cost, the QR &
-          Link Builder for tagging what we publish so it can be counted, or the Instagram, Reddit and Ads
-          automation.
+          Choose a tool from the panel — Marketing ROI for what each channel earned against what it cost, the
+          Customer Map for where those orders came from, the QR & Link Builder for tagging what we publish so it can
+          be counted, or the Instagram, Reddit and Ads automation.
         </p>
       </header>
 

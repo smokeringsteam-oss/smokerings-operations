@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 
 // Smoking Session — a sequential flow against smoking_log.csv
 // (see server/ops/shared/smoking.js), one row per session moving through: rub (created
@@ -223,6 +223,146 @@ const nowLocal = () => {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 };
 
+// ---- Draft persistence -----------------------------------------------------
+// Everything typed into this screen used to live only in React state, which on
+// a phone is barely different from not existing: step away to check WhatsApp
+// mid-cook and the OS is free to discard the tab, so coming back re-mounted
+// the component with every field blank and nothing said about it. A pitmaster
+// halfway through logging a rest lost the lot and had to remember it again.
+//
+// So the in-progress draft is mirrored into localStorage on every change and
+// read back on mount. Only what a human typed is kept: the server lists
+// (sessions, recipes, purchases) are refetched, and the busy/status/error
+// flags are dropped on purpose, because a restored "✅ logged" banner would
+// claim something was written when it may never have been sent.
+//
+// Keyed per channel so the B2C and B2B dashboards — the same component with a
+// different `channel` prop — don't overwrite each other's half-finished cook.
+type BrineCartLine = { key: string; materialId: string; itemName: string; outputType: string };
+
+type Draft = {
+  savedAt: number;
+  step: StepId;
+  materialId: string;
+  outputType: string;
+  brineCart: BrineCartLine[];
+  channel: Channel;
+  purpose: string;
+  clientId: string;
+  pitmaster: string;
+  brineRecipe: string;
+  brineStart: string;
+  brineEnd: string;
+  rubSessionId: string;
+  rubRecipe: string;
+  rubStart: string;
+  rubEnd: string;
+  smokeStartSessionId: string;
+  rawWeightKg: string;
+  smokingStart: string;
+  sourcePurchaseId: string;
+  taggedIds: string[];
+  smokeFinishSessionId: string;
+  smokingEnd: string;
+  finishedWithBone: string;
+  finishedWithoutBone: string;
+  restSessionId: string;
+  restStart: string;
+  restEnd: string;
+  restTendernessNotes: string;
+  restSmokeRingsFormed: string;
+  restBarkNotes: string;
+  restJuiciness: string;
+  shredSessionId: string;
+  shredStart: string;
+  shredEnd: string;
+  tendernessNotes: string;
+  smokeRingsFormed: string;
+  barkNotes: string;
+  juiciness: string;
+};
+
+const draftKey = (channel: Channel) => `smokerings.smokingSession.draft.v1.${channel}`;
+
+// Each step's form is cleared the moment that step is logged, so a draft still
+// sitting here a day later is an abandoned one — and restoring it would drop
+// yesterday's timestamps into today's cook.
+const DRAFT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+
+// The fields a restored draft is judged non-empty by. channel/purpose/pitmaster
+// are left out deliberately: they have non-blank defaults, so counting them
+// would make every fresh page load look like a saved draft.
+const DRAFT_CONTENT_KEYS: (keyof Draft)[] = [
+  'materialId',
+  'clientId',
+  'brineRecipe',
+  'rubSessionId',
+  'rubRecipe',
+  'smokeStartSessionId',
+  'rawWeightKg',
+  'sourcePurchaseId',
+  'smokeFinishSessionId',
+  'finishedWithBone',
+  'finishedWithoutBone',
+  'restSessionId',
+  'restTendernessNotes',
+  'restSmokeRingsFormed',
+  'restBarkNotes',
+  'restJuiciness',
+  'shredSessionId',
+  'tendernessNotes',
+  'smokeRingsFormed',
+  'barkNotes',
+  'juiciness',
+];
+
+const draftHasContent = (draft: Draft) =>
+  (draft.brineCart?.length || 0) > 0 ||
+  (draft.taggedIds?.length || 0) > 0 ||
+  DRAFT_CONTENT_KEYS.some((key) => Boolean(draft[key]));
+
+// localStorage throws rather than returning null in several real cases (Safari
+// private browsing, quota full, cookies blocked), and a logging screen that
+// blanks out because it couldn't save a draft would be far worse than one that
+// simply doesn't save it. Every access is wrapped for that reason.
+const readDraft = (channel: Channel): Draft | null => {
+  try {
+    const raw = window.localStorage.getItem(draftKey(channel));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Draft;
+    if (!parsed || typeof parsed !== 'object') return null;
+    if (!Number.isFinite(parsed.savedAt) || Date.now() - parsed.savedAt > DRAFT_MAX_AGE_MS) {
+      window.localStorage.removeItem(draftKey(channel));
+      return null;
+    }
+    return parsed;
+  } catch {
+    clearDraft(channel);
+    return null;
+  }
+};
+
+const writeDraft = (channel: Channel, draft: Omit<Draft, 'savedAt'>) => {
+  try {
+    window.localStorage.setItem(draftKey(channel), JSON.stringify({ savedAt: Date.now(), ...draft }));
+  } catch {
+    /* see readDraft — an unsaveable draft is not worth breaking the form over */
+  }
+};
+
+function clearDraft(channel: Channel) {
+  try {
+    window.localStorage.removeItem(draftKey(channel));
+  } catch {
+    /* see readDraft */
+  }
+}
+
+// "4 Sep, 3:42 pm" on the restore banner — enough to tell this morning's
+// abandoned draft apart from the one from ten minutes ago.
+const savedAtLabel = (savedAt: number) =>
+  new Date(savedAt).toLocaleString(undefined, { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' });
+
 async function readJson<T>(resp: Response): Promise<T> {
   try {
     return await resp.json();
@@ -238,11 +378,31 @@ async function readJson<T>(resp: Response): Promise<T> {
 // because one smoker runs both and a session hidden from the board is a
 // session that gets forgotten mid-cook. Each row is tagged instead.
 const SmokingSession: React.FC<{ channel?: Channel }> = ({ channel: defaultChannel = 'B2C' }) => {
-  const [step, setStep] = useState<StepId>('marinate');
+  // Read once, before any field's own state exists, so every useState below
+  // can take its opening value from it — see the Draft note above.
+  const [restoredDraft] = useState(() => readDraft(defaultChannel));
+  const initial = <K extends keyof Draft>(key: K, fallback: Draft[K]): Draft[K] =>
+    restoredDraft && restoredDraft[key] !== undefined && restoredDraft[key] !== null ? restoredDraft[key] : fallback;
+  // Non-zero only when a draft came back with something actually in it, which
+  // is what the restore banner keys off — a restored form should never look
+  // like a form somebody else left half-filled.
+  const [draftRestoredAt, setDraftRestoredAt] = useState(() =>
+    restoredDraft && draftHasContent(restoredDraft) ? restoredDraft.savedAt : 0,
+  );
+
+  const [step, setStep] = useState<StepId>(() => initial('step', 'marinate'));
 
   const [meatItems, setMeatItems] = useState<MeatItem[]>([]);
   const [recipes, setRecipes] = useState<Recipe[]>([]);
   const [sessions, setSessions] = useState<Session[]>([]);
+  // Whether the sessions list has come back yet. The "keep the selection
+  // valid" effects below drop any picked session that isn't in the list, and
+  // for the first render of every mount that list is empty — which is fine
+  // when the form starts blank, and wipes the whole restored draft when it
+  // doesn't. They wait for the real list instead. A failed load leaves this
+  // false on purpose: an unreachable server is no reason to throw away the
+  // pitmaster's typing.
+  const [sessionsLoaded, setSessionsLoaded] = useState(false);
   const [loadError, setLoadError] = useState('');
 
   // ---- Step 1: Brining (creates the session) ---------------------------------
@@ -250,35 +410,35 @@ const SmokingSession: React.FC<{ channel?: Channel }> = ({ channel: defaultChann
   // the batch stashes it in brineCart and clears these so another meat can
   // be picked. Submitting sends brineCart plus whatever's still in the
   // pickers (so a single-meat session doesn't require an extra click).
-  const [materialId, setMaterialId] = useState('');
-  const [outputType, setOutputType] = useState('Pulled');
-  const [brineCart, setBrineCart] = useState<{ key: string; materialId: string; itemName: string; outputType: string }[]>([]);
-  const [channel, setChannel] = useState<Channel>(defaultChannel);
-  const [purpose, setPurpose] = useState(DEFAULT_PURPOSE[defaultChannel]);
+  const [materialId, setMaterialId] = useState(() => initial('materialId', ''));
+  const [outputType, setOutputType] = useState(() => initial('outputType', 'Pulled'));
+  const [brineCart, setBrineCart] = useState<BrineCartLine[]>(() => initial('brineCart', []));
+  const [channel, setChannel] = useState<Channel>(() => initial('channel', defaultChannel));
+  const [purpose, setPurpose] = useState(() => initial('purpose', DEFAULT_PURPOSE[defaultChannel]));
   // Only fetched and only offered for B2B cooks — B2C has no account book.
   const [clients, setClients] = useState<B2BClient[]>([]);
-  const [clientId, setClientId] = useState('');
-  const [pitmaster, setPitmaster] = useState('Adarsh');
-  const [brineRecipe, setBrineRecipe] = useState('');
-  const [brineStart, setBrineStart] = useState(nowLocal());
-  const [brineEnd, setBrineEnd] = useState(nowLocal());
+  const [clientId, setClientId] = useState(() => initial('clientId', ''));
+  const [pitmaster, setPitmaster] = useState(() => initial('pitmaster', 'Adarsh'));
+  const [brineRecipe, setBrineRecipe] = useState(() => initial('brineRecipe', ''));
+  const [brineStart, setBrineStart] = useState(() => initial('brineStart', nowLocal()));
+  const [brineEnd, setBrineEnd] = useState(() => initial('brineEnd', nowLocal()));
   const [marinateBusy, setMarinateBusy] = useState(false);
   const [marinateStatus, setMarinateStatus] = useState('');
   const [marinateError, setMarinateError] = useState('');
 
   // ---- Step 2: Rub -----------------------------------------------------------
-  const [rubSessionId, setRubSessionId] = useState('');
-  const [rubRecipe, setRubRecipe] = useState('');
-  const [rubStart, setRubStart] = useState(nowLocal());
-  const [rubEnd, setRubEnd] = useState(nowLocal());
+  const [rubSessionId, setRubSessionId] = useState(() => initial('rubSessionId', ''));
+  const [rubRecipe, setRubRecipe] = useState(() => initial('rubRecipe', ''));
+  const [rubStart, setRubStart] = useState(() => initial('rubStart', nowLocal()));
+  const [rubEnd, setRubEnd] = useState(() => initial('rubEnd', nowLocal()));
   const [rubBusy, setRubBusy] = useState(false);
   const [rubStatus, setRubStatus] = useState('');
   const [rubError, setRubError] = useState('');
 
   // ---- Step 3: Smoking (start, then finish) ---------------------------------
-  const [smokeStartSessionId, setSmokeStartSessionId] = useState('');
-  const [rawWeightKg, setRawWeightKg] = useState('');
-  const [smokingStart, setSmokingStart] = useState(nowLocal());
+  const [smokeStartSessionId, setSmokeStartSessionId] = useState(() => initial('smokeStartSessionId', ''));
+  const [rawWeightKg, setRawWeightKg] = useState(() => initial('rawWeightKg', ''));
+  const [smokingStart, setSmokingStart] = useState(() => initial('smokingStart', nowLocal()));
   const [smokeStartBusy, setSmokeStartBusy] = useState(false);
   const [smokeStartStatus, setSmokeStartStatus] = useState('');
   const [smokeStartError, setSmokeStartError] = useState('');
@@ -288,34 +448,34 @@ const SmokingSession: React.FC<{ channel?: Channel }> = ({ channel: defaultChann
   const [availablePurchases, setAvailablePurchases] = useState<Purchase[]>([]);
   const [purchasesLoading, setPurchasesLoading] = useState(false);
   const [purchasesError, setPurchasesError] = useState('');
-  const [sourcePurchaseId, setSourcePurchaseId] = useState('');
+  const [sourcePurchaseId, setSourcePurchaseId] = useState(() => initial('sourcePurchaseId', ''));
   // The separate cost-attribution pick: which buys this cook was for. Kept
   // apart from sourcePurchaseId above because they answer different questions
   // — see the comment on TaggablePurchase.
   const [taggable, setTaggable] = useState<TaggablePurchase[]>([]);
-  const [taggedIds, setTaggedIds] = useState<string[]>([]);
+  const [taggedIds, setTaggedIds] = useState<string[]>(() => initial('taggedIds', []));
   const [taggableLoading, setTaggableLoading] = useState(false);
   const [taggableError, setTaggableError] = useState('');
 
-  const [smokeFinishSessionId, setSmokeFinishSessionId] = useState('');
-  const [smokingEnd, setSmokingEnd] = useState(nowLocal());
-  const [finishedWithBone, setFinishedWithBone] = useState('');
-  const [finishedWithoutBone, setFinishedWithoutBone] = useState('');
+  const [smokeFinishSessionId, setSmokeFinishSessionId] = useState(() => initial('smokeFinishSessionId', ''));
+  const [smokingEnd, setSmokingEnd] = useState(() => initial('smokingEnd', nowLocal()));
+  const [finishedWithBone, setFinishedWithBone] = useState(() => initial('finishedWithBone', ''));
+  const [finishedWithoutBone, setFinishedWithoutBone] = useState(() => initial('finishedWithoutBone', ''));
   const [smokeFinishBusy, setSmokeFinishBusy] = useState(false);
   const [smokeFinishStatus, setSmokeFinishStatus] = useState('');
   const [smokeFinishError, setSmokeFinishError] = useState('');
 
   // ---- Step 4: Resting --------------------------------------------------------
-  const [restSessionId, setRestSessionId] = useState('');
-  const [restStart, setRestStart] = useState(nowLocal());
-  const [restEnd, setRestEnd] = useState(nowLocal());
+  const [restSessionId, setRestSessionId] = useState(() => initial('restSessionId', ''));
+  const [restStart, setRestStart] = useState(() => initial('restStart', nowLocal()));
+  const [restEnd, setRestEnd] = useState(() => initial('restEnd', nowLocal()));
   // Only asked for sessions that skip Shredding (output_type !== 'Pulled') —
   // for those, resting is the last touchpoint, so the tasting notes normally
   // captured at Shredding are captured here instead.
-  const [restTendernessNotes, setRestTendernessNotes] = useState('');
-  const [restSmokeRingsFormed, setRestSmokeRingsFormed] = useState('');
-  const [restBarkNotes, setRestBarkNotes] = useState('');
-  const [restJuiciness, setRestJuiciness] = useState('');
+  const [restTendernessNotes, setRestTendernessNotes] = useState(() => initial('restTendernessNotes', ''));
+  const [restSmokeRingsFormed, setRestSmokeRingsFormed] = useState(() => initial('restSmokeRingsFormed', ''));
+  const [restBarkNotes, setRestBarkNotes] = useState(() => initial('restBarkNotes', ''));
+  const [restJuiciness, setRestJuiciness] = useState(() => initial('restJuiciness', ''));
   const [restBusy, setRestBusy] = useState(false);
   const [restStatus, setRestStatus] = useState('');
   const [restError, setRestError] = useState('');
@@ -326,13 +486,13 @@ const SmokingSession: React.FC<{ channel?: Channel }> = ({ channel: defaultChann
   const [restJustCompleted, setRestJustCompleted] = useState(false);
 
   // ---- Step 5: Shredding (completes the session) -----------------------------
-  const [shredSessionId, setShredSessionId] = useState('');
-  const [shredStart, setShredStart] = useState(nowLocal());
-  const [shredEnd, setShredEnd] = useState(nowLocal());
-  const [tendernessNotes, setTendernessNotes] = useState('');
-  const [smokeRingsFormed, setSmokeRingsFormed] = useState('');
-  const [barkNotes, setBarkNotes] = useState('');
-  const [juiciness, setJuiciness] = useState('');
+  const [shredSessionId, setShredSessionId] = useState(() => initial('shredSessionId', ''));
+  const [shredStart, setShredStart] = useState(() => initial('shredStart', nowLocal()));
+  const [shredEnd, setShredEnd] = useState(() => initial('shredEnd', nowLocal()));
+  const [tendernessNotes, setTendernessNotes] = useState(() => initial('tendernessNotes', ''));
+  const [smokeRingsFormed, setSmokeRingsFormed] = useState(() => initial('smokeRingsFormed', ''));
+  const [barkNotes, setBarkNotes] = useState(() => initial('barkNotes', ''));
+  const [juiciness, setJuiciness] = useState(() => initial('juiciness', ''));
   const [shredBusy, setShredBusy] = useState(false);
   const [shredStatus, setShredStatus] = useState('');
   const [shredError, setShredError] = useState('');
@@ -356,6 +516,123 @@ const SmokingSession: React.FC<{ channel?: Channel }> = ({ channel: defaultChann
   const [linkError, setLinkError] = useState('');
   const [linkFetched, setLinkFetched] = useState(false);
 
+  // ---- Draft mirror ------------------------------------------------------
+  // Everything a human typed, in one object, written to localStorage whenever
+  // any of it changes. Serialising it is what detects the change: the payload
+  // is a fresh object every render, so an effect depending on the object would
+  // fire on every render, and one depending on forty named fields would go
+  // stale the first time a field is added and its name forgotten here.
+  const draftPayload: Omit<Draft, 'savedAt'> = {
+    step,
+    materialId,
+    outputType,
+    brineCart,
+    channel,
+    purpose,
+    clientId,
+    pitmaster,
+    brineRecipe,
+    brineStart,
+    brineEnd,
+    rubSessionId,
+    rubRecipe,
+    rubStart,
+    rubEnd,
+    smokeStartSessionId,
+    rawWeightKg,
+    smokingStart,
+    sourcePurchaseId,
+    taggedIds,
+    smokeFinishSessionId,
+    smokingEnd,
+    finishedWithBone,
+    finishedWithoutBone,
+    restSessionId,
+    restStart,
+    restEnd,
+    restTendernessNotes,
+    restSmokeRingsFormed,
+    restBarkNotes,
+    restJuiciness,
+    shredSessionId,
+    shredStart,
+    shredEnd,
+    tendernessNotes,
+    smokeRingsFormed,
+    barkNotes,
+    juiciness,
+  };
+  const draftJson = JSON.stringify(draftPayload);
+  const draftRef = useRef(draftPayload);
+  draftRef.current = draftPayload;
+  useEffect(() => {
+    writeDraft(defaultChannel, draftRef.current);
+  }, [draftJson, defaultChannel]);
+
+  // Throws away the restored draft and puts every field back to how the screen
+  // opens. The effect above re-saves the emptied form immediately after, which
+  // is fine — an empty draft restores as nothing and expires on its own.
+  const handleDiscardDraft = () => {
+    clearDraft(defaultChannel);
+    setDraftRestoredAt(0);
+    setStep('marinate');
+    setMaterialId('');
+    setOutputType('Pulled');
+    setBrineCart([]);
+    setChannel(defaultChannel);
+    setPurpose(DEFAULT_PURPOSE[defaultChannel]);
+    setClientId('');
+    setPitmaster('Adarsh');
+    setBrineRecipe('');
+    setBrineStart(nowLocal());
+    setBrineEnd(nowLocal());
+    setRubSessionId('');
+    setRubRecipe('');
+    setRubStart(nowLocal());
+    setRubEnd(nowLocal());
+    setSmokeStartSessionId('');
+    setRawWeightKg('');
+    setSmokingStart(nowLocal());
+    setSourcePurchaseId('');
+    setTaggedIds([]);
+    setSmokeFinishSessionId('');
+    setSmokingEnd(nowLocal());
+    setFinishedWithBone('');
+    setFinishedWithoutBone('');
+    setRestSessionId('');
+    setRestStart(nowLocal());
+    setRestEnd(nowLocal());
+    setRestTendernessNotes('');
+    setRestSmokeRingsFormed('');
+    setRestBarkNotes('');
+    setRestJuiciness('');
+    setShredSessionId('');
+    setShredStart(nowLocal());
+    setShredEnd(nowLocal());
+    setTendernessNotes('');
+    setSmokeRingsFormed('');
+    setBarkNotes('');
+    setJuiciness('');
+  };
+
+  // The two effects keyed on smokeStartSessionId below clear the lot pick and
+  // the cost ticks whenever the selected session changes. On a restored draft
+  // the mount-time run looks like exactly that change, so without a record of
+  // what the session already was, a restore would wipe the two fields it just
+  // brought back. These hold the last id each effect actually ran for, seeded
+  // from the draft.
+  const lastSourceSessionRef = useRef(smokeStartSessionId);
+  const lastTaggableSessionRef = useRef(smokeStartSessionId);
+  // Ticks that came back with the draft, applied once the taggable list for
+  // that same session loads. The server only knows about ticks already saved
+  // against a session, so a plain overwrite would silently drop the ones the
+  // pitmaster had just made and not yet submitted.
+  const restoredTagsRef = useRef<{ sessionId: string; ids: string[] } | null>(
+    restoredDraft?.smokeStartSessionId && restoredDraft.taggedIds?.length
+      ? { sessionId: restoredDraft.smokeStartSessionId, ids: restoredDraft.taggedIds }
+      : null,
+  );
+
   const loadMeatItems = async () => {
     try {
       const resp = await fetch('/api/smoking/meat-items');
@@ -373,6 +650,7 @@ const SmokingSession: React.FC<{ channel?: Channel }> = ({ channel: defaultChann
       const data = await readJson<{ sessions?: Session[]; error?: string }>(resp);
       if (!resp.ok) throw new Error(data.error || 'Failed to load smoking sessions.');
       setSessions(data.sessions || []);
+      setSessionsLoaded(true);
     } catch (err) {
       setLoadError(String((err as Error).message || err));
     }
@@ -432,25 +710,28 @@ const SmokingSession: React.FC<{ channel?: Channel }> = ({ channel: defaultChann
   // got deleted), bounce back to Resting rather than leaving the user on a
   // step whose tab just disappeared.
   useEffect(() => {
-    if (step === 'shred' && !anySessionNeedsShred) setStep('rest');
-  }, [step, anySessionNeedsShred]);
+    if (sessionsLoaded && step === 'shred' && !anySessionNeedsShred) setStep('rest');
+  }, [step, anySessionNeedsShred, sessionsLoaded]);
 
   // Keep each step's selected session valid as the underlying lists change.
   useEffect(() => {
-    if (rubSessionId && !awaitingRub.some((s) => s.session_id === rubSessionId)) setRubSessionId('');
-  }, [awaitingRub, rubSessionId]);
+    if (sessionsLoaded && rubSessionId && !awaitingRub.some((s) => s.session_id === rubSessionId)) setRubSessionId('');
+  }, [awaitingRub, rubSessionId, sessionsLoaded]);
   useEffect(() => {
-    if (smokeStartSessionId && !readyToSmoke.some((s) => s.session_id === smokeStartSessionId)) setSmokeStartSessionId('');
-  }, [readyToSmoke, smokeStartSessionId]);
+    if (sessionsLoaded && smokeStartSessionId && !readyToSmoke.some((s) => s.session_id === smokeStartSessionId))
+      setSmokeStartSessionId('');
+  }, [readyToSmoke, smokeStartSessionId, sessionsLoaded]);
   useEffect(() => {
-    if (smokeFinishSessionId && !onSmoker.some((s) => s.session_id === smokeFinishSessionId)) setSmokeFinishSessionId('');
-  }, [onSmoker, smokeFinishSessionId]);
+    if (sessionsLoaded && smokeFinishSessionId && !onSmoker.some((s) => s.session_id === smokeFinishSessionId))
+      setSmokeFinishSessionId('');
+  }, [onSmoker, smokeFinishSessionId, sessionsLoaded]);
 
   // Reloads the purchase-lot picker every time the session picked in "Start
   // smoking" changes — it's keyed off that session's meat item, and the
   // remaining-quantity numbers shift as other sessions claim lots.
   useEffect(() => {
-    setSourcePurchaseId('');
+    if (lastSourceSessionRef.current !== smokeStartSessionId) setSourcePurchaseId('');
+    lastSourceSessionRef.current = smokeStartSessionId;
     if (!smokeStartSessionId) {
       setAvailablePurchases([]);
       return;
@@ -480,15 +761,20 @@ const SmokingSession: React.FC<{ channel?: Channel }> = ({ channel: defaultChann
     return () => {
       cancelled = true;
     };
+    // sessionsLoaded is in here because this effect needs the session object,
+    // not just its id: on a restored draft the id is set from the first render
+    // but the list it is looked up in only arrives later, and without a rerun
+    // the lot picker would sit empty for a session that has lots.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [smokeStartSessionId]);
+  }, [smokeStartSessionId, sessionsLoaded]);
 
   // The other purchase list for the same session — the "what did this cook
   // cost" checklist. Anything the server already has tagged to this session
   // starts ticked, so re-opening the step doesn't look like the tags were
   // never made.
   useEffect(() => {
-    setTaggedIds([]);
+    if (lastTaggableSessionRef.current !== smokeStartSessionId) setTaggedIds([]);
+    lastTaggableSessionRef.current = smokeStartSessionId;
     if (!smokeStartSessionId) {
       setTaggable([]);
       return;
@@ -503,7 +789,10 @@ const SmokingSession: React.FC<{ channel?: Channel }> = ({ channel: defaultChann
         if (cancelled) return;
         const rows = data.purchases || [];
         setTaggable(rows);
-        setTaggedIds(rows.filter((p) => p.tagged).map((p) => p.purchase_id));
+        const pending = restoredTagsRef.current;
+        restoredTagsRef.current = null;
+        const fromDraft = pending?.sessionId === smokeStartSessionId ? pending.ids : [];
+        setTaggedIds(Array.from(new Set([...rows.filter((p) => p.tagged).map((p) => p.purchase_id), ...fromDraft])));
       })
       .catch((err) => {
         if (!cancelled) setTaggableError(String((err as Error).message || err));
@@ -526,11 +815,11 @@ const SmokingSession: React.FC<{ channel?: Channel }> = ({ channel: defaultChann
   }, [sourcePurchaseId]);
 
   useEffect(() => {
-    if (restSessionId && !resting.some((s) => s.session_id === restSessionId)) setRestSessionId('');
-  }, [resting, restSessionId]);
+    if (sessionsLoaded && restSessionId && !resting.some((s) => s.session_id === restSessionId)) setRestSessionId('');
+  }, [resting, restSessionId, sessionsLoaded]);
   useEffect(() => {
-    if (shredSessionId && !awaitingShred.some((s) => s.session_id === shredSessionId)) setShredSessionId('');
-  }, [awaitingShred, shredSessionId]);
+    if (sessionsLoaded && shredSessionId && !awaitingShred.some((s) => s.session_id === shredSessionId)) setShredSessionId('');
+  }, [awaitingShred, shredSessionId, sessionsLoaded]);
 
   // Stashes the currently-picked meat into the batch and clears the pickers
   // so another one can be picked next.
@@ -905,6 +1194,28 @@ const SmokingSession: React.FC<{ channel?: Channel }> = ({ channel: defaultChann
         </div>
       )}
 
+      {/* Says out loud that the form is not blank because someone else left it
+          that way — a restored draft that appeared silently would be worse
+          than the data loss it fixes, because the pitmaster could log a cook
+          against last night's timings without noticing. */}
+      {draftRestoredAt > 0 && (
+        <div className="smoke-draft-banner">
+          <p>
+            ✍️ Picked up where you left off — restored from what you had typed at{' '}
+            <strong>{savedAtLabel(draftRestoredAt)}</strong>. None of it has been logged yet, so check the
+            times before you save.
+          </p>
+          <div className="smoke-draft-banner-actions">
+            <button type="button" className="secondary-button small" onClick={() => setDraftRestoredAt(0)}>
+              Keep it
+            </button>
+            <button type="button" className="secondary-button small" onClick={handleDiscardDraft}>
+              Start fresh
+            </button>
+          </div>
+        </div>
+      )}
+
       <div className="wizard-steps smoke-steps">
         {visibleSteps.map((s) => (
           <button
@@ -1193,7 +1504,14 @@ const SmokingSession: React.FC<{ channel?: Channel }> = ({ channel: defaultChann
                   </label>
                   <label>
                     Pre-smoked weight (kg)
-                    <input type="number" min="0" step="any" value={rawWeightKg} onChange={(e) => setRawWeightKg(e.target.value)} />
+                    <input
+                      type="number"
+                      inputMode="decimal"
+                      min="0"
+                      step="any"
+                      value={rawWeightKg}
+                      onChange={(e) => setRawWeightKg(e.target.value)}
+                    />
                   </label>
                 </div>
 
@@ -1363,12 +1681,20 @@ const SmokingSession: React.FC<{ channel?: Channel }> = ({ channel: defaultChann
                 <div className="purch-form-row">
                   <label>
                     Finished weight — with bone (kg)
-                    <input type="number" min="0" step="any" value={finishedWithBone} onChange={(e) => setFinishedWithBone(e.target.value)} />
+                    <input
+                      type="number"
+                      inputMode="decimal"
+                      min="0"
+                      step="any"
+                      value={finishedWithBone}
+                      onChange={(e) => setFinishedWithBone(e.target.value)}
+                    />
                   </label>
                   <label>
                     Finished weight — without bone (kg)
                     <input
                       type="number"
+                      inputMode="decimal"
                       min="0"
                       step="any"
                       value={finishedWithoutBone}
@@ -1581,7 +1907,7 @@ const SmokingSession: React.FC<{ channel?: Channel }> = ({ channel: defaultChann
           <p className="inv-note">Nothing logged yet — start one in the Marinating step.</p>
         ) : (
           <div className="prep-table-wrap">
-            <table className="prep-table">
+            <table className="prep-table smoke-sessions-table">
               <thead>
                 <tr>
                   <th className="prep-item-col">Item</th>

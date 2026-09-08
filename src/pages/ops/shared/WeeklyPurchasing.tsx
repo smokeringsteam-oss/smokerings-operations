@@ -1,4 +1,14 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import {
+  buildPurchaseDraft,
+  clearStoredPurchaseDraft,
+  describePurchaseRestore,
+  hasDraftContent,
+  readStoredPurchaseDraft,
+  reconcileDraftLines,
+  restorePurchaseDraft,
+  writeStoredPurchaseDraft,
+} from './purchaseDraft';
 
 // Weekly Purchasing — logs purchases from all three vendor types (meat
 // shops, Bread Time Stories, Swiggy) against the shared knowledge-base
@@ -90,12 +100,14 @@ type CartLine = {
   // is the vendor's own wording for the item, kept beside the catalog name so
   // the review can be done against the paper without translating; `matched`
   // says whether the catalog recognised the item at all, and `derivedPrice`
-  // that the unit price was worked out from a line total rather than read off
-  // the bill. All three exist to mark the lines worth a second look — they
-  // are display only and never sent to the server.
+  // / `derivedQuantity` that the unit price or the quantity was worked out
+  // from the other two numbers rather than read off the bill. All four exist
+  // to mark the lines worth a second look — they are display only and never
+  // sent to the server.
   billText?: string;
   matched?: boolean;
   derivedPrice?: boolean;
+  derivedQuantity?: boolean;
 };
 
 // One bill read, as POST /api/purchasing/scan-bill returns it (see
@@ -113,6 +125,7 @@ type ScannedBill = {
     billText: string;
     unit: string;
     quantity: number;
+    derivedQuantity: boolean;
     unitPrice: number;
     derivedPrice: boolean;
     lineTotal: number;
@@ -207,23 +220,35 @@ const WeeklyPurchasing: React.FC<{ channel?: 'B2C' | 'B2B' }> = ({ channel = 'B2
   const [materials, setMaterials] = useState<RawMaterial[]>([]);
   const [loadError, setLoadError] = useState('');
 
-  const [vendorName, setVendorName] = useState('');
-  const [purchaseDate, setPurchaseDate] = useState(formatDateInput(new Date()));
-  const [cart, setCart] = useState<CartLine[]>([]);
+  // The cart, the vendor, the date and the half-typed line all come back from
+  // localStorage at mount rather than starting empty — this screen is used on
+  // a phone at a shop counter, and a backgrounded tab is evicted whenever the
+  // OS wants the memory. See src/pages/ops/shared/purchaseDraft.ts for what is
+  // kept and why the restore is synchronous rather than gated behind a fetch.
+  const [restored] = useState(() => restorePurchaseDraft(readStoredPurchaseDraft(channel)));
+
+  const [vendorName, setVendorName] = useState(restored.vendorName);
+  const [purchaseDate, setPurchaseDate] = useState(restored.purchaseDate || formatDateInput(new Date()));
+  const [cart, setCart] = useState<CartLine[]>(restored.lines);
+  // What the restore picked up, said out loud: a cart that reappears on its
+  // own is a cart someone can log twice, so the buyer is told how many lines
+  // came back, when they were last touched and what date they will be filed
+  // under. Cleared with the cart.
+  const [restoreNotice, setRestoreNotice] = useState(() => describePurchaseRestore(restored));
 
   // Only fetched (and only rendered) on the B2B side — B2C has no account
   // book to attribute spend to.
   const [clients, setClients] = useState<B2BClient[]>([]);
-  const [lineClientId, setLineClientId] = useState('');
+  const [lineClientId, setLineClientId] = useState(restored.entry.lineClientId);
 
-  const [materialChoice, setMaterialChoice] = useState('');
-  const [customName, setCustomName] = useState('');
-  const [quantity, setQuantity] = useState('');
-  const [unitPrice, setUnitPrice] = useState('');
-  const [weightPerPiece, setWeightPerPiece] = useState('');
+  const [materialChoice, setMaterialChoice] = useState(restored.entry.materialChoice);
+  const [customName, setCustomName] = useState(restored.entry.customName);
+  const [quantity, setQuantity] = useState(restored.entry.quantity);
+  const [unitPrice, setUnitPrice] = useState(restored.entry.unitPrice);
+  const [weightPerPiece, setWeightPerPiece] = useState(restored.entry.weightPerPiece);
   // Ticked by the buyer for a meat line bought as birds/racks rather than by
   // weight — see canBuyByPiece.
-  const [boughtByPiece, setBoughtByPiece] = useState(false);
+  const [boughtByPiece, setBoughtByPiece] = useState(restored.entry.boughtByPiece);
   const [addLineError, setAddLineError] = useState('');
 
   // Bill scanning. `scanReview` holds what the last read couldn't do for
@@ -235,7 +260,7 @@ const WeeklyPurchasing: React.FC<{ channel?: 'B2C' | 'B2B' }> = ({ channel = 'B2
   const [scanError, setScanError] = useState('');
   const [scanReview, setScanReview] = useState<
     { added: number; vendorText: string; vendorMatched: boolean; dateText: string; dateUsed: boolean; notes: string; skipped: ScannedBill['skipped'] } | null
-  >(null);
+  >(restored.scanReview);
 
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitStatus, setSubmitStatus] = useState('');
@@ -338,6 +363,69 @@ const WeeklyPurchasing: React.FC<{ channel?: 'B2C' | 'B2B' }> = ({ channel = 'B2
   useEffect(() => {
     loadCatalog();
   }, []);
+
+  // Autosave. Every change rather than on a timer: the switch away this exists
+  // to survive is not announced, and a debounce is that many seconds of work to
+  // lose. The draft is a handful of names and numbers, so writing it on a
+  // keystroke costs nothing worth measuring.
+  //
+  // No `hydrated` gate is needed here, unlike the reel editor: the restore
+  // above already happened, synchronously, as this component's initial state.
+  // There is no window in which this effect can run before it.
+  useEffect(() => {
+    const state = {
+      vendorName,
+      purchaseDate,
+      lines: cart,
+      scanReview,
+      entry: { materialChoice, customName, quantity, unitPrice, weightPerPiece, boughtByPiece, lineClientId },
+    };
+    // An empty cart with no vendor and nothing half-typed is a screen someone
+    // opened, not a draft. Clearing rather than writing one keeps a logged
+    // cart from leaving a permanent empty record behind.
+    if (hasDraftContent(state)) writeStoredPurchaseDraft(buildPurchaseDraft(state), channel);
+    else clearStoredPurchaseDraft(channel);
+  }, [
+    channel,
+    vendorName,
+    purchaseDate,
+    cart,
+    scanReview,
+    materialChoice,
+    customName,
+    quantity,
+    unitPrice,
+    weightPerPiece,
+    boughtByPiece,
+    lineClientId,
+  ]);
+
+  // A restored line can point at a material that has since been deleted, and
+  // purchase.material_id is a foreign key — logging it would fail the whole
+  // cart on a constraint naming a column this screen never shows. So the ids
+  // are checked once, against a catalogue that actually arrived.
+  //
+  // That guard is the load-bearing part: a failed GET /materials leaves
+  // `materials` at [], and reconciling against an empty catalogue would strip
+  // every id in the cart. No catalogue means no reconciliation, which is the
+  // safe direction — the ids are left exactly as they were saved.
+  const reconciled = useRef(false);
+  useEffect(() => {
+    if (reconciled.current || !materials.length || !restored.lines.length) return;
+    reconciled.current = true;
+
+    // Against the restored lines rather than the current cart: this runs once,
+    // early, and anything typed since is the buyer's and not a draft's to
+    // second-guess. The client book is passed through as-is — client_id is
+    // plain text with no key behind it, so an unknown tag is cosmetic, and
+    // reconcileDraftLines leaves tags alone when the list is empty.
+    const result = reconcileDraftLines(restored.lines, materials, clients);
+    if (!result.unlinked.length && !result.untagged.length) return;
+
+    const repaired = new Map(result.lines.map((line) => [line.key, line]));
+    setCart((current) => current.map((line) => repaired.get(line.key) ?? line));
+    setRestoreNotice(describePurchaseRestore(restored, result));
+  }, [materials, clients, restored]);
 
   // Failing to load the account list must not break purchasing — the client
   // tag is an optional extra on top of logging the buy, so an empty list just
@@ -473,6 +561,21 @@ const WeeklyPurchasing: React.FC<{ channel?: 'B2C' | 'B2B' }> = ({ channel = 'B2
     setCart((current) => current.filter((line) => line.key !== key));
   };
 
+  // Throws away a cart that came back from the browser. Offered next to the
+  // notice because the restore is automatic: someone who has already bought
+  // and logged this trip elsewhere, or who simply does not want yesterday's
+  // half-list, needs one button rather than a row of × clicks. Confirmed,
+  // because it is the only control on this screen that destroys work, and the
+  // autosave will write the emptiness out a tick later.
+  const discardRestoredCart = () => {
+    if (cart.length && !window.confirm(`Discard the ${cart.length} unlogged line${cart.length === 1 ? '' : 's'} in this cart?`)) {
+      return;
+    }
+    setCart([]);
+    setScanReview(null);
+    setRestoreNotice('');
+  };
+
   // The cart is editable in place rather than remove-and-retype, because the
   // whole point of the scan is that most of a line is already right and one
   // number needs fixing. It also serves the hand-typed lines: a price
@@ -521,6 +624,7 @@ const WeeklyPurchasing: React.FC<{ channel?: 'B2C' | 'B2B' }> = ({ channel = 'B2
           billText: line.billText,
           matched: line.matched,
           derivedPrice: line.derivedPrice,
+          derivedQuantity: line.derivedQuantity,
         })),
       ]);
 
@@ -651,6 +755,10 @@ const WeeklyPurchasing: React.FC<{ channel?: 'B2C' | 'B2B' }> = ({ channel = 'B2
       // The scan's own review notes go with the cart they were about.
       setScanReview(null);
       setScanError('');
+      // And so does the "picked up where you left off" line: the cart it was
+      // about has just been logged, and leaving it up would read as if those
+      // lines were still waiting.
+      setRestoreNotice('');
       await Promise.all([loadCatalog(), loadPurchases()]);
     } catch (err) {
       setSubmitError(String((err as Error).message || err));
@@ -1008,6 +1116,15 @@ const WeeklyPurchasing: React.FC<{ channel?: 'B2C' | 'B2B' }> = ({ channel = 'B2
         </div>
       )}
 
+      {restoreNotice && (
+        <div className="purch-restored">
+          <p>{restoreNotice}</p>
+          <button type="button" className="secondary-button small" onClick={discardRestoredCart}>
+            Discard it
+          </button>
+        </div>
+      )}
+
       <div className="purch-grid">
         <div className="wizard-card">
           <h2>Log a purchase</h2>
@@ -1341,8 +1458,11 @@ const WeeklyPurchasing: React.FC<{ channel?: 'B2C' | 'B2B' }> = ({ channel = 'B2
                           step="any"
                           className="purch-cart-num"
                           value={line.quantity}
-                          onChange={(e) => handleUpdateLine(line.key, { quantity: Number(e.target.value) || 0 })}
+                          onChange={(e) =>
+                            handleUpdateLine(line.key, { quantity: Number(e.target.value) || 0, derivedQuantity: false })
+                          }
                         />
+                        {line.derivedQuantity && <small className="purch-cart-source">from total ÷ rate</small>}
                         {line.weightPerUnitKg > 0 && (
                           <>
                             <br />

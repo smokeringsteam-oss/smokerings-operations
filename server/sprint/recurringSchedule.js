@@ -11,6 +11,7 @@
 // text. That's what keeps a week's "done" status pinned to the right task
 // after someone edits the schedule mid-week; see server/sprint/weeklyScheduleStatusLog.js.
 import { insert, nextId, remove, select, selectOne, transaction, update } from '../core/repo.js';
+import { mirrorCsv } from '../core/csvMirror.js';
 
 const WEEKDAY_ORDER = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 
@@ -91,14 +92,20 @@ function normaliseDay(value) {
 function storeTime(value) {
   const text = String(value == null ? '' : value).trim();
   if (!text) return null;
-  const match = /^(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(am|pm)?$/i.exec(text);
+  // Minutes optional, because a person typing into Daily View's time field
+  // writes "9am" far more often than "9:00 AM". A bare number with neither
+  // minutes nor a meridiem is left alone rather than guessed at — "6" on this
+  // schedule is as likely to mean the evening as the morning.
+  const match = /^(\d{1,2})(?::(\d{2}))?(?::(\d{2}))?\s*(am|pm)?$/i.exec(text);
   if (!match) return text;
-  let hour = Number(match[1]);
   const meridiem = (match[4] || '').toLowerCase();
+  if (match[2] === undefined && !meridiem) return text;
+  let hour = Number(match[1]);
   if (meridiem === 'pm' && hour < 12) hour += 12;
   if (meridiem === 'am' && hour === 12) hour = 0;
-  if (hour > 23 || Number(match[2]) > 59) return text;
-  return `${String(hour).padStart(2, '0')}:${match[2]}:${match[3] || '00'}`;
+  const minutes = match[2] || '00';
+  if (hour > 23 || Number(minutes) > 59) return text;
+  return `${String(hour).padStart(2, '0')}:${minutes}:${match[3] || '00'}`;
 }
 
 function requireTask(taskId) {
@@ -134,7 +141,7 @@ function createTask({ day, label, time, assignedTo, category }) {
     category: String(category || '').trim() || null,
     sort_order: nextRank(targetDay),
   });
-  return { taskId };
+  return { taskId, csv: mirrorScheduleCsv() };
 }
 
 // A patch, not a replacement: only the fields the caller actually sent are
@@ -154,7 +161,7 @@ function updateTask({ taskId, label, time, assignedTo, category }) {
   if (category !== undefined) patch.category = String(category).trim() || null;
   if (!Object.keys(patch).length) throw badRequest('Nothing to change.');
   update('scheduled_task', { task_id: row.task_id }, patch);
-  return { taskId: row.task_id };
+  return { taskId: row.task_id, csv: mirrorScheduleCsv() };
 }
 
 // Takes the task's completion history with it, through the foreign key's ON
@@ -164,7 +171,7 @@ function updateTask({ taskId, label, time, assignedTo, category }) {
 function deleteTask({ taskId }) {
   const row = requireTask(taskId);
   remove('scheduled_task', { task_id: row.task_id });
-  return { taskId: row.task_id };
+  return { taskId: row.task_id, csv: mirrorScheduleCsv() };
 }
 
 // Drop a task at position `index` of `day` -- the same call whether it moved
@@ -179,7 +186,7 @@ function moveTask({ taskId, day, index }) {
   const row = requireTask(taskId);
   const targetDay = day === undefined || day === null || day === '' ? row.day : normaliseDay(day);
 
-  return transaction(() => {
+  const moved = transaction(() => {
     const others = select('scheduled_task', { day: targetDay }, { orderBy: 'sort_order, rowid' }).filter(
       (other) => other.task_id !== row.task_id,
     );
@@ -206,6 +213,78 @@ function moveTask({ taskId, day, index }) {
 
     return { taskId: row.task_id, day: targetDay, index: at };
   });
+
+  // Outside the transaction: the mirror reads the table back, and it has to
+  // read the ranks as they finally landed, not mid-renumber.
+  return { ...moved, csv: mirrorScheduleCsv() };
 }
 
-export { getRecurringSchedule, createTask, updateTask, deleteTask, moveTask, storeTime, displayTime };
+
+// ---- The CSV mirror -----------------------------------------------------
+//
+// Every edit above is written back out to the knowledge-base's Tasks/schedule.csv
+// once the table has taken it. The database is still the only thing read back
+// (getRecurringSchedule above reads the table, not this file) -- the CSV is
+// there so the cadence stays legible in a spreadsheet, and diffable if the
+// knowledge-base repo starts tracking Data/Tasks, which it currently doesn't.
+//
+// Best-effort by design: see the note at the top of server/core/csvMirror.js.
+// A save that reached the table and not the file is a stale CSV, and the next
+// edit rewrites it whole; a save rejected because the file was open in Excel
+// would be worse.
+const CSV_PATH = 'Tasks/schedule.csv';
+
+// The columns the committed file already has, in its order. sort_order is
+// deliberately not among them: the rows are written in the order Daily View
+// renders them, so the file carries the ordering the way it always did --
+// by being in it.
+const CSV_HEADER = [
+  'task_id',
+  'day',
+  'time',
+  'task',
+  'assigned_to',
+  'category',
+  'related_vendor_id',
+  'related_recipe_id',
+  'related_sop',
+  'notes',
+];
+
+// Day by day in week order, each day in its own rank order -- the same shape
+// getRecurringSchedule hands the page, so the file reads as the week does. A
+// row on some day that isn't a weekday name (which only a hand-written INSERT
+// can make) sorts to the end rather than being dropped: the mirror's job is to
+// show the table, including the parts of it nobody meant to put there.
+function mirrorScheduleCsv() {
+  const rows = select('scheduled_task', {}, { orderBy: 'sort_order, rowid' })
+    .map((row, index) => ({ row, index }))
+    .sort((a, b) => {
+      const dayA = WEEKDAY_ORDER.indexOf((a.row.day || '').trim());
+      const dayB = WEEKDAY_ORDER.indexOf((b.row.day || '').trim());
+      const rankA = dayA === -1 ? WEEKDAY_ORDER.length : dayA;
+      const rankB = dayB === -1 ? WEEKDAY_ORDER.length : dayB;
+      // Ties keep the select's order, which is the day's own ranking --
+      // Array.prototype.sort is stable, but the index keeps that explicit.
+      return rankA - rankB || a.index - b.index;
+    })
+    .map(({ row }) => ({
+      task_id: row.task_id,
+      day: row.day || '',
+      // Written the way the sheet held it ("9:00 AM"), not the way the column
+      // stores it, so the mirrored file matches the one already in git rather
+      // than reformatting every row on the first save.
+      time: displayTime(row.time_of_day),
+      task: row.task || '',
+      assigned_to: row.assigned_to || '',
+      category: row.category || '',
+      related_vendor_id: row.related_vendor_id || '',
+      related_recipe_id: row.related_recipe_id || '',
+      related_sop: row.related_sop || '',
+      notes: row.notes || '',
+    }));
+
+  return mirrorCsv(CSV_PATH, CSV_HEADER, rows);
+}
+
+export { getRecurringSchedule, mirrorScheduleCsv, createTask, updateTask, deleteTask, moveTask, storeTime, displayTime };

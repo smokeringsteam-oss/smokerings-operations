@@ -1,5 +1,6 @@
 import React, { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { ODOO_STATUS_LABELS } from '../shared/orderFulfilment';
+import { revivedBoolean, usePersistedState } from '../../../lib/usePersistedState';
 import {
   boxesSaved,
   buildOrderSideGroups,
@@ -493,20 +494,56 @@ const SidePrepControl: React.FC<{
 };
 
 const WeekendPrepPlanner: React.FC = () => {
-  const [step, setStep] = useState(1);
+  // The orders themselves have been kept across a reload for a long time (see
+  // LOCAL_STORAGE_KEY below); everything about WHERE you were in the wizard
+  // was not, so a tab evicted on step 2 with the meat list open came back on
+  // step 1 with it shut. On a phone that eviction is not a rare event.
+  // Typed as number, not 1 | 2, so handleNext/handleBack below stay the plain
+  // arithmetic they were; the revive is what keeps a stored 7 (or a string, or
+  // a shape from a build with more steps) from ever becoming the step.
+  const [step, setStep] = usePersistedState<number>('smokerings.weekendPrep.step', 1, (stored) =>
+    stored === 1 || stored === 2 ? stored : undefined,
+  );
   // Step 2 leads with the meat buy list; the rest of the estimate is prep-day
   // detail, opened on demand rather than scrolled past every time.
-  const [showKitchenPrep, setShowKitchenPrep] = useState(false);
+  const [showKitchenPrep, setShowKitchenPrep] = usePersistedState(
+    'smokerings.weekendPrep.showKitchenPrep',
+    false,
+    revivedBoolean,
+  );
   // The bakery order is its own vendor run with its own lead time, so it gets its
   // own fold rather than living inside Kitchen prep.
-  const [showBakeryOrder, setShowBakeryOrder] = useState(false);
+  const [showBakeryOrder, setShowBakeryOrder] = usePersistedState(
+    'smokerings.weekendPrep.showBakeryOrder',
+    false,
+    revivedBoolean,
+  );
   // Open by default — it's the reason Step 2 exists. The fold is for after the
   // meat is ordered, when the prep-day detail below is what's still live.
-  const [showMeatToBuy, setShowMeatToBuy] = useState(true);
+  const [showMeatToBuy, setShowMeatToBuy] = usePersistedState(
+    'smokerings.weekendPrep.showMeatToBuy',
+    true,
+    revivedBoolean,
+  );
   const [orders, setOrders] = useState<OrderMap>({});
   const [unmatchedLines, setUnmatchedLines] = useState<string[]>([]);
-  const [odooFrom, setOdooFrom] = useState(DEFAULT_ODOO_RANGE.from);
-  const [odooTo, setOdooTo] = useState(DEFAULT_ODOO_RANGE.to);
+
+  // Kept, and dropped once its end has passed — the same rule as the two
+  // service boards, for the same reason: a spent window in the date boxes
+  // looks exactly like a live one.
+  const [odooRange, setOdooRange] = usePersistedState(
+    'smokerings.weekendPrep.range',
+    DEFAULT_ODOO_RANGE,
+    (stored) => {
+      if (!stored || typeof stored !== 'object') return undefined;
+      const { from, to } = stored as Record<string, unknown>;
+      if (typeof from !== 'string' || typeof to !== 'string' || !from || !to) return undefined;
+      return to >= formatDateInput(new Date()) ? { from, to } : undefined;
+    },
+  );
+  const { from: odooFrom, to: odooTo } = odooRange;
+  const setOdooFrom = (from: string) => setOdooRange((current) => ({ ...current, from }));
+  const setOdooTo = (to: string) => setOdooRange((current) => ({ ...current, to }));
   const [isFetchingOdoo, setIsFetchingOdoo] = useState(false);
   const [odooStatus, setOdooStatus] = useState('');
   const [odooError, setOdooError] = useState('');

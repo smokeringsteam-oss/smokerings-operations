@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { buildTrackedUrl, slug } from './trackedUrl';
 import { encodeQr, qrToCanvas, qrToSvg, type QrCode } from './qrcode';
+import { copyToClipboard } from '../../lib/clipboard';
 
 // QR & Link Builder — the other end of attribution from the ROI screen.
 //
@@ -89,7 +90,7 @@ type Built = {
 // that isn't /order is set with MARKETING_SITE_URL rather than typed here.
 const ORDER_URL = 'https://smokerings.in/order';
 
-// The five places links actually get published, first and in this order, so
+// The six places links actually get published, first and in this order, so
 // the common job is the top of the screen rather than one tile among twelve.
 // Everything else the server offers stays available behind "More places".
 //
@@ -100,32 +101,13 @@ const ORDER_URL = 'https://smokerings.in/order';
 const FEATURED: { source: string; label?: string }[] = [
   { source: 'instagram' },
   { source: 'reddit' },
+  { source: 'youtube' },
   { source: 'whatsapp' },
   { source: 'poster' },
   { source: 'referral', label: 'Friends & family' },
 ];
 
 const DEFAULT_DETAIL: Detail = { prompt: 'Which one, specifically?', options: [] };
-
-const copyToClipboard = async (text: string) => {
-  // navigator.clipboard needs a secure context; this app is also served over
-  // plain http on the LAN, where it is undefined. The textarea fallback is
-  // what makes Copy work on the kitchen tablet.
-  try {
-    await navigator.clipboard.writeText(text);
-    return true;
-  } catch {
-    const area = document.createElement('textarea');
-    area.value = text;
-    area.style.position = 'fixed';
-    area.style.opacity = '0';
-    document.body.appendChild(area);
-    area.select();
-    const ok = document.execCommand('copy');
-    document.body.removeChild(area);
-    return ok;
-  }
-};
 
 const download = (blob: Blob, filename: string) => {
   const href = URL.createObjectURL(blob);

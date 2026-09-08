@@ -3,7 +3,7 @@
 // worth pinning down because its failure mode is silent — a bad repair
 // hands the pitmaster a cart of numbers that were never on the paper.
 import { describe, it, expect } from 'vitest';
-import { repairTruncatedJSON } from './geminiContent.js';
+import { normaliseTaskPlacement, repairTruncatedJSON } from './geminiContent.js';
 
 const BILL = {
   vendorName: 'Venkateshwara Pork',
@@ -54,5 +54,77 @@ describe('repairTruncatedJSON', () => {
   it('returns null when the cut landed before anything closed', () => {
     expect(repairTruncatedJSON('{"vendorName":"Sri Ven')).toBeNull();
     expect(repairTruncatedJSON('')).toBeNull();
+  });
+});
+
+// The other testable half of this file: what a suggestion is allowed to say.
+//
+// Worth pinning down because the consequence is not cosmetic. The sprint
+// board's add form hands this straight to createSubIssueTask, which files a
+// real GitHub issue under whatever parent comes back — so an epic the model
+// invented, or one it half-remembered from another board, would put a task
+// somewhere nobody is looking and take a manual edit on github.com to undo.
+describe('normaliseTaskPlacement', () => {
+  const EPICS = [
+    { number: 1, title: 'Kitchen Ops' },
+    { number: 4, title: 'Marketing' },
+    { number: 54, title: 'Ops Dashboard' },
+  ];
+  const ASSIGNEES = ['adarsh', 'sowmya'];
+  const STATUSES = ['Backlog', 'In Progress', 'Done'];
+  const lists = { epics: EPICS, assignees: ASSIGNEES, statuses: STATUSES };
+
+  it('passes through a suggestion that only names things it was offered', () => {
+    expect(
+      normaliseTaskPlacement(
+        { parentNumber: 4, status: 'Backlog', assignee: 'sowmya', reason: 'reel captions' },
+        lists,
+      ),
+    ).toEqual({
+      parentNumber: 4,
+      parentTitle: 'Marketing',
+      status: 'Backlog',
+      assignee: 'sowmya',
+      reason: 'reel captions',
+    });
+  });
+
+  it('drops an epic that was never on the board', () => {
+    // The one that would file a real issue in the wrong place.
+    const placement = normaliseTaskPlacement({ parentNumber: 99, reason: 'made it up' }, lists);
+    expect(placement.parentNumber).toBeNull();
+    expect(placement.parentTitle).toBe('');
+  });
+
+  it('drops a person and a status it was not offered', () => {
+    const placement = normaliseTaskPlacement(
+      { parentNumber: 1, status: 'Blocked', assignee: 'someone-else' },
+      lists,
+    );
+    // The epic still stands — one bad field does not throw the rest away,
+    // since the form is going to show all three either way.
+    expect(placement).toMatchObject({ parentNumber: 1, status: '', assignee: '' });
+  });
+
+  it('reads a number that came back as a string', () => {
+    // The schema asks for an integer but enum values go over the wire as
+    // strings, and which one arrives has changed between model versions.
+    expect(normaliseTaskPlacement({ parentNumber: '54' }, lists).parentTitle).toBe('Ops Dashboard');
+  });
+
+  it('survives an empty, malformed or missing answer', () => {
+    const empty = { parentNumber: null, parentTitle: '', status: '', assignee: '', reason: '' };
+    expect(normaliseTaskPlacement({}, lists)).toEqual(empty);
+    expect(normaliseTaskPlacement(null, lists)).toEqual(empty);
+    expect(normaliseTaskPlacement({ parentNumber: 1 }, {})).toEqual(empty);
+  });
+
+  it('trims a reason that ran long rather than letting it fill the form', () => {
+    const placement = normaliseTaskPlacement({ parentNumber: 1, reason: 'x'.repeat(400) }, lists);
+    expect(placement.reason).toHaveLength(160);
+  });
+
+  it('ignores a reason that is not text at all', () => {
+    expect(normaliseTaskPlacement({ parentNumber: 1, reason: { text: 'no' } }, lists).reason).toBe('');
   });
 });

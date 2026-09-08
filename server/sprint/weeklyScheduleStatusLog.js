@@ -16,7 +16,35 @@
 // to `scheduled_task` with ON DELETE CASCADE, so dropping a task from the
 // cadence takes its completion history with it rather than leaving rows
 // pinned to an id nothing resolves.
+//
+// That CSV is still written, though — as a mirror rather than as the store.
+// Every successful save rewrites it whole from the table (see
+// mirrorWeekStatusCsv below), so the log stays readable in a spreadsheet,
+// while the database remains the only thing read back. A failed mirror never
+// fails the save.
 import { select, upsert } from '../core/repo.js';
+import { mirrorCsv } from '../core/csvMirror.js';
+
+const CSV_PATH = 'Tasks/weekly_schedule_status_log.csv';
+
+// The CSV era's columns, unchanged, so the mirror lands on the same shape as
+// the file already sitting in the knowledge-base repo: `time` rather than the
+// table's time_of_day, and done as 'true'/'false' rather than an INTEGER.
+const CSV_HEADER = ['week_key', 'task_id', 'done', 'assigned_to', 'time', 'updated_at'];
+
+// The whole table, oldest row first — rowid order, which is the order weeks
+// and tasks were first touched, so the file reads as a log.
+function mirrorWeekStatusCsv() {
+  const rows = select('task_completion', {}, { orderBy: 'rowid' }).map((row) => ({
+    week_key: row.week_key,
+    task_id: row.task_id,
+    done: row.done ? 'true' : 'false',
+    assigned_to: row.assigned_to || '',
+    time: row.time_of_day || '',
+    updated_at: row.updated_at || '',
+  }));
+  return mirrorCsv(CSV_PATH, CSV_HEADER, rows);
+}
 
 // Returns every logged task state for one week, keyed by task_id — the shape
 // DailyView's RecurringWeekState already expects.
@@ -55,7 +83,19 @@ function setTaskStatus({ weekKey, taskId, done, assignedTo, time }) {
     time_of_day: time || null,
     updated_at: updatedAt,
   });
-  return { weekKey, taskId, done: !!done, assignedTo: assignedTo || '', time: time || '', updatedAt };
+  // After the upsert, never instead of it: the file is written from what the
+  // table now holds, so a mirror that fails leaves a stale CSV rather than a
+  // wrong one, and the next successful save brings it back into step.
+  const csv = mirrorWeekStatusCsv();
+  return {
+    weekKey,
+    taskId,
+    done: !!done,
+    assignedTo: assignedTo || '',
+    time: time || '',
+    updatedAt,
+    csv,
+  };
 }
 
-export { getWeekStatus, setTaskStatus };
+export { getWeekStatus, setTaskStatus, mirrorWeekStatusCsv };

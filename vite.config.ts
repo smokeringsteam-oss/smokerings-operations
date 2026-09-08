@@ -16,9 +16,19 @@ export default defineConfig({
     // replace this with `true` — that disables the DNS-rebinding protection
     // the setting exists for.
     allowedHosts: ['.ts.net'],
-    // The page arrives over HTTPS on 443 via Tailscale serve; without this
-    // Vite tells the browser to open its HMR websocket on 5173 and it hangs.
-    hmr: { protocol: 'wss', clientPort: 443 },
+    // HMR is deliberately NOT pinned to a protocol or a port.
+    //
+    // It used to be `{ protocol: 'wss', clientPort: 443 }` for the Tailscale
+    // URL, and that broke both halves of the setup. Left to itself the client
+    // derives both from the URL the page was actually served on — wss on 443
+    // through Tailscale serve, ws on 5173 straight off 127.0.0.1 — so one
+    // setting cannot be right for both, and pinning it made the local tab the
+    // one that was wrong: its socket could never open, so no edit ever reached
+    // it, and Vite's reconnect path then polls https://<host>/ and reloads the
+    // page the instant that answers. On this machine something is always
+    // answering on 443 (Tailscale serve), so a tab on 127.0.0.1:5173 would
+    // reload itself out of the blue, mid-edit. Unpinned, both URLs connect,
+    // and neither reloads on its own.
     proxy: {
       '/api': {
         target: 'http://localhost:4000',

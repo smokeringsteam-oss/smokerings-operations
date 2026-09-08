@@ -81,6 +81,16 @@ describe('mirrorMenuItemToCsv', () => {
     expect(rowFor('pork-tacos').description).toBe('12-hour pulled pork, salsa verde.');
   });
 
+  it('never mirrors the description, even when asked to', () => {
+    // Odoo's description_sale is the single source of truth for a dish's
+    // blurb. A second copy here would be write-only and could only drift, so
+    // 'description' is not a mirrorable field at all — passing it is a no-op
+    // rather than a write.
+    const result = mirrorMenuItemToCsv(item({ description: 'whatever Odoo holds' }), ['description']);
+    expect(result.changed).toEqual(['odoo_product_id']);
+    expect(rowFor('pork-tacos').description).toBe('12-hour pulled pork, salsa verde.');
+  });
+
   it('reports no change when the price saved is the one already on file', () => {
     // The row now reads back as the number 499 while the mirror is handed the
     // string "499". Compared naively those differ, and every save would claim

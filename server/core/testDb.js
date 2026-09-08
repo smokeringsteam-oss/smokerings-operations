@@ -415,7 +415,8 @@ CREATE TABLE scheduled_task (
   related_vendor_id TEXT,
   related_recipe_id TEXT,
   related_sop       TEXT,
-  notes             TEXT
+  notes             TEXT,
+  sort_order        INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE task_completion (
@@ -426,6 +427,37 @@ CREATE TABLE task_completion (
   time_of_day TEXT,
   updated_at  TEXT NOT NULL DEFAULT (datetime('now')),
   PRIMARY KEY (week_key, task_id)
+);
+
+-- Push notifications. Carried into the fixture because taskReminders.js both
+-- reads the schedule and claims a delivery in the same pass, so a test of the
+-- firing rules needs somewhere for that claim to land.
+CREATE TABLE push_subscription (
+  endpoint      TEXT PRIMARY KEY,
+  p256dh        TEXT NOT NULL,
+  auth          TEXT NOT NULL,
+  label         TEXT,
+  created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+  last_sent_at  TEXT,
+  failure_count INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE push_delivery (
+  notify_key TEXT PRIMARY KEY,
+  sent_at    TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- The shared note bubble. The CHECK is carried over from the real schema on
+-- purpose: refusing a blank body is the store's one rule, and a fixture that
+-- dropped it would let a regression in the trim() guard pass here.
+CREATE TABLE shared_note (
+  note_id    INTEGER PRIMARY KEY,
+  author     TEXT,
+  body       TEXT NOT NULL CHECK (trim(body) <> ''),
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  done       INTEGER NOT NULL DEFAULT 0 CHECK (done IN (0, 1)),
+  done_at    TEXT,
+  done_by    TEXT
 );
 `;
 

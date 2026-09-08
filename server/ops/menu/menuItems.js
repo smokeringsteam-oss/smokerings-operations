@@ -289,11 +289,14 @@ async function updateMenuItem({ id, name, price, description, isAvailable }) {
   const item = await readMenuItem(numericId);
 
   // Only the fields this call actually wrote are mirrored, so saving a new
-  // price can't overwrite a hand-written menu.csv description.
+  // price can't overwrite a hand-written knowledge-base name.
+  //
+  // description_sale is not among them: Odoo is the one place a dish's blurb
+  // lives (see menuCsvMirror.js). A description-only save still calls the
+  // mirror, which changes nothing but backfills the odoo_product_id pin.
   const mirroredFields = [];
   if (values.name !== undefined) mirroredFields.push('name');
   if (values.list_price !== undefined) mirroredFields.push('price');
-  if (values.description_sale !== undefined) mirroredFields.push('description');
   if (values.sale_ok !== undefined) mirroredFields.push('available');
 
   return { item, csv: mirrorMenuItemToCsv(item, mirroredFields) };

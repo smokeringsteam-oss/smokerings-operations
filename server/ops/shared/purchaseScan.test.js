@@ -75,17 +75,44 @@ describe('normaliseScannedBill — line items', () => {
     expect(lines[0]).toMatchObject({ quantity: 12, unitPrice: 1250 });
   });
 
+  it('recovers a weighed line whose quantity came back as the tillâs own zero', () => {
+    // S.K. Pork Palace, bill #9341: one row reading "NON PLU 4.430 540.00
+    // 2392.20" under a QTY/WT header, and then "#ITEMS:1 TQty:0 TWt:4.430"
+    // below the total. The read picked up the till's 0 and the whole 2392
+    // rupee line used to vanish; both money columns are printed, so the
+    // weight comes back exactly.
+    const { lines, skipped } = scan({
+      lines: [{ itemName: 'NON PLU', quantity: 0, unitPrice: 540, lineTotal: 2392.2 }],
+    });
+
+    expect(skipped).toEqual([]);
+    expect(lines[0]).toMatchObject({ quantity: 4.43, unitPrice: 540, derivedQuantity: true, derivedPrice: false });
+  });
+
+  it('leaves a printed quantity alone even when the money columns disagree with it', () => {
+    // Same reason the printed unit price wins above: a discounted line does
+    // not add up, and the numbers actually on the paper are the ones logged.
+    const { lines } = scan({
+      lines: [{ itemName: 'Pork Shoulder', quantity: 4, unitPrice: 480, lineTotal: 1800 }],
+    });
+
+    expect(lines[0]).toMatchObject({ quantity: 4, derivedQuantity: false });
+  });
+
   it('skips a line with no readable quantity instead of guessing one', () => {
     const { lines, skipped } = scan({
       lines: [
+        // Nothing to recover from: a price with no total, a total with no
+        // price, and neither.
         { itemName: 'Pork Shoulder', quantity: 0, unitPrice: 480 },
-        { itemName: 'Smudged', quantity: null, unitPrice: 100 },
+        { itemName: 'Smudged', quantity: null, unitPrice: 0, lineTotal: 900 },
+        { itemName: 'Torn corner', quantity: null, unitPrice: 100 },
         { itemName: 'Burger Buns', quantity: 24, unitPrice: 12 },
       ],
     });
 
     expect(lines.map((l) => l.itemName)).toEqual(['Burger Buns']);
-    expect(skipped.map((s) => s.itemName)).toEqual(['Pork Shoulder', 'Smudged']);
+    expect(skipped.map((s) => s.itemName)).toEqual(['Pork Shoulder', 'Smudged', 'Torn corner']);
   });
 
   it('survives a read that came back with nothing usable at all', () => {

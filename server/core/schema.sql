@@ -214,6 +214,48 @@ CREATE TABLE bom_line (
                                             OR status = 'needs_confirmation')
 );
 
+-- Where a customer address is on the map, looked up once and kept.
+--
+-- Odoo holds the addresses; nothing holds their coordinates, and the Customer
+-- Map screen needs them to draw anything. So the first time an address is
+-- seen it goes to a geocoder and the answer lands here, keyed by a normalised
+-- form of the address text. Every later read is a local join.
+--
+-- The cache is the point, not an optimisation. Geocoding a customer address
+-- sends it to a third party, so it is a deliberate, user-triggered action on
+-- that screen ("Put these on the map") rather than something a page load
+-- does — and a row here is the promise that the same address is never sent
+-- twice. Rows survive the customer: an address that has been located stays
+-- located whether or not anybody ordered from it this quarter.
+--
+-- A failed lookup is stored too, with status 'not_found'. Otherwise the next
+-- click sends the same unfindable address again, and the screen has no way to
+-- tell "we have not tried this" from "we tried and there is nothing there".
+--
+-- `precision` says how much of the address the geocoder actually matched, and
+-- is the honest half of every pin: 'address' is a rooftop, 'locality' is the
+-- middle of a neighbourhood, 'postcode' is the middle of a PIN code area
+-- several kilometres across. The screen draws the last two differently
+-- because they are not the same claim.
+--
+-- provider 'manual' is a pin somebody dropped by hand, and is never
+-- overwritten by a lookup — a human who has placed a customer on the map
+-- knows something the geocoder does not.
+CREATE TABLE geocode_cache (
+    address_key  TEXT PRIMARY KEY,
+    address      TEXT NOT NULL,
+    latitude     REAL,
+    longitude    REAL,
+    precision    TEXT CHECK (precision IS NULL OR precision IN ('address','locality','postcode')),
+    locality     TEXT,
+    postcode     TEXT,
+    display_name TEXT,
+    provider     TEXT NOT NULL DEFAULT 'nominatim',
+    status       TEXT NOT NULL DEFAULT 'ok' CHECK (status IN ('ok','not_found')),
+    looked_up_at TEXT NOT NULL DEFAULT (datetime('now')),
+    CONSTRAINT geocode_located_has_a_point CHECK (status <> 'ok' OR (latitude IS NOT NULL AND longitude IS NOT NULL))
+);
+
 CREATE TABLE inventory_adjustment (
     adjustment_id   TEXT PRIMARY KEY,
     adjustment_date TEXT,
@@ -730,3 +772,94 @@ CREATE INDEX smoking_stage_log_session_idx ON smoking_stage_log(session_id);
 CREATE INDEX smoking_stage_log_changed_idx ON smoking_stage_log(changed_at);
 CREATE INDEX side_prep_log_weekend_idx     ON side_prep_log(weekend_start);
 CREATE INDEX purchase_session_idx          ON purchase(smoking_session_id);
+
+-- ---------------------------------------------------------------------------
+-- Push notifications
+--
+-- Web Push, so the phone gets told about a pending task without the dashboard
+-- being open — the notification travels legion -> the browser vendor's push
+-- service -> the handset, which is why it still arrives off the tailnet. Two
+-- tables, and neither is anything the kitchen reads.
+-- ---------------------------------------------------------------------------
+
+-- One row per browser that has granted permission. The endpoint URL the push
+-- service hands out is the identity of a subscription, so it is the key: the
+-- same phone re-subscribing (permission re-granted, app data cleared) either
+-- lands on the same endpoint and updates this row, or gets a new one and the
+-- dead row is deleted the first time the push service answers 404/410 for it.
+CREATE TABLE push_subscription (
+    endpoint      TEXT PRIMARY KEY,
+    -- The two halves of the browser's public key, exactly as the
+    -- PushSubscription JSON gives them. Held opaque; only web-push reads them.
+    p256dh        TEXT NOT NULL,
+    auth          TEXT NOT NULL,
+    -- Free text from the subscribing device ("Adarsh phone"), so a stale
+    -- subscription can be recognised in the list rather than being a URL.
+    label         TEXT,
+    created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+    last_sent_at  TEXT,
+    -- Consecutive send failures that were not an outright 404/410. A push
+    -- service having a bad afternoon shouldn't cost a real subscription, so
+    -- those are counted rather than acted on, and reset by the next success.
+    failure_count INTEGER NOT NULL DEFAULT 0
+);
+
+-- What has already been sent, so a reminder fires once and not once per tick.
+--
+-- The key carries the date ('2026-09-07:WS-12', '2026-09-07:digest'), which is
+-- what makes this self-scoping: today's key cannot collide with yesterday's,
+-- so the same task reminds again tomorrow without anything being reset. Rows
+-- are pruned by age on startup rather than on a schedule — see pushNotify.js.
+CREATE TABLE push_delivery (
+    notify_key TEXT PRIMARY KEY,
+    sent_at    TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- ---------------------------------------------------------------------------
+-- Shared notes
+--
+-- The note bubble in the top bar: a single app-wide scratchpad every device on
+-- the tailnet reads and writes. It exists because the useful note is almost
+-- never about the screen you are on when you think of it — the vendor said
+-- brisket is up next week, the second gas cylinder is nearly out — and until
+-- now the only places to put one were a phone's own notes app, where the
+-- kitchen tablet could not see it, or a task in the weekly cadence, where it
+-- became a chore with a due date rather than a remark.
+--
+-- Append-only by intent, not by constraint: a note is written once and either
+-- stays or is deleted whole. Nothing edits a body in place, so two phones
+-- typing at the same moment produce two notes rather than one overwriting the
+-- other, and there is no last-write-wins race to reason about.
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE shared_note (
+    -- A plain rowid alias, so ids climb monotonically with insertion order.
+    -- That is what the unread bubble counts against ("notes newer than the
+    -- last one this device saw"); created_at cannot do that job, because two
+    -- notes posted in the same second would tie and one would never be seen.
+    note_id    INTEGER PRIMARY KEY,
+    -- Who posted it, free text. There is no login in this app — the browser
+    -- remembers a name you pick once and sends it — so this is a claim, not
+    -- an identity, and a note posted before anyone chose a name has none.
+    author     TEXT,
+    -- The CHECK is the one rule worth enforcing here: a blank note is always
+    -- a stray Enter key, never something someone meant to say.
+    body       TEXT NOT NULL CHECK (trim(body) <> ''),
+    -- Written explicitly by the store as a full ISO-8601 UTC string rather
+    -- than left to this default. datetime('now') yields "2026-09-08 07:14:22",
+    -- which Date() parses differently depending on the browser; the default is
+    -- kept only so a row inserted by hand from the sqlite CLI still has one.
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    -- Every note is a to-do. Most of what gets left on a shared board is
+    -- something that has to happen rather than something to know — order the
+    -- gas, call the vendor back — and the two are not worth separating into
+    -- different kinds of thing: a remark nobody needs to act on simply never
+    -- gets ticked, which costs one unticked box and no decision at the moment
+    -- of typing.
+    done       INTEGER NOT NULL DEFAULT 0 CHECK (done IN (0, 1)),
+    -- Who ticked it and when. The point of recording these on a shared board
+    -- is that "already done" is only useful if you can tell who did it — two
+    -- people otherwise both go and buy the gas.
+    done_at    TEXT,
+    done_by    TEXT
+);
