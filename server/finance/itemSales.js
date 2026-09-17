@@ -10,7 +10,7 @@
 // Where the numbers come from
 // ---------------------------
 //   Odoo sale.order.line   the B2C half. Confirmed orders only (sale/done),
-//                          dated by date_order, individuals only. See
+//                          dated by the promised weekend slot, individuals only. See
 //                          fetchSoldItems in server/integrations/odoo.js.
 //   b2b_sale_line          the wholesale half, this app's own invoice book,
 //                          dated by the sale's delivered_on.
@@ -178,7 +178,11 @@ const B2B_LINE_SQL = `
 //              its own name folded to lower case, so "Pulled Pork 1kg" and
 //              "pulled pork 1kg" are one row and not two
 //   orderRef   the order or invoice this line was on, for the distinct count
-function normalise({ channel, itemId, name, unitLabel, quantity, revenue, date, orderRef, menu }) {
+//   kind       'item' for something sold, 'discount' for a negative line that
+//              is money off the order (a coupon, Odoo's Discount product) —
+//              counted in revenue and in the discount total, never as a dish
+//   discount   rupees taken off this line by a percentage discount on it
+function normalise({ channel, itemId, name, unitLabel, quantity, revenue, date, orderRef, menu, kind = 'item', discount = 0 }) {
   const matched = itemId ? menu.get(itemId) : null;
   const shownName = matched ? matched.name : name;
   return {
@@ -193,6 +197,8 @@ function normalise({ channel, itemId, name, unitLabel, quantity, revenue, date, 
     revenue,
     date,
     orderRef: `${channel}:${orderRef}`,
+    kind,
+    discount,
   };
 }
 
@@ -293,6 +299,11 @@ function aggregate({ periods, lines, granularity = 'week' }) {
   // date arithmetic and not a data condition. Counted rather than silently
   // dropped, so it would be visible if it ever did.
   let outOfRange = 0;
+  // Money taken off, in the two shapes Odoo books it — see fetchSoldItems.
+  // Only the weekend side ever has any: an invoice line in the wholesale book
+  // cannot be priced below zero.
+  const discounts = { coupons: 0, couponLines: 0, onItems: 0, itemLines: 0 };
+  const discountedOrders = new Set();
 
   for (const line of lines) {
     const position = index.get(periodKeyOf(line.date, granularity));
@@ -303,6 +314,27 @@ function aggregate({ periods, lines, granularity = 'week' }) {
 
     const side = line.channel === 'B2B' ? 'b2b' : 'b2c';
     const row = periodRows[position];
+
+    // A coupon or Discount line. Its negative rupees stay in revenue — that is
+    // what the order actually took, and what Spending vs Sales reads off
+    // amount_total — but it is not a dish, so it adds no units and no row.
+    if (line.kind === 'discount') {
+      row.revenue += line.revenue;
+      row[`${side}Revenue`] += line.revenue;
+      totals.revenue += line.revenue;
+      totals[`${side}Revenue`] += line.revenue;
+      discounts.coupons += -line.revenue;
+      discounts.couponLines += 1;
+      discountedOrders.add(line.orderRef);
+      continue;
+    }
+
+    if (line.discount > 0) {
+      discounts.onItems += line.discount;
+      discounts.itemLines += 1;
+      discountedOrders.add(line.orderRef);
+    }
+
     row.units += line.units;
     row.revenue += line.revenue;
     row[`${side}Units`] += line.units;
@@ -448,6 +480,23 @@ function aggregate({ periods, lines, granularity = 'week' }) {
       unmatchedLines: totals.unmatchedLines,
       outOfRange,
     },
+    // Everything taken off the weekend menu's prices in the range. `gross` is
+    // what B2C revenue would have been with none of it, so `pct` is the share
+    // of list price given away rather than a share of what was banked.
+    discounts: (() => {
+      const total = discounts.coupons + discounts.onItems;
+      const gross = totals.b2cRevenue + total;
+      return {
+        total: round0(total),
+        coupons: round0(discounts.coupons),
+        couponLines: discounts.couponLines,
+        onItems: round0(discounts.onItems),
+        itemLines: discounts.itemLines,
+        orders: discountedOrders.size,
+        gross: round0(gross),
+        pct: gross > 0 ? Math.round((total / gross) * 1000) / 10 : 0,
+      };
+    })(),
     periods: periodRows.map((row) => ({
       key: row.key,
       label: row.label,
@@ -478,7 +527,12 @@ function aggregate({ periods, lines, granularity = 'week' }) {
 
 // The report the screen reads. Everything above this line is arithmetic;
 // this is the part that talks to Odoo and to the database.
-async function buildItemSalesReport({ fromDate, toDate, granularity } = {}) {
+//
+// keepLines hands back the B2C lines as Odoo returned them, order by order,
+// alongside the aggregate. Cost to Make needs them for its per-order and
+// per-session lenses; reading them through here rather than calling Odoo a
+// second time is what keeps its dish counts identical to this screen's.
+async function buildItemSalesReport({ fromDate, toDate, granularity, keepLines = false } = {}) {
   const grain = String(granularity || 'week').trim() || 'week';
   if (!GRANULARITIES.includes(grain)) badRequest(`"${grain}" is not a period — use week or month.`);
 
@@ -523,6 +577,8 @@ async function buildItemSalesReport({ fromDate, toDate, granularity } = {}) {
         date: line.day,
         orderRef: line.orderId,
         menu,
+        kind: line.isDiscountLine ? 'discount' : 'item',
+        discount: line.discount || 0,
       }),
     ),
     ...all(B2B_LINE_SQL, rangeFrom, rangeTo).map((line) =>
@@ -566,6 +622,7 @@ async function buildItemSalesReport({ fromDate, toDate, granularity } = {}) {
       },
     },
     ...report,
+    ...(keepLines ? { b2cLines: b2c.lines } : {}),
   };
 }
 

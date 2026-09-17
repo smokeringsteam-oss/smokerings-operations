@@ -83,22 +83,49 @@ const EXPENSE_CATEGORIES = [
     hint: 'Food given away to win an account or a review. Nothing was invoiced for it.',
   },
   {
-    category: 'Delivery & logistics',
-    hint: 'Couriers, third-party riders, fuel for a delivery run.',
+    // Was "Delivery & logistics" (no stored rows used it). One word so the
+    // Weekly Purchasing "Logistics" tab, its vendor and this list match.
+    category: 'Logistics',
+    hint: 'Couriers, third-party riders, porters, fuel for a delivery run.',
+  },
+  {
+    // Logged from the Weekly Purchasing "Investment" tab. Spending vs Sales
+    // keeps it out of spend and counts it only in Total investment.
+    category: 'Investment',
+    hint: 'Money put into the business rather than spent running a week — a smoker, a freezer, a setup cost.',
+  },
+  {
+    category: 'Labour',
+    hint: 'Wages for the week — the kitchen helper, a hand for the weekend.',
   },
   {
     category: 'Staff & training',
-    hint: 'Ad hoc wages, uniforms, a course, a certification.',
+    hint: 'Uniforms, a course, a certification. Wages go under Labour.',
   },
   {
     category: 'Admin, software & fees',
     hint: 'Subscriptions, licences, bank charges, registrations.',
   },
   {
-    category: 'Other',
-    hint: 'Real spend that fits none of the above. A bucket, not an answer — if it fills up, the list is missing a row.',
+    // Was "Other". Renamed so the Weekly Purchasing "Misc" tab and this list
+    // are one word; the rename is applied to stored rows in migrations.js.
+    category: 'Miscellaneous',
+    hint: 'Real spend that fits none of the above — a porter, ice, an auto fare. A bucket, not an answer — if it fills up, the list is missing a row.',
   },
 ];
+
+// The categories Weekly Purchasing's Labour, Logistics, Investment and Misc tabs log
+// straight into the purchase table, each under a vendor of the same name (see
+// recordExpense in server/ops/shared/purchasing.js). Weekly Ledger reports
+// labour and misc as their own spend lines rather than as purchases.
+const LABOUR_CATEGORY = 'Labour';
+const LOGISTICS_CATEGORY = 'Logistics';
+
+// A buy for a practice cook. Spending vs Sales leaves these out of spend (they
+// fed no sale) and counts them only in its Total investment figure.
+const PRACTICE_CATEGORY = 'Practice / R&D';
+const INVESTMENT_CATEGORY = 'Investment';
+const MISC_CATEGORY = 'Miscellaneous';
 
 // What a catalogue buy logged from Weekly Purchasing is called when nobody
 // said otherwise. Only material lines get it: an ad hoc line typed in at the
@@ -140,5 +167,10 @@ export {
   CATEGORY_NAMES,
   CATEGORY_LIST_TEXT,
   DEFAULT_MATERIAL_CATEGORY,
+  LABOUR_CATEGORY,
+  LOGISTICS_CATEGORY,
+  MISC_CATEGORY,
+  PRACTICE_CATEGORY,
+  INVESTMENT_CATEGORY,
   normaliseExpenseCategory,
 };

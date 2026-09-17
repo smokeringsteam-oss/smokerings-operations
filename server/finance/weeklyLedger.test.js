@@ -496,6 +496,114 @@ describe('buildWeeklyReport — the two sides of the business', () => {
   });
 });
 
+describe('buildWeeklyReport — labour and miscellaneous', () => {
+  // Purchase lines like any other — a service under the category that names
+  // the kind. See recordExpense in ops/shared/purchasing.js.
+  const expense = ({ date = FRIDAY, channel = 'B2C', kind = 'Labour', name = kind, amount }) => {
+    seq += 1;
+    run(
+      `INSERT INTO purchase (purchase_id, purchase_date, channel, vendor_id, item_type, item_name,
+                             quantity_purchased, unit_price, total_cost, expense_category)
+       VALUES (?, ?, ?, 'VEN-001', 'service', ?, 1, ?, ?, ?)`,
+      `PUR-${String(seq).padStart(4, '0')}`,
+      date,
+      channel,
+      name,
+      amount,
+      amount,
+      kind,
+    );
+  };
+
+  it('reports them beside purchases, in their week, on the side they were for', async () => {
+    buy({ date: FRIDAY, totalCost: 1000 });
+    expense({ amount: 4000 });
+    expense({ kind: 'Miscellaneous', name: 'Gas refill', amount: 300 });
+    expense({ channel: 'B2B', amount: 2000 });
+    // The following week — must not leak into this one.
+    expense({ date: '2026-09-07', amount: 9999 });
+
+    const report = await buildWeeklyReport({ fromDate: WEEK_START, toDate: WEEK_END });
+    const week = weekIn(report, WEEK_START);
+    expect(week.spend).toMatchObject({ purchases: 1000, labour: 6000, misc: 300, total: 7300, b2c: 5300, b2b: 2000 });
+    expect(week.counts.expenseRows).toBe(3);
+    expect(report.totals).toMatchObject({ labour: 6000, misc: 300, spend: 7300 });
+    expect(report.categories).toEqual(
+      expect.arrayContaining([
+        { category: 'Labour', spend: 6000, b2c: 4000, b2b: 2000 },
+        { category: 'Gas refill', spend: 300, b2c: 300, b2b: 0 },
+      ]),
+    );
+    expect(report.vendors).toEqual(expect.arrayContaining([expect.objectContaining({ vendor: 'Gas refill', spend: 300 })]));
+    expect(report.categories.map((row) => row.category)).not.toContain('Miscellaneous');
+  });
+});
+
+describe('buildWeeklyReport — practice buying', () => {
+  // Tagged either way the app can tag it: purpose Practice (the switch on
+  // Weekly Purchasing) or the Practice / R&D category (Purchase Logger).
+  const practice = ({ channel = 'B2C', amount, byCategory = false }) => {
+    seq += 1;
+    run(
+      `INSERT INTO purchase (purchase_id, purchase_date, channel, purpose, vendor_id, item_type, item_name,
+                             quantity_purchased, unit_price, total_cost, expense_category)
+       VALUES (?, ?, ?, ?, 'VEN-001', 'material', 'Pork shoulder', 1, ?, ?, ?)`,
+      `PUR-${String(seq).padStart(4, '0')}`,
+      FRIDAY,
+      channel,
+      byCategory ? 'Order' : 'Practice',
+      amount,
+      amount,
+      byCategory ? 'Practice / R&D' : null,
+    );
+  };
+
+  it('leaves practice out of spend and net, and adds it only to investment', async () => {
+    buy({ date: FRIDAY, totalCost: 1000 });
+    practice({ amount: 700 });
+    practice({ channel: 'B2B', amount: 300, byCategory: true });
+
+    const report = await buildWeeklyReport({ fromDate: WEEK_START, toDate: WEEK_END });
+    const week = weekIn(report, WEEK_START);
+    expect(week.spend).toMatchObject({ total: 1000, b2c: 1000, b2b: 0, practice: 1000 });
+    expect(report.totals).toMatchObject({
+      spend: 1000,
+      practice: 1000,
+      practiceB2c: 700,
+      practiceB2b: 300,
+      practiceLines: 2,
+      investment: 2000,
+    });
+    expect(report.vendors.reduce((sum, row) => sum + row.spend, 0)).toBe(1000);
+    expect(report.categories.map((row) => row.category)).not.toContain('Practice / R&D');
+  });
+});
+
+describe('buildWeeklyReport — Investment tab', () => {
+  it('leaves Investment lines out of spend and adds them to investment', async () => {
+    buy({ date: FRIDAY, totalCost: 1000 });
+    seq += 1;
+    run(
+      `INSERT INTO purchase (purchase_id, purchase_date, channel, vendor_id, item_type, item_name,
+                             quantity_purchased, unit_price, total_cost, expense_category)
+       VALUES (?, ?, 'B2B', 'VEN-001', 'service', 'Chest freezer', 2, 9000, 18000, 'Investment')`,
+      `PUR-${String(seq).padStart(4, '0')}`,
+      FRIDAY,
+    );
+
+    const report = await buildWeeklyReport({ fromDate: WEEK_START, toDate: WEEK_END });
+    expect(weekIn(report, WEEK_START).spend).toMatchObject({ total: 1000, b2b: 0, investmentBuys: 18000 });
+    expect(report.totals).toMatchObject({
+      spend: 1000,
+      investmentBuys: 18000,
+      investmentB2b: 18000,
+      investmentLines: 1,
+      investment: 19000,
+    });
+    expect(report.categories.map((row) => row.category)).not.toContain('Investment');
+  });
+});
+
 describe('buildWeeklyReport — bad input', () => {
   it('rejects a range that ends before it starts', async () => {
     await expect(buildWeeklyReport({ fromDate: '2026-09-10', toDate: '2026-09-01' })).rejects.toThrow(

@@ -242,6 +242,19 @@ describe('buildTrafficSources revenue join', () => {
     expect(find('poster')).toMatchObject({ sessions: 12, orders: 0, revenue: 0, revenuePerSession: null });
   });
 
+  it("folds GA's two blanks into one row and drops our own hosting panel", () => {
+    const tidy = buildTrafficSources({
+      sourceRows: [
+        { source: '(not set)', sessions: 3, users: 3, newUsers: 3, keyEvents: 0 },
+        { source: '(data not available)', sessions: 2, users: 2, newUsers: 2, keyEvents: 0 },
+        { source: 'hpanel.hostinger.com', sessions: 9, users: 1, newUsers: 0, keyEvents: 0 },
+      ],
+      utmSources: [],
+    });
+    expect(tidy.map((row) => row.source)).toEqual(['(not set)']);
+    expect(tidy[0].sessions).toBe(5);
+  });
+
   it('ranks by revenue, so the top of the table is what the traffic was worth', () => {
     expect(rows.map((row) => row.source)).toEqual(['kamanahalli_tea_shop', 'whatsapp', 'poster']);
   });

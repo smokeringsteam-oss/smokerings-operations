@@ -38,6 +38,14 @@ vi.mock('../marketing/orderAttribution.js', async (importOriginal) => {
   return { ...actual, fetchAttributedOrders: async () => ({ orders }) };
 });
 
+// The order lines behind the discount column. getConfig stays real so the env
+// above still makes Odoo look configured.
+const soldLines = [];
+vi.mock('../integrations/odoo.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  return { ...actual, fetchSoldItems: async () => ({ lines: soldLines }) };
+});
+
 const { buildWeeklyReport } = await import('./weeklyLedger.js');
 const { run } = await import('../core/db.js');
 
@@ -47,6 +55,7 @@ beforeEach(() => {
   run('DELETE FROM b2b_sale');
   run('DELETE FROM b2b_client');
   orders.length = 0;
+  soldLines.length = 0;
 });
 
 afterAll(() => removeTestDb(dir));
@@ -58,12 +67,13 @@ let seq = 0;
 // tag on the link that was clicked. The two disagreeing is the interesting
 // case, not the exceptional one — on the live database most tagged orders
 // are filed as "Website".
-const order = ({ orderedOn, amount = 1000, channel = '', utmSource = '', countsAsRevenue = true }) => {
+const order = ({ orderedOn, promisedDay, amount = 1000, channel = '', utmSource = '', countsAsRevenue = true }) => {
   seq += 1;
   orders.push({
     id: seq,
     name: `S${String(seq).padStart(5, '0')}`,
     orderedOn: `${orderedOn} 12:00:00`,
+    promisedDay: promisedDay || orderedOn,
     amount,
     channel,
     countsAsRevenue,
@@ -182,5 +192,47 @@ describe('b2cSources — what the rollup covers', () => {
   it('comes back empty rather than undefined when nothing sold', async () => {
     const { b2cSources } = await report();
     expect(b2cSources).toEqual([]);
+  });
+});
+
+describe('discounts — per week, on the orders counted as sales', () => {
+  it('totals a percentage on a dish line and a negative discount line, per order', async () => {
+    order({ orderedOn: '2026-09-02', amount: 900, channel: 'Website' });
+    const id = seq;
+    soldLines.push(
+      { orderId: id, revenue: 1000, discount: 100, isDiscountLine: false },
+      { orderId: id, revenue: -100, discount: 0, isDiscountLine: true },
+    );
+    order({ orderedOn: '2026-09-03', amount: 500, channel: 'Website' });
+    soldLines.push({ orderId: seq, revenue: 500, discount: 0, isDiscountLine: false });
+
+    const { weeks, totals } = await report();
+    const week = weeks.find((row) => row.weekStart === MON);
+
+    expect(week.discounts).toEqual({ total: 200, onItems: 100, coupons: 100, orders: 1 });
+    expect(totals).toMatchObject({ discounts: 200, discountOnItems: 100, discountCoupons: 100, discountedOrders: 1 });
+  });
+
+  it('leaves out drafts and B2B-tagged orders, whose revenue is not in the week either', async () => {
+    order({ orderedOn: '2026-09-02', amount: 900, channel: 'Website', countsAsRevenue: false });
+    soldLines.push({ orderId: seq, revenue: -300, discount: 0, isDiscountLine: true });
+    order({ orderedOn: '2026-09-02', amount: 900, channel: 'B2B' });
+    soldLines.push({ orderId: seq, revenue: -300, discount: 0, isDiscountLine: true });
+
+    const { totals } = await report();
+
+    expect(totals.discounts).toBe(0);
+  });
+});
+
+describe('dating — by the weekend slot the order is for', () => {
+  it('puts an order placed a week early into the week of its slot', async () => {
+    // Placed on Wednesday of the week before, for Saturday of this week.
+    order({ orderedOn: '2026-08-26', promisedDay: '2026-09-05', amount: 1200, channel: 'Website' });
+
+    const { weeks } = await buildWeeklyReport({ fromDate: '2026-08-24', toDate: '2026-09-06' });
+
+    expect(weeks.find((row) => row.weekStart === '2026-08-24').sales.b2c).toBe(0);
+    expect(weeks.find((row) => row.weekStart === MON).sales.b2c).toBe(1200);
   });
 });

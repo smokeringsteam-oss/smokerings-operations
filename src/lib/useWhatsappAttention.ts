@@ -162,6 +162,84 @@ export function useWhatsappInbox() {
   };
 }
 
+// ---- One open conversation ------------------------------------------------
+// The polled inbox only carries a short tail per thread. The chat pane fetches
+// the longer history for the one thread on screen, and fetches it again
+// whenever the inbox poll shows that thread has moved (`lastMessageAt`
+// changed) — so a customer's new message lands in the open chat on the same
+// one-minute beat as the badge, without a second timer.
+
+export type WhatsappConversation = {
+  channelId: number;
+  messages: WhatsappMessage[];
+  truncated: boolean;
+};
+
+export function useWhatsappConversation(channelId: number | null, lastMessageAt: string | null) {
+  const [conversation, setConversation] = useState<WhatsappConversation | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [reloadKey, setReloadKey] = useState(0);
+
+  useEffect(() => {
+    if (channelId === null) {
+      setConversation(null);
+      return;
+    }
+    let cancelled = false;
+    setLoading(true);
+    (async () => {
+      try {
+        const resp = await fetch(`/api/odoo/whatsapp/threads/${channelId}/messages`);
+        const body = await resp.json();
+        if (!resp.ok) throw new Error(body?.error || `Request failed (${resp.status})`);
+        if (!cancelled) {
+          setConversation(body as WhatsappConversation);
+          setError(null);
+        }
+      } catch (err) {
+        if (!cancelled) setError(err instanceof Error ? err.message : String(err));
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [channelId, lastMessageAt, reloadKey]);
+
+  // Switching threads must never flash the previous customer's messages.
+  const current = conversation && conversation.channelId === channelId ? conversation : null;
+
+  return {
+    conversation: current,
+    error,
+    loading: loading && !current,
+    reload: useCallback(() => setReloadKey((key) => key + 1), []),
+  };
+}
+
+export type WhatsappSendResult = {
+  messageId: number | null;
+  state: string | null;
+  failureReason: string | null;
+  queued: boolean;
+};
+
+// Sends a reply, then re-polls the shared inbox so the badge and the list
+// clear straight away rather than on the next tick.
+export async function sendWhatsappReply(channelId: number, text: string): Promise<WhatsappSendResult> {
+  const resp = await fetch(`/api/odoo/whatsapp/threads/${channelId}/reply`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text }),
+  });
+  const body = await resp.json();
+  if (!resp.ok) throw new Error(body?.error || `Send failed (${resp.status})`);
+  void load();
+  return body as WhatsappSendResult;
+}
+
 // What the sidebar bubble needs, and nothing else, so the badge doesn't
 // re-render on every field of every thread.
 export function useWhatsappAttentionCount(): number {

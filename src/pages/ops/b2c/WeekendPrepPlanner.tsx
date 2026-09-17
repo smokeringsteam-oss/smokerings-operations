@@ -4,7 +4,7 @@ import { revivedBoolean, usePersistedState } from '../../../lib/usePersistedStat
 import {
   boxesSaved,
   buildOrderSideGroups,
-  describePacking,
+  describeTotalPacking,
   sideBoxTotals,
   sideBoxTotalsFromCounts,
   type PackSlotId,
@@ -217,6 +217,9 @@ type BakeryRow = {
   hasUnparsedQty: boolean;
   unitPriceInr: number | null;
   orderMultiple: number | null;
+  // Garlic bread: bought by the baguette (totalQty), served by the slice.
+  pieceQty: number | null;
+  pieceUnit: string | null;
   vendorId: string | null;
   vendorName: string | null;
   orderQty: number;
@@ -248,13 +251,17 @@ const sauceSplit = (items: { itemId: string; count: number }[]) => {
 // 6-7 ribs) are the same cut in very different amounts. Split the card's items
 // by rib menu id (pork and beef alike, both sold as -ribs-250g) so the total
 // still reads as the dish-type count while the ribs line says what to smoke.
-// Any dish type with no ribs in it (burgers, tacos, quesadillas) returns null
-// and renders as before.
+// Burnt ends get their own count alongside, so the card accounts for every plate.
+// Any dish type with no ribs or burnt ends in it (burgers, tacos, quesadillas)
+// returns null and renders as before.
 const ribsSplit = (items: { itemId: string; count: number }[]) => {
   const countOf = (re: RegExp) => items.filter((i) => re.test(i.itemId)).reduce((n, i) => n + i.count, 0);
   const portions = countOf(/ribs-250g$/);
   const halfRacks = countOf(/ribs-half-rack$/);
-  return portions + halfRacks > 0 ? { total: portions + halfRacks, portions, halfRacks } : null;
+  const burntEnds = countOf(/burnt-ends/);
+  return portions + halfRacks + burntEnds > 0
+    ? { total: portions + halfRacks, portions, halfRacks, burntEnds }
+    : null;
 };
 
 type SideRow = {
@@ -278,7 +285,19 @@ type SideRow = {
 // Where a side is in the prep run for this weekend (server/ops/b2c/sidePrepStatus.js).
 type SidePrepStatus = 'pending' | 'making' | 'done';
 type SidePrepStatuses = Record<string, { status: SidePrepStatus; startedAt: string | null; doneAt: string | null }>;
-type SwiggyIngredient = { name: string; materialId: string | null; qty: number };
+// usedFor splits qty by the side it goes into (a prep's name, or the direct
+// item itself for something like Chips).
+type SwiggyIngredient = {
+  name: string;
+  materialId: string | null;
+  qty: number;
+  usedFor: { side: string; qty: number }[];
+  // Whole packs, where the price sheet has a pack size (and price) on file.
+  packs: number | null;
+  packSize: number | null;
+  orderQty: number | null;
+  costInr: number | null;
+};
 type SwiggyPlan = {
   dishTypeTotals: DishTypeTotal[];
   sides: SideRow[];
@@ -302,7 +321,7 @@ type SwiggyPlan = {
 // ---- Smoking-loss config ---------------------------------------------------
 // Converting served/output meat weight into raw purchase weight needs a loss
 // % per category. The planned number is config, not data: it comes from
-// server/core/meatConfig.js via the meat-plan response (50% pulled chicken, 56%
+// server/core/meatConfig.js via the meat-plan response (50% pulled chicken, 40%
 // pulled pork, 30% for everything that doesn't name its own). That's what
 // the buy figures use.
 //
@@ -324,6 +343,9 @@ type YieldStats = {
   jackfruit: LossStat | null;
   beefRibs: LossStat | null;
 };
+// yield-stats also carries, per category, sessions weighed raw but with no
+// finished weight logged yet — the reason a category can still have no average.
+type YieldStatsResponse = YieldStats & { inProgress?: Partial<Record<keyof YieldStats, number>> };
 type EffectiveLoss = {
   pct: number;
   // Where the number driving the buy figure came from: this meat's own
@@ -333,16 +355,8 @@ type EffectiveLoss = {
   // figure — null until a category has a completed session on file.
   measuredPct: number | null;
   sessionCount: number;
+  inProgressCount: number;
 };
-const LOSS_TILE_LABELS: Record<keyof YieldStats, string> = {
-  chicken: 'Chicken',
-  pulledPork: 'Pulled pork',
-  ribs: 'Ribs',
-  porkBelly: 'Pork belly',
-  jackfruit: 'Jackfruit',
-  beefRibs: 'Beef ribs',
-};
-
 // The loss % badge says two things at once: which number the buy figure
 // used, and what completed sessions have actually measured — so a planned %
 // that has drifted from reality is visible on the tile rather than only
@@ -368,9 +382,10 @@ const lossBadgeTitle = (loss: EffectiveLoss) => {
     : `${planned}. ${sessionsLabel(loss.sessionCount)} on file measured ${loss.measuredPct}% — edit meatConfig.js to adopt it.`;
 };
 
-// Static reference tile: every dish's contribution, then three plain-English
-// lines — Required / Buy raw / Wastage — so the whole calculation reads like
-// a checklist, not a black-box number.
+// Square reference tile: the buy weight is the hero, with the cooked total
+// under it. The per-dish working (and any rounding extra) folds behind a
+// "dishes" toggle so the tile stays square on a phone and still isn't a
+// black-box number.
 const MeatCategoryTile = ({
   icon,
   title,
@@ -405,33 +420,40 @@ const MeatCategoryTile = ({
         {loss.pct}% loss · {lossBadgeSuffix(loss)}
       </span>
     </div>
-    {breakdownLines.length > 0 && (
-      <ul className="inv-compact-breakdown">
-        {breakdownLines.map((line, index) => (
-          <li key={index}>
-            <span>{line.label}</span>
-            <span>
-              {line.count} × {line.gramsPerOrder}g = {formatWeight(line.grams)}
-            </span>
-          </li>
-        ))}
-      </ul>
-    )}
-    <div className="inv-compact-total">
-      <span>Required {requiredNoun}</span>
-      <span>{formatWeight(outputGrams)}</span>
-    </div>
     <div className="inv-compact-buy">
       <span className="inv-compact-buy-label">Buy raw {buyNoun}</span>
       <span className="inv-compact-buy-value">{buyLabel}</span>
+      <span className="inv-compact-buy-sub">
+        for {formatWeight(outputGrams)} {requiredNoun}
+      </span>
     </div>
-    {wastageGrams != null && (
-      <div className="inv-compact-waste">
-        <span>Wastage</span>
-        <span>{wastageGrams > 0 ? formatWeight(wastageGrams) : 'None'}</span>
-      </div>
+    {breakdownLines.length > 0 && (
+      <details className="inv-compact-details">
+        <summary>
+          {breakdownLines.length} dish{breakdownLines.length === 1 ? '' : 'es'}
+        </summary>
+        <ul className="inv-compact-breakdown">
+          {breakdownLines.map((line, index) => (
+            <li key={index}>
+              <span className="inv-compact-dish">
+                {line.label}
+                <small>
+                  {line.count} × {line.gramsPerOrder} g
+                </small>
+              </span>
+              <span className="inv-compact-dish-grams">{formatWeight(line.grams)}</span>
+            </li>
+          ))}
+        </ul>
+        {wastageGrams != null && wastageGrams > 0 && (
+          <div className="inv-compact-waste">
+            <span>Extra cooked, from rounding up</span>
+            <span>{formatWeight(wastageGrams)}</span>
+          </div>
+        )}
+        {extra}
+      </details>
     )}
-    {extra}
   </div>
 );
 
@@ -667,10 +689,14 @@ const WeekendPrepPlanner: React.FC = () => {
       applyExtractedOrders(entries, 'replace');
 
       if (entries.length) {
+        // Entries are the server's tally — one per dish × slot, already summed
+        // — so their count is not a count of anything the kitchen makes.
+        // Report the dishes (sum of quantities) instead.
+        const dishes = entries.reduce((sum, entry) => sum + (entry.quantity || 0), 0);
         setOdooStatus(
-          `Pulled ${ordersFound} confirmed order${ordersFound === 1 ? '' : 's'} from Odoo — added ${entries.length} line item${
-            entries.length === 1 ? '' : 's'
-          } to the dashboard.${quotationTail}`,
+          `Pulled ${ordersFound} confirmed order${ordersFound === 1 ? '' : 's'} from Odoo — ${dishes} dish${
+            dishes === 1 ? '' : 'es'
+          } added to the dashboard.${quotationTail}`,
         );
       } else {
         setOdooStatus(
@@ -859,7 +885,7 @@ const WeekendPrepPlanner: React.FC = () => {
   // completed sessions yet comes back null. Displayed next to the planned %
   // on every tile; only drives the buy figure where meatConfig.js sets
   // preferRealizedLoss on that category.
-  const [yieldStats, setYieldStats] = useState<YieldStats | null>(null);
+  const [yieldStats, setYieldStats] = useState<YieldStatsResponse | null>(null);
 
   useEffect(() => {
     // Failures are non-fatal: yieldStats stays null and every tile falls back
@@ -881,10 +907,11 @@ const WeekendPrepPlanner: React.FC = () => {
       const stat = yieldStats?.[category] ?? null;
       const measuredPct = stat ? stat.lossPct : null;
       const sessionCount = stat ? stat.sessionCount : 0;
+      const inProgressCount = yieldStats?.inProgress?.[category] ?? 0;
       if (stat && plan?.preferRealizedLoss) {
-        return { pct: stat.lossPct, source: 'measured', measuredPct, sessionCount };
+        return { pct: stat.lossPct, source: 'measured', measuredPct, sessionCount, inProgressCount };
       }
-      return { pct: plan?.lossPct ?? 0, source: plan?.lossSource ?? 'default', measuredPct, sessionCount };
+      return { pct: plan?.lossPct ?? 0, source: plan?.lossSource ?? 'default', measuredPct, sessionCount, inProgressCount };
     };
     return {
       chicken: pick('chicken'),
@@ -902,9 +929,9 @@ const WeekendPrepPlanner: React.FC = () => {
   // computeMeatPlan) so there's one combined raw/buy figure, not a separate
   // "racks to cut portions from" count — buying happens in kg, same as every
   // other category, since that's how every meat vendor on file actually
-  // prices it (₹/kg). Only pulled pork has a purchase-unit constraint today
-  // (pork shoulder's 1.2 kg minimum buy unit, meatConfig.js cut.minBuyKg,
-  // arriving as orderMultipleG) — the rest buy the exact raw weight needed.
+  // prices it (₹/kg). No category has a purchase-unit constraint today; setting
+  // meatConfig.js cut.minBuyKg (arriving as orderMultipleG) rounds that
+  // category's buy up to a multiple of it — the rest buy the exact raw weight.
   const rawMeatPlan = useMemo(() => {
     if (!meatPlan) return null;
     const buildCategory = (category: MeatCategoryPlan, lossPct: number) => {
@@ -913,7 +940,7 @@ const WeekendPrepPlanner: React.FC = () => {
       const buyGrams = category.orderMultipleG ? roundUpToMultiple(rawGrams, category.orderMultipleG) : rawGrams;
       // Wastage is measured in COOKED terms — you can't set aside "extra raw
       // meat" unsmoked, the whole cut goes on the smoker together. Only
-      // computable where buying rounds to a fixed unit (pulled pork's MOQ);
+      // computable where buying rounds to a fixed unit (a minBuyKg);
       // 0 elsewhere since buying the exact raw weight leaves nothing over.
       const wastageGrams = category.orderMultipleG ? buyGrams * yieldFraction - category.outputGrams : 0;
       return { ...category, rawGrams, buyGrams, wastageGrams };
@@ -1210,7 +1237,32 @@ const WeekendPrepPlanner: React.FC = () => {
       }))
       .filter((band) => band.rows.length > 0);
   }, [swiggyPlan]);
-  const totalSideBoxes = useMemo(() => sideBoxRows.reduce((sum, row) => sum + row.boxes, 0), [sideBoxRows]);
+  // The Instamart list grouped by what each ingredient goes into (Umami glaze →
+  // Oyster sauce, Worcestershire…), groups in the same order as the sides
+  // table. An ingredient two preps share appears under both, each with its own
+  // share, and carries the combined figure so the till total isn't lost.
+  const swiggyListBySide = useMemo(() => {
+    if (!swiggyPlan) return [];
+    const groups = new Map<string, { row: SwiggyIngredient; qty: number }[]>();
+    swiggyPlan.swiggyList.forEach((row) => {
+      row.usedFor.forEach(({ side, qty }) => {
+        groups.set(side, [...(groups.get(side) || []), { row, qty }]);
+      });
+    });
+    const sideOrder = swiggyPlan.sides.map((side) => side.name);
+    const rank = (name: string) => (sideOrder.indexOf(name) === -1 ? sideOrder.length : sideOrder.indexOf(name));
+    return Array.from(groups, ([side, rows]) => ({ side, rows }))
+      .sort((a, b) => rank(a.side) - rank(b.side) || a.side.localeCompare(b.side));
+  }, [swiggyPlan]);
+  // Priced raw ingredients (chips by the 100 g pack) plus the Instamart bakery
+  // lines — each ingredient counted once, however many sides share it.
+  const swiggyOrderTotal = useMemo(
+    () =>
+      (swiggyPlan?.swiggyList || []).reduce((sum, row) => sum + (row.costInr || 0), 0) +
+      (swiggyBakeryGroup?.totalCost || 0),
+    [swiggyPlan, swiggyBakeryGroup],
+  );
+  const totalSideBoxes =useMemo(() => sideBoxRows.reduce((sum, row) => sum + row.boxes, 0), [sideBoxRows]);
   // What the combining is worth across the weekend: boxes if every portion
   // were packed on its own, minus the boxes actually needed.
   const totalSideBoxesSaved = useMemo(
@@ -1384,95 +1436,63 @@ const WeekendPrepPlanner: React.FC = () => {
                   </p>
                   {meatPlanError && <p className="chat-error">Couldn't load meat needed: {meatPlanError}</p>}
                   {isLoadingMeatPlan && !rawMeatPlan && <p className="inv-note">Working out meat needed…</p>}
-                  {rawMeatPlan && (
-                    <div className="inv-compact-grid">
-                      <MeatCategoryTile
-                        icon="🐔"
-                        title={rawMeatPlan.chicken.label}
-                        colorClass="chicken"
-                        loss={effectiveLoss.chicken}
-                        requiredNoun="shredded chicken"
-                        buyNoun={rawMeatPlan.chicken.sourceMaterialName || 'chicken'}
-                        breakdownLines={rawMeatPlan.chicken.breakdown}
-                        outputGrams={rawMeatPlan.chicken.outputGrams}
-                        buyLabel={formatWeight(rawMeatPlan.chicken.buyGrams)}
-                        wastageGrams={rawMeatPlan.chicken.wastageGrams}
-                      />
-
-                      <MeatCategoryTile
-                        icon="🍖"
-                        title={rawMeatPlan.pulledPork.label}
-                        colorClass="pork"
-                        loss={effectiveLoss.pulledPork}
-                        requiredNoun="shredded pork"
-                        buyNoun={rawMeatPlan.pulledPork.sourceMaterialName || 'pork'}
-                        breakdownLines={rawMeatPlan.pulledPork.breakdown}
-                        outputGrams={rawMeatPlan.pulledPork.outputGrams}
-                        buyLabel={formatWeight(rawMeatPlan.pulledPork.buyGrams)}
-                        wastageGrams={rawMeatPlan.pulledPork.wastageGrams}
-                        extra={
-                          rawMeatPlan.pulledPork.orderMultipleG ? (
-                            <p className="inv-compact-caption">
-                              Needs {formatWeight(rawMeatPlan.pulledPork.rawGrams)}, rounded up to the{' '}
-                              {formatWeight(rawMeatPlan.pulledPork.orderMultipleG)} minimum buy unit.
+                  {rawMeatPlan &&
+                    (() => {
+                      const tiles = [
+                        { key: 'chicken', icon: '🐔', colorClass: 'chicken', requiredNoun: 'shredded chicken', fallbackBuy: 'chicken' },
+                        { key: 'pulledPork', icon: '🍖', colorClass: 'pork', requiredNoun: 'shredded pork', fallbackBuy: 'pork' },
+                        { key: 'ribs', icon: '🍗', colorClass: 'pork', requiredNoun: 'ribs', fallbackBuy: 'ribs' },
+                        { key: 'porkBelly', icon: '🥓', colorClass: 'pork', requiredNoun: 'pork belly', fallbackBuy: 'pork belly' },
+                        { key: 'jackfruit', icon: '🍈', colorClass: 'jackfruit', requiredNoun: 'pulled jackfruit', fallbackBuy: 'jackfruit' },
+                        { key: 'beefRibs', icon: '🐄', colorClass: 'beef', requiredNoun: 'beef ribs', fallbackBuy: 'beef ribs' },
+                      ] as const;
+                      // A cut nobody ordered is a full-size tile of zeros — list
+                      // those on one line instead so the grid is only what to buy.
+                      const needed = tiles.filter((tile) => rawMeatPlan[tile.key].buyGrams > 0);
+                      const notNeeded = tiles.filter((tile) => rawMeatPlan[tile.key].buyGrams <= 0);
+                      return (
+                        <>
+                          {needed.length > 0 ? (
+                            <div className="inv-compact-grid">
+                              {needed.map((tile) => {
+                                const category = rawMeatPlan[tile.key];
+                                return (
+                                  <MeatCategoryTile
+                                    key={tile.key}
+                                    icon={tile.icon}
+                                    title={category.label}
+                                    colorClass={tile.colorClass}
+                                    loss={effectiveLoss[tile.key]}
+                                    requiredNoun={tile.requiredNoun}
+                                    buyNoun={category.sourceMaterialName || tile.fallbackBuy}
+                                    breakdownLines={category.breakdown}
+                                    outputGrams={category.outputGrams}
+                                    buyLabel={formatWeight(category.buyGrams)}
+                                    wastageGrams={category.wastageGrams}
+                                    extra={
+                                      category.orderMultipleG ? (
+                                        <p className="inv-compact-caption">
+                                          Needs {formatWeight(category.rawGrams)}, rounded up to the{' '}
+                                          {formatWeight(category.orderMultipleG)} minimum buy unit.
+                                        </p>
+                                      ) : null
+                                    }
+                                  />
+                                );
+                              })}
+                            </div>
+                          ) : (
+                            <p className="inv-note">No meat to buy — nothing on the order sheet uses it yet.</p>
+                          )}
+                          {notNeeded.length > 0 && (
+                            <p className="inv-compact-skipped">
+                              <span>Not needed this weekend:</span>{' '}
+                              {notNeeded.map((tile) => `${tile.icon} ${rawMeatPlan[tile.key].label}`).join(' · ')}
                             </p>
-                          ) : null
-                        }
-                      />
-
-                      <MeatCategoryTile
-                        icon="🍗"
-                        title={rawMeatPlan.ribs.label}
-                        colorClass="pork"
-                        loss={effectiveLoss.ribs}
-                        requiredNoun="ribs"
-                        buyNoun={rawMeatPlan.ribs.sourceMaterialName || 'ribs'}
-                        breakdownLines={rawMeatPlan.ribs.breakdown}
-                        outputGrams={rawMeatPlan.ribs.outputGrams}
-                        buyLabel={formatWeight(rawMeatPlan.ribs.buyGrams)}
-                        wastageGrams={rawMeatPlan.ribs.wastageGrams}
-                      />
-
-                      <MeatCategoryTile
-                        icon="🥓"
-                        title={rawMeatPlan.porkBelly.label}
-                        colorClass="pork"
-                        loss={effectiveLoss.porkBelly}
-                        requiredNoun="pork belly"
-                        buyNoun={rawMeatPlan.porkBelly.sourceMaterialName || 'pork belly'}
-                        breakdownLines={rawMeatPlan.porkBelly.breakdown}
-                        outputGrams={rawMeatPlan.porkBelly.outputGrams}
-                        buyLabel={formatWeight(rawMeatPlan.porkBelly.buyGrams)}
-                        wastageGrams={rawMeatPlan.porkBelly.wastageGrams}
-                      />
-
-                      <MeatCategoryTile
-                        icon="🍈"
-                        title={rawMeatPlan.jackfruit.label}
-                        colorClass="jackfruit"
-                        loss={effectiveLoss.jackfruit}
-                        requiredNoun="pulled jackfruit"
-                        buyNoun={rawMeatPlan.jackfruit.sourceMaterialName || 'jackfruit'}
-                        breakdownLines={rawMeatPlan.jackfruit.breakdown}
-                        outputGrams={rawMeatPlan.jackfruit.outputGrams}
-                        buyLabel={formatWeight(rawMeatPlan.jackfruit.buyGrams)}
-                        wastageGrams={rawMeatPlan.jackfruit.wastageGrams}
-                      />
-
-                      <MeatCategoryTile
-                        icon="🐄"
-                        title={rawMeatPlan.beefRibs.label}
-                        colorClass="beef"
-                        loss={effectiveLoss.beefRibs}
-                        requiredNoun="beef ribs"
-                        buyNoun={rawMeatPlan.beefRibs.sourceMaterialName || 'beef ribs'}
-                        breakdownLines={rawMeatPlan.beefRibs.breakdown}
-                        outputGrams={rawMeatPlan.beefRibs.outputGrams}
-                        buyLabel={formatWeight(rawMeatPlan.beefRibs.buyGrams)}
-                        wastageGrams={rawMeatPlan.beefRibs.wastageGrams}
-                      />
-                    </div>
-                  )}
+                          )}
+                        </>
+                      );
+                    })()}
                   {meatPlan && meatPlan.gaps.length > 0 && (
                     <div className="prep-unmatched">
                       <strong>Data gaps found while working this out:</strong>
@@ -1533,7 +1553,12 @@ const WeekendPrepPlanner: React.FC = () => {
                           {group.rows.map((row) => (
                             <tr key={row.materialId || row.name}>
                               <td className="prep-item-col">{row.name}</td>
-                              <td className="prep-total-cell">{row.totalQty}</td>
+                              <td className="prep-total-cell">
+                                {row.totalQty}
+                                {row.pieceQty != null ? (
+                                  <span className="inv-note-inline"> ({row.pieceQty} {row.pieceUnit || 'pieces'})</span>
+                                ) : null}
+                              </td>
                               <td className="prep-total-cell">
                                 {row.orderQty}
                                 {row.orderMultiple ? (
@@ -1612,17 +1637,24 @@ const WeekendPrepPlanner: React.FC = () => {
                                 </div>
                               )}
                               {!split && ribs && (
-                                <div className="prep-summary-split">
-                                  <span>
-                                    Ribs <strong>{ribs.total}</strong>
-                                  </span>
-                                  {ribs.portions > 0 && (
+                                <div className="prep-summary-split prep-summary-split--stacked">
+                                  {ribs.burntEnds > 0 && (
                                     <span>
+                                      Pork burnt ends <strong>{ribs.burntEnds}</strong>
+                                    </span>
+                                  )}
+                                  {ribs.total > 0 && (
+                                    <span>
+                                      Ribs <strong>{ribs.total}</strong>
+                                    </span>
+                                  )}
+                                  {ribs.portions > 0 && (
+                                    <span className="prep-summary-split-sub">
                                       250 g <strong>{ribs.portions}</strong>
                                     </span>
                                   )}
                                   {ribs.halfRacks > 0 && (
-                                    <span>
+                                    <span className="prep-summary-split-sub">
                                       ½ rack <strong>{ribs.halfRacks}</strong>
                                     </span>
                                   )}
@@ -1638,17 +1670,12 @@ const WeekendPrepPlanner: React.FC = () => {
                   {swiggyPlan && swiggyPlan.sides.length > 0 && (
                     <>
                       <h3 className="inv-section-title">📦 Boxes to pack</h3>
-                      <p className="inv-section-hint">
-                        Not one box per portion — how many boxes the quantity actually fills. Each side's total
-                        is divided into the container it's packed in (a 15 g dressing goes in a 30 ml portion
-                        cup, so two of them share one cup; four 100 g salads fit one 30 oz box — sides
-                        measured in grams are counted against the box's millilitres 1:1). Boxes the kitchen
-                        counts by the serving are divided by portions instead: one caramelised onion or
-                        chopped onion to a 2 oz container, six chip portions to a foil sheet.{' '}
-                        {usingPerOrderBoxes
-                          ? 'Counted one order at a time, since sides only share a box within a single customer’s order.'
-                          : 'Counted a plate at a time — the individual orders aren’t loaded, so nothing is combined across a customer’s plates and this reads high.'}
-                      </p>
+                      {!usingPerOrderBoxes && (
+                        <p className="inv-section-hint">
+                          Counted a plate at a time — the individual orders aren’t loaded, so nothing is combined
+                          across a customer’s plates and this reads high.
+                        </p>
+                      )}
                       <p className="pack-sides-summary">
                         {totalSideBoxes} side box{totalSideBoxes === 1 ? '' : 'es'} for the weekend
                         {totalSideBoxesSaved > 0
@@ -1676,7 +1703,7 @@ const WeekendPrepPlanner: React.FC = () => {
                               </div>
                               <div className="pack-sides-box">
                                 {side.container
-                                  ? describePacking(side.portions, boxes, side.container)
+                                  ? describeTotalPacking(side.portions, boxes, side.container)
                                   : 'no container on file — 1 box per order'}
                               </div>
                             </div>
@@ -1687,13 +1714,6 @@ const WeekendPrepPlanner: React.FC = () => {
                   )}
 
                   <h3 className="inv-section-title">🥗 Sides needed — batch detail</h3>
-                  <p className="inv-section-hint">
-                    Same sides as the boxes above, broken out with prep detail — the box count and the
-                    container it goes in, then how much to actually prep or buy. Where a side is made
-                    in-house from a known-yield batch recipe, the batch count needed is shown too. Run
-                    top to bottom: the bands are the order the kitchen makes them in, and within a band
-                    the order is yours.
-                  </p>
                   {swiggyPlan && swiggyPlan.sides.length > 0 && (
                     <div className="prep-table-wrap">
                       <table className="prep-table">
@@ -1728,7 +1748,7 @@ const WeekendPrepPlanner: React.FC = () => {
                                   <td className="prep-total-cell">{side.portions}</td>
                                   <td className="prep-total-cell">
                                     {side.container
-                                      ? describePacking(
+                                      ? describeTotalPacking(
                                           side.portions,
                                           sideBoxByKey.get(side.key)?.boxes ?? side.boxes,
                                           side.container,
@@ -1767,61 +1787,95 @@ const WeekendPrepPlanner: React.FC = () => {
                   {sidePrepError && <p className="chat-error">{sidePrepError}</p>}
 
                   <h3 className="inv-section-title">🛒 Swiggy Instamart order (raw ingredients)</h3>
-                  <p className="inv-section-hint">
-                    Everything on the Instamart run in one list — the raw groceries behind the sides above
-                    (in-house preps with a known batch yield broken down into what goes into them, direct items
-                    like Chips listed as-is), plus the Bakery-category items that come off Instamart rather
-                    than the bakery.
-                  </p>
                   {swiggyPlan && (swiggyPlan.swiggyList.length > 0 || swiggyBakeryGroup) ? (
                     <div className="prep-table-wrap">
-                      <table className="prep-table">
+                      <table className="prep-table swiggy-table">
                         <thead>
                           <tr>
                             <th className="prep-item-col">Ingredient</th>
-                            <th>Quantity needed</th>
-                            <th>Order qty</th>
-                            <th>Est. cost</th>
+                            <th className="swiggy-num">Needed</th>
+                            <th className="swiggy-num">Order</th>
+                            <th className="swiggy-num">Est. cost</th>
                           </tr>
                         </thead>
                         <tbody>
-                          {swiggyPlan.swiggyList.map((row) => (
-                            <tr key={row.materialId || row.name}>
-                              <td className="prep-item-col">{row.name}</td>
-                              <td className="prep-total-cell">{row.qty}</td>
-                              {/* Raw ingredients carry no order multiple or unit
-                                  price in the materials catalogue — buy the
-                                  quantity needed, priced at the till. */}
-                              <td className="prep-total-cell">—</td>
-                              <td className="prep-total-cell">—</td>
-                            </tr>
+                          {swiggyListBySide.map((group) => (
+                            <Fragment key={group.side}>
+                              <tr className="prep-group-row">
+                                <td colSpan={4}>{group.side}</td>
+                              </tr>
+                              {group.rows.map(({ row, qty }) => {
+                                const otherSides = row.usedFor.map((use) => use.side).filter((side) => side !== group.side);
+                                // Packs and cost only where the price sheet has a pack size on
+                                // file, and only on the first side a shared ingredient is listed
+                                // under, so the order isn't doubled. Otherwise buy what's needed,
+                                // priced at the till.
+                                const priced = row.packs != null && row.usedFor[0]?.side === group.side;
+                                return (
+                                  <tr key={row.materialId || row.name}>
+                                    <td className="prep-item-col">
+                                      <div className="swiggy-name">{row.name}</div>
+                                      {otherSides.length > 0 && (
+                                        <div className="swiggy-sub">
+                                          Also in {otherSides.join(', ')} · {row.qty} total
+                                        </div>
+                                      )}
+                                    </td>
+                                    <td className="swiggy-num">{qty}</td>
+                                    <td className="swiggy-num">
+                                      {priced ? (
+                                        <>
+                                          {row.orderQty}
+                                          <div className="swiggy-sub">
+                                            {row.packs} × {row.packSize}
+                                          </div>
+                                        </>
+                                      ) : (
+                                        <span className="swiggy-empty">—</span>
+                                      )}
+                                    </td>
+                                    <td className="swiggy-num swiggy-cost">
+                                      {priced && row.costInr != null ? (
+                                        inrFormat(row.costInr)
+                                      ) : (
+                                        <span className="swiggy-empty">—</span>
+                                      )}
+                                    </td>
+                                  </tr>
+                                );
+                              })}
+                            </Fragment>
                           ))}
+                          {swiggyBakeryGroup && swiggyBakeryGroup.rows.length > 0 && (
+                            <tr className="prep-group-row">
+                              <td colSpan={4}>Bakery items bought on Instamart</td>
+                            </tr>
+                          )}
                           {swiggyBakeryGroup?.rows.map((row) => (
                             <tr key={row.materialId || row.name}>
                               <td className="prep-item-col">
-                                {row.name}
-                                <span className="inv-note-inline"> (bakery item, bought here)</span>
+                                <div className="swiggy-name">{row.name}</div>
                               </td>
-                              <td className="prep-total-cell">{row.totalQty}</td>
-                              <td className="prep-total-cell">
+                              <td className="swiggy-num">{row.totalQty}</td>
+                              <td className="swiggy-num">
                                 {row.orderQty}
                                 {row.orderMultiple ? (
-                                  <span className="inv-note-inline"> (multiples of {row.orderMultiple})</span>
+                                  <div className="swiggy-sub">in multiples of {row.orderMultiple}</div>
                                 ) : null}
                               </td>
-                              <td className="prep-total-cell inv-cost-cell">
-                                {row.costInr != null ? inrFormat(row.costInr) : '—'}
+                              <td className="swiggy-num swiggy-cost">
+                                {row.costInr != null ? inrFormat(row.costInr) : <span className="swiggy-empty">—</span>}
                               </td>
                             </tr>
                           ))}
                         </tbody>
-                        {swiggyBakeryGroup && swiggyBakeryGroup.totalCost > 0 && (
+                        {swiggyOrderTotal > 0 && (
                           <tfoot>
                             <tr className="inv-total-row">
                               <td className="prep-item-col" colSpan={3}>
-                                Estimated cost of the priced lines above
+                                Estimated cost of the priced lines
                               </td>
-                              <td className="prep-total-cell prep-grand-total">{inrFormat(swiggyBakeryGroup.totalCost)}</td>
+                              <td className="swiggy-num prep-grand-total">{inrFormat(swiggyOrderTotal)}</td>
                             </tr>
                           </tfoot>
                         )}
@@ -1841,45 +1895,6 @@ const WeekendPrepPlanner: React.FC = () => {
                       </ul>
                     </div>
                   )}
-
-                  <div className="prep-unmatched">
-                    <strong>Assumptions to double-check:</strong>
-                    <ul>
-                      <li>
-                        Buy figures use the planned loss %s set in server/core/meatConfig.js — 50% pulled chicken, 56%
-                        pulled pork, 30% for every other meat — not the smoking-session history. Planned:{' '}
-                        {(Object.keys(LOSS_TILE_LABELS) as (keyof YieldStats)[])
-                          .map((k) => `${LOSS_TILE_LABELS[k]} (${effectiveLoss[k].pct}%)`)
-                          .join(', ')}
-                        .{' '}
-                        {(Object.keys(LOSS_TILE_LABELS) as (keyof YieldStats)[]).some((k) => effectiveLoss[k].measuredPct != null) ? (
-                          <>
-                            Completed sessions (Smoking Session → Resting/Shredding logs raw vs. finished weight)
-                            have measured:{' '}
-                            {(Object.keys(LOSS_TILE_LABELS) as (keyof YieldStats)[])
-                              .filter((k) => effectiveLoss[k].measuredPct != null)
-                              .map((k) => `${LOSS_TILE_LABELS[k]} (${effectiveLoss[k].measuredPct}%, ${effectiveLoss[k].sessionCount} session${effectiveLoss[k].sessionCount === 1 ? '' : 's'})`)
-                              .join(', ')}
-                            {' '}— shown for comparison only. Edit meatConfig.js to adopt a measured number.
-                          </>
-                        ) : (
-                          <>No completed smoking sessions on file yet to compare against.</>
-                        )}
-                      </li>
-                      <li>
-                        Per-order meat weights come from the recipe lines and the Bread Time Stories
-                        order from the materials catalogue; the loss %s and which cut each meat is bought as (pulled
-                        chicken → chicken legs, pulled pork → pork shoulder) are config in server/core/meatConfig.js —
-                        see any gaps listed above the Meat needed tiles for anything still missing. Ribs and
-                        chicken buy quantities are shown in kg (how Karnataka Pork Shop/Nayas Chicken actually
-                        price them), not a rack/leg count — there's no reliable per-rack or per-leg raw weight on
-                        file to convert to.
-                      </li>
-                      <li>Pulled pork can only be bought in 1.2kg minimum units (server/core/meatConfig.js, pulledPork cut.minBuyKg) — the Buy figure is rounded up to the nearest 1.2kg, shown alongside the exact amount needed.</li>
-                      <li>Bun/taco-shell/garlic-bread prices and order multiples (the materials catalogue's standard_cost_inr/order_multiple) are kitchen figures, not yet vendor-invoice-confirmed in writing — worth double-checking with Bread Time Stories. Tortilla's ₹30/pc and 6-piece minimum are the Swiggy pack price (₹180 for 6) divided out, so they move with whatever Instamart is charging that week.</li>
-                      <li>Sides needed &amp; the Swiggy order above are driven by the menu, recipe lines and recipes instead of guesses — see "Data gaps found" above for anything still missing from that data.</li>
-                    </ul>
-                  </div>
                 </>
               )}
             </div>

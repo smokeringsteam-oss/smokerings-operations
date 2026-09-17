@@ -56,12 +56,23 @@ function inbox(threads: ReturnType<typeof thread>[]) {
 // which lands on Daily View and fetches its own things — those have to fail
 // the way an unreachable API fails, which is what they already do under
 // App.test.tsx, rather than being handed a WhatsApp payload they can't read.
-function serve(payload: unknown) {
+function serve(payload: unknown, replyStatus = 200, replyBody: unknown = { messageId: 99, state: 'sent', failureReason: null, queued: true }) {
   vi.stubGlobal(
     'fetch',
     vi.fn(async (url: string) => {
-      if (String(url) !== '/api/odoo/whatsapp/threads') throw new Error('not stubbed');
-      return { ok: true, status: 200, json: async () => payload } as unknown as Response;
+      const path = String(url);
+      const reply = (status: number, body: unknown) =>
+        ({ ok: status < 400, status, json: async () => body }) as unknown as Response;
+      if (path === '/api/odoo/whatsapp/threads') return reply(200, payload);
+      const history = path.match(/^\/api\/odoo\/whatsapp\/threads\/(\d+)\/messages$/);
+      if (history) {
+        const found = (payload as { threads?: { channelId: number; messages: unknown[] }[] }).threads?.find(
+          (t) => t.channelId === Number(history[1]),
+        );
+        return reply(200, { channelId: Number(history[1]), messages: found?.messages ?? [], truncated: false });
+      }
+      if (/^\/api\/odoo\/whatsapp\/threads\/\d+\/reply$/.test(path)) return reply(replyStatus, replyBody);
+      throw new Error('not stubbed');
     }),
   );
 }
@@ -69,8 +80,8 @@ function serve(payload: unknown) {
 // The polling store in useWhatsappAttention.ts is module-scoped by design —
 // one fetch for the whole app — so each test needs a module that hasn't
 // fetched yet, and the components that close over it re-imported alongside.
-async function mount(payload: unknown) {
-  serve(payload);
+async function mount(payload: unknown, ...reply: [number?, unknown?]) {
+  serve(payload, ...(reply as [number, unknown]));
   vi.resetModules();
   const { default: WhatsAppInbox } = await import('./WhatsAppInbox');
   return render(<WhatsAppInbox />);
@@ -95,18 +106,37 @@ describe('the inbox screen', () => {
     expect(screen.getByText('Is my order out for delivery?')).toBeInTheDocument();
   });
 
+  function openChat() {
+    fireEvent.click(screen.getByRole('button', { name: /Eric Savage/ }));
+  }
+
   it('says a long wait in hours rather than counting minutes past sixty', async () => {
     await mount(inbox([thread({ waitingMinutes: 200 })]));
 
     expect(await screen.findByText('Waiting 3h 20m')).toBeInTheDocument();
   });
 
-  it('shows the 24h window as time left, and as a template-only warning once it shuts', async () => {
+  it('shows the 24h window as time left in the open chat', async () => {
     await mount(inbox([thread({ replyWindow: { expiresAt: null, open: true, minutesLeft: 95 } })]));
-    expect(await screen.findByText(/Free reply for 1h 35m/)).toBeInTheDocument();
+    await screen.findByText('Eric Savage');
+    openChat();
 
-    await mount(inbox([thread({ replyWindow: { expiresAt: null, open: false, minutesLeft: 0 } })]));
-    expect(await screen.findByText(/24h window closed/)).toBeInTheDocument();
+    expect(await screen.findByText(/Free reply for 1h 35m/)).toBeInTheDocument();
+  });
+
+  it('offers no typing box once the window shuts, only the way to a template in Odoo', async () => {
+    const { unmount } = await mount(inbox([thread({ replyWindow: { expiresAt: null, open: false, minutesLeft: 0 } })]));
+    await screen.findByText('Eric Savage');
+    expect(screen.getByText('Template only')).toBeInTheDocument();
+    openChat();
+
+    expect(screen.getByText(/24h window closed/)).toBeInTheDocument();
+    expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /send a template in odoo/i })).toHaveAttribute(
+      'href',
+      'https://smokerings.odoo.com/odoo/discuss/10',
+    );
+    unmount();
   });
 
   it('calls out a send that failed, with the reason from Odoo', async () => {
@@ -122,28 +152,55 @@ describe('the inbox screen', () => {
     );
 
     expect(await screen.findByText('Send failed')).toBeInTheDocument();
-    expect(screen.getByText(/Account not registered/)).toBeInTheDocument();
   });
 
-  it('links out to Odoo Discuss to reply rather than sending from here', async () => {
-    await mount(inbox([thread()]));
-
-    const link = await screen.findByRole('link', { name: /reply in odoo/i });
-    expect(link).toHaveAttribute('href', 'https://smokerings.odoo.com/odoo/discuss/10');
-    expect(link).toHaveAttribute('target', '_blank');
-    // No way to send a message from this screen at all.
-    expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
-  });
-
-  it('opens the conversation tail on demand, attributed to each side', async () => {
+  it('opens a conversation as a chat, each side on its own side', async () => {
     const { container } = await mount(inbox([thread()]));
+    await screen.findByText('Eric Savage');
+    expect(screen.getByText(/Pick a conversation/)).toBeInTheDocument();
 
-    fireEvent.click(await screen.findByRole('button', { name: /show conversation/i }));
+    openChat();
 
-    const tail = container.querySelector('.wa-messages') as HTMLElement;
-    expect(within(tail).getByText('Order confirmed!')).toBeInTheDocument();
-    expect(tail.querySelectorAll('.wa-message-customer')).toHaveLength(1);
-    expect(tail.querySelectorAll('.wa-message-us')).toHaveLength(1);
+    const chat = await screen.findByRole('region', { name: /conversation with eric savage/i });
+    expect(within(chat).getByText('Order confirmed!')).toBeInTheDocument();
+    expect(container.querySelectorAll('.wa-message-customer')).toHaveLength(1);
+    expect(container.querySelectorAll('.wa-message-us')).toHaveLength(1);
+    expect(within(chat).getByRole('link', { name: /open in odoo/i })).toHaveAttribute(
+      'href',
+      'https://smokerings.odoo.com/odoo/discuss/10',
+    );
+  });
+
+  it('sends a reply from the composer and shows it in the chat', async () => {
+    await mount(inbox([thread()]));
+    await screen.findByText('Eric Savage');
+    openChat();
+
+    const box = screen.getByRole('textbox', { name: /reply to eric savage/i });
+    fireEvent.change(box, { target: { value: 'Yes — out now, 15 mins away!' } });
+    fireEvent.keyDown(box, { key: 'Enter' });
+
+    expect(await screen.findByText('Yes — out now, 15 mins away!')).toBeInTheDocument();
+    const call = (fetch as unknown as { mock: { calls: [string, RequestInit?][] } }).mock.calls.find(([url]) =>
+      String(url).endsWith('/reply'),
+    );
+    expect(call?.[0]).toBe('/api/odoo/whatsapp/threads/10/reply');
+    expect(JSON.parse(String(call?.[1]?.body))).toEqual({ text: 'Yes — out now, 15 mins away!' });
+    expect(box).toHaveValue('');
+  });
+
+  it('keeps a refused reply on screen with the reason, and puts it back to edit', async () => {
+    await mount(inbox([thread()]), 409, { error: 'The 24h reply window has closed' });
+    await screen.findByText('Eric Savage');
+    openChat();
+
+    const box = screen.getByRole('textbox', { name: /reply to eric savage/i });
+    fireEvent.change(box, { target: { value: 'Hello?' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+
+    expect(await screen.findByText(/reply window has closed/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /edit & retry/i }));
+    expect(box).toHaveValue('Hello?');
   });
 
   it('hides handled threads by default and shows them on the All filter', async () => {

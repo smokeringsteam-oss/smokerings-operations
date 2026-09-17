@@ -1,4 +1,4 @@
-Reddit Automation
+Smoke Rings BBQ Automation
 
 1) Open new terminal and paste below command
 
@@ -24,9 +24,8 @@ wire, so a screen and the endpoints behind it sit next to each other.
         shared/               shared/    used by both channels: purchasing,
                                          smoking, order packing
       sprint/               sprint/      sprint board + daily view
-      marketing/            marketing/   ROI, tracked links & QR, Reddit,
+      marketing/            marketing/   ROI, tracked links & QR,
                                          Insta reels
-      tools/                             CSV editor
 
 `server/core/` holds the knowledge-base CSV plumbing and the meat/packaging
 config every module reads; `server/integrations/` wraps the outside world

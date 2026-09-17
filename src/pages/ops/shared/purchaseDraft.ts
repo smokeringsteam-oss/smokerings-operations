@@ -52,6 +52,9 @@ export const DRAFT_VERSION = 1;
 // Generous enough that a Friday cart logged on Monday still comes back.
 export const MAX_DRAFT_AGE_DAYS = 14;
 
+export type LinePurpose = 'Order' | 'Practice';
+const asPurpose = (value: unknown): LinePurpose => (value === 'Practice' ? 'Practice' : 'Order');
+
 export type DraftCartLine = {
   key: string;
   materialId: string;
@@ -61,6 +64,8 @@ export type DraftCartLine = {
   weightPerUnitKg: number;
   clientId: string;
   clientName: string;
+  // 'Order' or 'Practice' — see PURCHASE_PURPOSES in server/ops/shared/purchasing.js.
+  purpose: LinePurpose;
   billText?: string;
   matched?: boolean;
   derivedPrice?: boolean;
@@ -79,6 +84,13 @@ export type DraftScanReview = {
   dateUsed: boolean;
   notes: string;
   skipped: { itemName: string; reason: string }[];
+  // The date printed on the bill, when the scan read one that is not in this
+  // week. It is a question, not a note — keep the bill's date or file the buy
+  // under today — and it survives with the cart because a cart restored on
+  // Monday morning is exactly when the question still needs answering.
+  // `billDateChoice` is what was answered, null while it is still open.
+  billDate?: string;
+  billDateChoice?: 'bill' | 'today' | null;
 };
 
 // The half-typed line in the add-line form. Kept for the same reason as the
@@ -93,6 +105,7 @@ export type DraftEntry = {
   weightPerPiece: string;
   boughtByPiece: boolean;
   lineClientId: string;
+  linePurpose: LinePurpose;
 };
 
 export type PurchaseDraftState = {
@@ -116,6 +129,7 @@ export const EMPTY_ENTRY: DraftEntry = {
   weightPerPiece: '',
   boughtByPiece: false,
   lineClientId: '',
+  linePurpose: 'Order',
 };
 
 export type RestoredPurchase = PurchaseDraftState & {
@@ -190,6 +204,7 @@ function restoreLine(entry: Record<string, unknown>, index: number, usedKeys: Se
     weightPerUnitKg: Math.max(0, asNumber(entry.weightPerUnitKg, 0)),
     clientId: asString(entry.clientId),
     clientName: asString(entry.clientName),
+    purpose: asPurpose(entry.purpose),
     billText: asString(entry.billText) || undefined,
     matched: typeof entry.matched === 'boolean' ? entry.matched : undefined,
     derivedPrice: typeof entry.derivedPrice === 'boolean' ? entry.derivedPrice : undefined,
@@ -226,6 +241,7 @@ function restoreEntry(value: unknown): DraftEntry {
     weightPerPiece: asString(value.weightPerPiece),
     boughtByPiece: asBool(value.boughtByPiece),
     lineClientId: asString(value.lineClientId),
+    linePurpose: asPurpose(value.linePurpose),
   };
 }
 

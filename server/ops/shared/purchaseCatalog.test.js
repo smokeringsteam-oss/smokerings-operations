@@ -272,3 +272,4 @@ describe('mapping an ad hoc line to an item already in the catalogue', () => {
     expect(() => purchasing.linkPurchaseToMaterial({ purchaseId: uncataloguedId() })).toThrow(/materialId is required/);
   });
 });
+

@@ -29,7 +29,12 @@
 // the pre-save value it fetched and appear to undo the change.
 import { all } from '../../core/db.js';
 import { selectOne, update, upsert } from '../../core/repo.js';
-import { tagSaleOrderStatus, setFulfilmentStatus, createAndPostInvoice } from '../../integrations/odoo.js';
+import {
+  tagSaleOrderStatus,
+  setFulfilmentStatus,
+  setDeliveryTrackingUrl,
+  createAndPostInvoice,
+} from '../../integrations/odoo.js';
 
 // The full order pipeline, in order — kept here as the single source of
 // truth for validation, the per-status "_at" column it stamps, and (via
@@ -57,6 +62,7 @@ function rowToStatus(row) {
     channel: row.channel || null,
     status: row.status || 'pending',
     deliveryPerson: row.delivery_person || null,
+    trackingUrl: row.tracking_url || null,
     ...stageTimes,
     invoice: row.invoice_number
       ? { number: row.invoice_number, id: row.invoice_id == null ? null : String(row.invoice_id), url: row.invoice_url || null }
@@ -215,4 +221,81 @@ async function retryInvoice({ orderId, orderName }) {
   return { ...rowToStatus(loadOrder(orderId)), odooFulfilment };
 }
 
-export { getPackingStatuses, setPackingStatus, retryInvoice };
+// A Porter tracking link, as pasted. Porter's share text puts words around
+// the link ("Track your order: https://porter.in/..."), so the first URL in
+// whatever was pasted is taken rather than rejecting the lot. Any http(s) URL
+// is accepted, not only porter.in — the day a different courier is used, the
+// field should not refuse its link. Porter's share sheet often drops the
+// scheme ("porter.in/rd/b98a3b5ba4"), so a host-and-path with no scheme is
+// taken too and given https — a path is required there, so a sentence with a
+// stray "e.g." in it isn't mistaken for a link.
+function cleanTrackingUrl(raw) {
+  const text = String(raw || '');
+  const found =
+    text.match(/https?:\/\/[^\s<>"']+/i) || text.match(/(?:[a-z0-9-]+\.)+[a-z]{2,}\/[^\s<>"']+/i);
+  if (!found) return null;
+  const link = found[0].replace(/[).,;]+$/, '');
+  try {
+    const url = new URL(/^https?:\/\//i.test(link) ? link : `https://${link}`);
+    return url.protocol === 'http:' || url.protocol === 'https:' ? url.toString() : null;
+  } catch {
+    return null;
+  }
+}
+
+// What goes into Odoo's Delivery Tracking URL field. For a Porter link that's
+// only the part after the host ("rd/b98a3b5ba4") — the pitmaster's call, to
+// keep the field short on the order form. The public tracker on the website
+// (smokey-rings api/lib/delivery_tracking.php) puts https://porter.in/ back in
+// front. Any other courier's link goes in whole, since nothing could rebuild it.
+function odooTrackingValue(url) {
+  const parsed = new URL(url);
+  if (!/(^|\.)porter\.in$/i.test(parsed.hostname)) return url;
+  return `${parsed.pathname}${parsed.search}${parsed.hash}`.replace(/^\/+/, '');
+}
+
+// Saves the tracking link, and with `advance` also moves the order to Out
+// for Delivery through the normal status path (Odoo field, tag and all). The
+// board decides `advance` because it knows the stage Odoo shows, which this
+// row may lag. Without it only the link changes — correcting a link on a
+// Delivered order must not re-run the invoice step.
+async function setTrackingLink({ orderId, orderName, trackingUrl, channel, advance }) {
+  if (!orderId || !orderName) {
+    const err = new Error('orderId and orderName are required.');
+    err.status = 400;
+    throw err;
+  }
+  const url = cleanTrackingUrl(trackingUrl);
+  if (!url) {
+    const err = new Error("That doesn't look like a tracking link — paste the https:// link Porter shares.");
+    err.status = 400;
+    throw err;
+  }
+
+  const existing = loadOrder(orderId);
+  upsert('sales_order', ['order_id'], {
+    order_id: Number(orderId),
+    order_name: orderName,
+    status: existing?.status || 'pending',
+    channel: channel || existing?.channel || 'B2C',
+    tracking_url: url,
+    updated_at: new Date().toISOString(),
+  });
+
+  // Best-effort like the Fulfilment Status push: the link is saved here
+  // either way, and a failure comes back so the card can say Odoo missed it.
+  let odooTrackingError = null;
+  try {
+    await setDeliveryTrackingUrl({ orderId, value: odooTrackingValue(url) });
+  } catch (err) {
+    odooTrackingError = err.message || String(err);
+    console.error(`Failed to set Odoo Delivery Tracking URL on ${orderName}:`, odooTrackingError);
+  }
+
+  const result = advance
+    ? await setPackingStatus({ orderId, orderName, status: 'out_for_delivery', channel })
+    : rowToStatus(loadOrder(orderId));
+  return { ...result, odooTrackingError };
+}
+
+export { getPackingStatuses, setPackingStatus, setTrackingLink, retryInvoice, cleanTrackingUrl, odooTrackingValue };

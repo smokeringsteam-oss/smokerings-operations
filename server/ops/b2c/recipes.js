@@ -60,6 +60,7 @@
 // there.
 import { readMenu, readRecipes, readRecipeLines } from '../../core/kbViews.js';
 import { getRawMaterials } from '../../core/inventoryStore.js';
+import { basisOf } from '../../core/purchaseUnits.js';
 import { getVendors } from '../shared/purchasing.js';
 // The meat categories, their loss %s and which cut each one is bought as —
 // see server/core/meatConfig.js, the one file to edit when any of that changes.
@@ -139,6 +140,7 @@ const PREP_TIERS = [
 // there is one, else material id. Anything unlisted falls to tier 3 if it has
 // a batch recipe, tier 4 if it doesn't.
 const SIDE_PREP_TIER = {
+  'SR-011': 1, // Taco seasoning — goes on the meat, so it's ready before the tacos are built
   'SR-013': 1, // Sour cream
   'SR-015': 1, // BBQ sauce
   'SR-014': 2, // Salsa verde
@@ -303,15 +305,18 @@ function computeSwiggyPlan({ orderCounts }) {
   // so an ingredient that two recipes state on different scales now totals to
   // a number that is wrong without saying so — the one thing lost here that
   // was not just a label.
-  const addQtyToMap = (map, name, materialId, qty) => {
+  // `usedFor` keeps the per-side split (Oyster sauce → Umami glaze 60) so the
+  // board can group the buy list by what each ingredient goes into.
+  const addQtyToMap = (map, name, materialId, qty, usedFor) => {
     const key = materialId || name;
-    const existing = map.get(key);
-    if (existing) existing.qty += qty;
-    else map.set(key, { name, materialId, qty });
+    const existing = map.get(key) || { name, materialId, qty: 0, usedFor: new Map() };
+    existing.qty += qty;
+    existing.usedFor.set(usedFor, (existing.usedFor.get(usedFor) || 0) + qty);
+    map.set(key, existing);
   };
-  const addToSwiggyList = (name, materialId, qty) => {
+  const addToSwiggyList = (name, materialId, qty, usedFor) => {
     const map = materialId && SOURCE_FROM_INVENTORY_MATERIAL_IDS.has(materialId) ? inventoryIngredients : swiggyIngredients;
-    addQtyToMap(map, name, materialId, qty);
+    addQtyToMap(map, name, materialId, qty, usedFor);
   };
 
   const sideRows = Array.from(sides.values()).map((side) => {
@@ -319,7 +324,7 @@ function computeSwiggyPlan({ orderCounts }) {
 
     if (side.materialId) {
       // Already a purchasable raw material — it IS the buy item.
-      if (side.totalQty > 0) addToSwiggyList(side.name, side.materialId, side.totalQty);
+      if (side.totalQty > 0) addToSwiggyList(side.name, side.materialId, side.totalQty, side.name);
     } else if (side.subRecipeId) {
       const subRecipe = subRecipeById.get(side.subRecipeId);
       const outputQty = parseQty(subRecipe?.output_quantity);
@@ -364,7 +369,7 @@ function computeSwiggyPlan({ orderCounts }) {
           if (row.status === 'needs_confirmation' && row.notes) {
             gaps.push(`${side.subRecipeId} (${side.name}) ${row.child_name}: ${row.notes}`);
           }
-          addToSwiggyList(row.child_name, row.child_id || null, rowQty * batches);
+          addToSwiggyList(row.child_name, row.child_id || null, rowQty * batches, side.name);
         });
       }
     } else if (side.notes) {
@@ -414,11 +419,35 @@ function computeSwiggyPlan({ orderCounts }) {
   }
 
   sideRows.sort((a, b) => b.portions - a.portions);
+  const round2 = (n) => Math.round(n * 100) / 100;
+  // A raw ingredient with a pack size and a price on the price sheet (chips:
+  // ₹200 per 100 g) is bought in whole packs, so the order rounds up to them
+  // and is costed per pack. Anything missing either half stays "buy what's
+  // needed, priced at the till".
+  const packOrder = (row) => {
+    const material = row.materialId ? rawMaterialsById.get(row.materialId) : null;
+    const basis = material ? basisOf(row.materialId, material.cost_basis) : null;
+    const packPrice = material ? parseQty(material.standard_cost_inr) : null;
+    if (!basis || !(basis.bomUnits > 0)) return { packs: null, packSize: null, orderQty: null, costInr: null };
+    const packs = Math.ceil(round2(row.qty) / basis.bomUnits);
+    return {
+      packs,
+      packSize: basis.bomUnits,
+      orderQty: round2(packs * basis.bomUnits),
+      costInr: packPrice != null && packPrice > 0 ? round2(packs * packPrice) : null,
+    };
+  };
+  const toListRow = (row) => ({
+    ...row,
+    qty: round2(row.qty),
+    usedFor: Array.from(row.usedFor, ([side, qty]) => ({ side, qty: round2(qty) })),
+    ...packOrder(row),
+  });
   const swiggyList = Array.from(swiggyIngredients.values())
-    .map((row) => ({ ...row, qty: Math.round(row.qty * 100) / 100 }))
+    .map(toListRow)
     .sort((a, b) => a.name.localeCompare(b.name));
   const fromInventory = Array.from(inventoryIngredients.values())
-    .map((row) => ({ ...row, qty: Math.round(row.qty * 100) / 100 }))
+    .map(toListRow)
     .sort((a, b) => a.name.localeCompare(b.name));
 
   // prepTiers travels with the plan so the tier labels live in one place
@@ -514,6 +543,18 @@ function computeMeatPlan({ orderCounts }) {
 // sold it.
 const PREP_CATEGORY = 'Bakery';
 
+// What a separately-counted line is counted in, for a material bought whole
+// and served in pieces — garlic bread is bought by the baguette and plated by
+// the slice. The recipe line's base_quantity is the baguette fraction the
+// order is rounded from; its quantity is the slice count. The word itself
+// isn't stored anywhere but the material's "~30 slices" note, so it's read
+// from there (cost_basis first, since the price sheet writes that one).
+const PIECE_UNIT_RE = /~\s*\d+(?:\.\d+)?\s+([a-z]+)/i;
+function pieceUnitOf(material) {
+  const match = PIECE_UNIT_RE.exec(material.cost_basis || '') || PIECE_UNIT_RE.exec(material.notes || '');
+  return match ? match[1].toLowerCase() : null;
+}
+
 // orderCounts: { [menuItemId]: totalQuantityOrdered }
 function computePrepPlan({ orderCounts }) {
   const counts = orderCounts || {};
@@ -548,10 +589,17 @@ function computePrepPlan({ orderCounts }) {
       // "unassigned" rather than silently folding it into a real vendor.
       vendorId: material.default_vendor_id || null,
       vendorName: vendorNameById.get(material.default_vendor_id) || null,
+      // Slices (or whatever the material is served in) — see pieceUnitOf.
+      // Only lines carrying two separate figures add to it; stays null for
+      // buns and taco shells, whose one number already is the piece count.
+      pieceQty: null,
+      pieceUnit: pieceUnitOf(material),
     };
     bucket.portions += count;
     if (qty != null) bucket.totalQty += qty * count;
     else bucket.hasUnparsedQty = true;
+    const pieces = parseQty(line.quantity);
+    if (Number(line.base_is_separate) && pieces != null) bucket.pieceQty = (bucket.pieceQty || 0) + pieces * count;
     prep.set(key, bucket);
   });
 
@@ -588,6 +636,9 @@ function getPackableSidesByItem() {
     if (/not a packable side/i.test(line.notes || '')) return;
 
     const isSubRecipe = isSubRecipeId(line.child_id);
+    // A seasoning is made on the weekend list (computeSwiggyPlan keeps it) but
+    // goes onto the meat, so there's no box of it to pack.
+    if (isSubRecipe && subRecipeById.get(line.child_id)?.kind === 'Seasoning') return;
     const materialId = isSubRecipe ? null : line.child_id || null;
     const material = materialId ? rawMaterialsById.get(materialId) : null;
     if (materialId && !(material && SWIGGY_CATEGORIES.has(material.category))) return;

@@ -22,7 +22,7 @@
 // one row per item carrying both the catalogue columns and the stock count,
 // keyed item_id (v1: material_id), with inventory.csv's status/notes now
 // stock_status/stock_notes.
-import { increment, insert, nextId, select, selectOne, transaction } from './repo.js';
+import { increment, insert, nextId, select, selectOne, transaction, update } from './repo.js';
 import { readMaterials } from './kbViews.js';
 
 const isRawMaterial = (row) => (row.item_type || 'raw_material') === 'raw_material';
@@ -187,6 +187,24 @@ function addRawMaterial({ itemName, category, reorderLevel, standardCostInr, def
   return { material: getRawMaterials().find((m) => m.material_id === itemId) };
 }
 
+// ---- What a material costs, and what one of it is --------------------------
+// The two catalogue columns the cost-to-make report needs and the purchase log
+// cannot always supply: the pack size (cost_basis) behind a purchase line's
+// "1", and a standard price for a material nobody has logged buying yet.
+// Written from the Cost to Make price sheet (server/finance/materialPrices.js
+// validates and formats; this is only the write, here because this module
+// owns the material row).
+//
+// `standardCostInr` undefined leaves the price alone — the sheet sends only a
+// pack size for a material the purchase log already prices, and that must not
+// blank a standard cost somebody set earlier.
+function setMaterialCost({ materialId, costBasis, standardCostInr }) {
+  const patch = { cost_basis: costBasis };
+  if (standardCostInr !== undefined) patch.standard_cost_inr = standardCostInr;
+  update('material', { item_id: materialId }, patch);
+  return getRawMaterials().find((m) => m.material_id === materialId) || null;
+}
+
 // ---- Manual inventory additions (stock counts, initial stock, returns) ----
 // Adds stock outside of a vendor purchase — e.g. an opening stock count, a
 // return, or a correction found while counting the walk-in. Recorded in its
@@ -245,6 +263,7 @@ function addInventoryAdjustment({ materialId, quantity, reason, date }) {
 export {
   getRawMaterials,
   addRawMaterial,
+  setMaterialCost,
   getMeatMaterials,
   getInventory,
   getLowStock,

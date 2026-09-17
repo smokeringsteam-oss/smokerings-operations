@@ -286,6 +286,35 @@ describe('aggregate', () => {
     expect(report.items[0].units).toBe(2);
   });
 
+  it('totals both kinds of discount, and never counts a coupon line as a dish', () => {
+    const report = aggregate({
+      periods: WEEKS,
+      lines: [
+        // 10% off a ₹479 dish — ₹431.10 charged, ₹47.90 off.
+        normalise({ channel: 'B2C', itemId: null, name: 'Pork Tacos', unitLabel: '', quantity: 1, revenue: 431.1, date: '2026-08-05', orderRef: 801, menu, discount: 47.9 }),
+        b2c('Ribs', '2026-08-06', 2, 900, 802),
+        normalise({ channel: 'B2C', itemId: null, name: 'Discount', unitLabel: '', quantity: 1, revenue: -150, date: '2026-08-06', orderRef: 802, menu, kind: 'discount' }),
+      ],
+      granularity: 'week',
+    });
+
+    expect(report.discounts).toEqual({
+      total: 198,
+      coupons: 150,
+      couponLines: 1,
+      onItems: 48,
+      itemLines: 1,
+      orders: 2,
+      gross: 1379,
+      pct: 14.4,
+    });
+    // The coupon comes off revenue — that is what the orders took — but adds
+    // no portion and no row to the table.
+    expect(report.totals.b2cRevenue).toBe(1181);
+    expect(report.totals.b2cUnits).toBe(3);
+    expect(report.items.map((item) => item.name).sort()).toEqual(['Pork Tacos', 'Ribs']);
+  });
+
   it('reports a zero period as a measured zero, not a gap', () => {
     const report = aggregate({ periods: WEEKS, lines: [], granularity: 'week' });
     expect(report.periods).toHaveLength(4);

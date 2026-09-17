@@ -30,6 +30,7 @@ const line = (over: Partial<DraftCartLine> = {}): DraftCartLine => ({
   quantity: 4.43,
   unitPrice: 540,
   weightPerUnitKg: 0,
+  purpose: 'Order',
   clientId: '',
   clientName: '',
   ...over,

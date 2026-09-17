@@ -22,6 +22,7 @@ import {
   addDraftItem,
   createSubIssueTask,
   migrateDraftsToIssues,
+  carryOverOpenItems,
 } from './integrations/githubProjects.js';
 import {
   getConfig as getOdooConfig,
@@ -35,7 +36,11 @@ import {
   syncRawMaterialsToOdoo,
   addStockOnHand,
 } from './integrations/odoo.js';
-import { fetchWhatsappThreads } from './integrations/odooWhatsapp.js';
+import {
+  fetchWhatsappThreads,
+  fetchWhatsappConversation,
+  sendWhatsappReply,
+} from './integrations/odooWhatsapp.js';
 import {
   createTask as createScheduledTask,
   deleteTask as deleteScheduledTask,
@@ -44,7 +49,7 @@ import {
   updateTask as updateScheduledTask,
 } from './sprint/recurringSchedule.js';
 import { getWeekStatus, setTaskStatus } from './sprint/weeklyScheduleStatusLog.js';
-import { getTodayTasks, setTodayTaskDone } from './sprint/todayTasks.js';
+import { getTodayTasks, setTodayTaskDone, reassignTodayTask } from './sprint/todayTasks.js';
 import {
   getConfig as getPurchasingConfig,
   getVendors,
@@ -54,6 +59,7 @@ import {
   getLowStock,
   getPurchases,
   recordPurchases,
+  recordExpense,
   catalogPurchaseItem,
   linkPurchaseToMaterial,
   linkPurchasesToOdoo,
@@ -73,6 +79,7 @@ import {
   getTaggablePurchases,
   startSmoking,
   finishSmoking,
+  updateSessionWeights,
   completeResting,
   completeShredding,
   setFedOrders,
@@ -88,7 +95,8 @@ import {
   pruneDeliveries as prunePushDeliveries,
   saveSubscription as savePushSubscription,
 } from './core/pushNotify.js';
-import { listNotes, addNote, setNoteDone, deleteNote } from './core/sharedNotes.js';
+import { listNotes, addNote, setNoteDone, assignNote, deleteNote } from './core/sharedNotes.js';
+import { fileUnfiledNotes } from './integrations/noteIssues.js';
 import {
   getTodayPending,
   runReminderTick,
@@ -116,7 +124,8 @@ import {
   updateMenuItemDetails,
   fetchMenuItemFieldOptions,
 } from './ops/menu/menuItems.js';
-import { getPackingStatuses, setPackingStatus, retryInvoice } from './ops/shared/orderPackingStatus.js';
+import { getPackingStatuses, setPackingStatus, setTrackingLink, retryInvoice } from './ops/shared/orderPackingStatus.js';
+import { attachDistances, locateBoardAddresses } from './ops/shared/deliveryDistance.js';
 import {
   listClients as listB2BClients,
   addClient as addB2BClient,
@@ -202,6 +211,8 @@ import {
 } from './integrations/googleDrive.js';
 import { buildWeeklyReport, DEFAULT_WEEKS } from './finance/weeklyLedger.js';
 import { buildItemSalesReport } from './finance/itemSales.js';
+import { buildUnitEconomicsReport } from './finance/unitEconomics.js';
+import { buildMaterialPriceSheet, saveMaterialPrice } from './finance/materialPrices.js';
 import {
   listExpenseCategories,
   logSpend,
@@ -214,18 +225,9 @@ import { getAutoReelJob, startAutoReel } from './marketing/autoReel.js';
 import { locateAddresses, pinAddress, forgetAddress } from './core/geocode.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const uploadDir = path.join(__dirname, 'uploads');
-if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
-
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, uploadDir),
-  filename: (req, file, cb) => cb(null, `${Date.now()}-${file.originalname}`),
-});
-
-const upload = multer({ storage });
 
 // Bill photos are read once by Gemini and thrown away, so they never touch
-// the uploads folder the Reddit images live in — memory storage, and a hard
+// the uploads folder — memory storage, and a hard
 // size cap here as well as in scanPurchaseBill so an oversized file is
 // rejected before it is fully buffered rather than after.
 const billUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: MAX_BILL_BYTES } });
@@ -287,43 +289,6 @@ const app = express();
 // before any of our own size checks could give a useful message.
 app.use(express.json({ limit: '16mb' }));
 app.use(cors());
-
-app.post('/api/post-reddit', upload.array('images'), async (req, res) => {
-  try {
-    const { title = '', text = '', subreddits = '[]', profilePath, flairs = '{}' } = req.body;
-    const subs = Array.isArray(subreddits) ? subreddits : JSON.parse(subreddits || '[]');
-    const normalizedSubs = Array.isArray(subs) ? subs.filter(Boolean) : [];
-    if (!normalizedSubs.length) {
-      return res.status(400).json({ error: 'No subreddits provided. Select at least one subreddit.' });
-    }
-    // Optional per-subreddit flair override (JSON object, e.g. {"test":"Discussion"}).
-    // Falls back to server/marketing/redditFlairs.js for any subreddit not listed here.
-    const flairOverrides = typeof flairs === 'string' ? JSON.parse(flairs || '{}') : flairs;
-    const files = (req.files || []).map((f) => f.path);
-    // Allow specifying an images folder path (e.g., C:\Users\you\Downloads\Reddit)
-    if (req.body.imagesFolder) {
-      files.push(req.body.imagesFolder);
-    }
-    console.log('Received Reddit post request:', {
-      title: title.slice(0, 60),
-      subreddits: normalizedSubs,
-      files,
-      profilePath,
-    });
-
-    // start posting in background
-    import('./marketing/redditPoster.js').then(({ postToSubreddits }) => {
-      postToSubreddits({ subreddits: normalizedSubs, title, text, files, profilePath, flairs: flairOverrides }).catch(
-        (err) => console.error('Error posting to reddit:', err),
-      );
-    });
-
-    res.status(202).json({ status: 'queued', queuedFor: normalizedSubs.length });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: String(err) });
-  }
-});
 
 app.post('/api/gemini/extract-orders', async (req, res) => {
   try {
@@ -400,9 +365,25 @@ app.get('/api/odoo/order-packing', async (req, res) => {
   try {
     const { from, to, channel } = req.query;
     const result = await fetchOrderPackingList({ fromDate: from, toDate: to, channel });
-    res.json(result);
+    res.json(attachDistances(result));
   } catch (err) {
     console.error('Error in GET /api/odoo/order-packing:', err);
+    res.status(err.status || 500).json({ error: err.message || String(err) });
+  }
+});
+
+// Geocodes the board's never-looked-up delivery addresses, then answers with
+// the board again, distances filled in. Same range/channel as the GET; the
+// addresses come off the Odoo fetch here, never from the client — see
+// server/ops/shared/deliveryDistance.js.
+app.post('/api/odoo/order-packing/locate', async (req, res) => {
+  try {
+    const { from, to, channel } = req.body || {};
+    const result = await fetchOrderPackingList({ fromDate: from, toDate: to, channel });
+    const located = await locateBoardAddresses(result);
+    res.json({ ...attachDistances(result), located });
+  } catch (err) {
+    console.error('Error in POST /api/odoo/order-packing/locate:', err);
     res.status(err.status || 500).json({ error: err.message || String(err) });
   }
 });
@@ -420,6 +401,29 @@ app.get('/api/odoo/whatsapp/threads', async (req, res) => {
     res.json(result);
   } catch (err) {
     console.error('Error in GET /api/odoo/whatsapp/threads:', err);
+    res.status(err.status || 500).json({ error: err.message || String(err) });
+  }
+});
+
+// One conversation's longer scroll-back, for the chat pane once a thread is
+// opened — kept off the polled list endpoint so that stays cheap.
+app.get('/api/odoo/whatsapp/threads/:channelId/messages', async (req, res) => {
+  try {
+    res.json(await fetchWhatsappConversation({ channelId: req.params.channelId, limit: req.query.limit }));
+  } catch (err) {
+    console.error('Error in GET /api/odoo/whatsapp/threads/:channelId/messages:', err);
+    res.status(err.status || 500).json({ error: err.message || String(err) });
+  }
+});
+
+// Sends a free-form reply to the customer through Odoo's WhatsApp module —
+// the same post Odoo Discuss makes. Refused with 409 once the 24h window has
+// shut (template-only territory, still done in Odoo).
+app.post('/api/odoo/whatsapp/threads/:channelId/reply', async (req, res) => {
+  try {
+    res.json(await sendWhatsappReply({ channelId: req.params.channelId, text: req.body?.text }));
+  } catch (err) {
+    console.error('Error in POST /api/odoo/whatsapp/threads/:channelId/reply:', err);
     res.status(err.status || 500).json({ error: err.message || String(err) });
   }
 });
@@ -743,6 +747,19 @@ app.post('/api/order-packing/status', async (req, res) => {
   }
 });
 
+// Saves the order's Porter tracking link. `advance` (set by the board when
+// the order is not yet out) also moves it to Out for Delivery — a live
+// tracking link means a rider has the box.
+app.post('/api/order-packing/tracking', async (req, res) => {
+  try {
+    const { orderId, orderName, trackingUrl, channel, advance } = req.body || {};
+    res.json(await setTrackingLink({ orderId, orderName, trackingUrl, channel, advance: Boolean(advance) }));
+  } catch (err) {
+    console.error('Error in POST /api/order-packing/tracking:', err);
+    res.status(err.status || 500).json({ error: err.message || String(err) });
+  }
+});
+
 // Retries just the Odoo invoice create+post step for an already-Delivered
 // order — for when that step failed (Odoo unreachable, nothing marked "To
 // Invoice" yet, etc.) without re-sending the order through earlier stages.
@@ -1014,6 +1031,42 @@ app.delete('/api/purchasing/purchases/:purchaseId', async (req, res) => {
   }
 });
 
+// Labour, logistics and miscellaneous spend — a purchase line like any other
+// (see recordExpense), so it lists, deletes and mirrors through the purchase
+// routes above. Saved to the database (and purchase_log.csv) first, then sent
+// to Odoo as a draft PO against a "Labour" / "Logistics" / "Miscellaneous" service product,
+// best-effort: a failed Odoo call keeps the entry and comes back as odoo.error.
+app.post('/api/purchasing/expenses', async (req, res) => {
+  try {
+    const { kind, purchaseDate, channel, description, amount, quantity, unitPrice, notes } = req.body || {};
+    const result = recordExpense({ kind, purchaseDate, channel, description, amount, quantity, unitPrice, notes });
+    let odoo;
+    try {
+      const [line] = result.purchases;
+      const po = await createPurchaseOrder({
+        vendorName: line.vendor_name,
+        lines: [
+          {
+            serviceProduct: kind,
+            itemName: line.item_name,
+            quantity: line.quantity_purchased,
+            unitPrice: line.unit_price,
+          },
+        ],
+      });
+      linkPurchasesToOdoo({ purchaseIds: [line.purchase_id], poId: po.id, lineIds: po.lineIds });
+      odoo = { name: po.name, url: po.url };
+    } catch (odooErr) {
+      console.error('Odoo PO for expense failed:', odooErr);
+      odoo = { error: odooErr.message || String(odooErr) };
+    }
+    res.status(201).json({ ...result, odoo });
+  } catch (err) {
+    console.error('Error in POST /api/purchasing/expenses:', err);
+    res.status(err.status || 500).json({ error: err.message || String(err) });
+  }
+});
+
 // Manual inventory addition — stock that didn't come through a vendor
 // purchase (opening stock, a correction found while counting, a return).
 // Separate from POST /api/purchasing/purchases because there's no
@@ -1204,6 +1257,24 @@ app.post('/api/smoking/sessions/:sessionId/smoke-finish', (req, res) => {
     res.json(result);
   } catch (err) {
     console.error('Error in POST /api/smoking/sessions/:sessionId/smoke-finish:', err);
+    res.status(err.status || 500).json({ error: err.message || String(err) });
+  }
+});
+
+// Corrects a session's raw / finished weights after the fact, from the "All
+// sessions" table — see updateSessionWeights() in server/ops/shared/smoking.js.
+app.post('/api/smoking/sessions/:sessionId/weights', (req, res) => {
+  try {
+    const { rawWeightKg, finishedWeightWithBoneKg, finishedWeightWithoutBoneKg } = req.body;
+    const result = updateSessionWeights({
+      sessionId: req.params.sessionId,
+      rawWeightKg,
+      finishedWeightWithBoneKg,
+      finishedWeightWithoutBoneKg,
+    });
+    res.json(result);
+  } catch (err) {
+    console.error('Error in POST /api/smoking/sessions/:sessionId/weights:', err);
     res.status(err.status || 500).json({ error: err.message || String(err) });
   }
 });
@@ -2517,6 +2588,51 @@ app.get('/api/finance/item-sales', async (req, res) => {
   }
 });
 
+// Per-unit economics — what a dish costs to make, and what a week of them
+// costs. The costs are walked out of the bill of materials by
+// server/finance/unitCost.js and are UNDERSTATED wherever an ingredient has
+// no price on file; every item carries the coverage figure that says by how
+// much, and the report's `gaps` list names what is missing. Weekly buckets
+// always — see the note at the top of server/finance/unitEconomics.js.
+app.get('/api/finance/unit-economics', async (req, res) => {
+  try {
+    // Both optional: nothing at all gives the same default window Sales by
+    // Item opens on.
+    const { from, to } = req.query || {};
+    res.json(await buildUnitEconomicsReport({ fromDate: from, toDate: to }));
+  } catch (err) {
+    console.error('Error in GET /api/finance/unit-economics:', err);
+    res.status(err.status || 500).json({ error: err.message || String(err) });
+  }
+});
+
+// The price sheet under the Cost to Make report — every raw material, what
+// the purchase log already says about its price and pack size, and the gaps
+// still to fill. Separate from the report because it needs no Odoo read, so
+// saving a row and re-reading the sheet is instant. See
+// server/finance/materialPrices.js.
+app.get('/api/finance/material-prices', (req, res) => {
+  try {
+    res.json(buildMaterialPriceSheet());
+  } catch (err) {
+    console.error('Error in GET /api/finance/material-prices:', err);
+    res.status(err.status || 500).json({ error: err.message || String(err) });
+  }
+});
+
+// One row saved: a pack size (required) and a standard price (optional — a
+// material the purchase log prices only needs the pack). Answers with the
+// whole sheet rebuilt.
+app.put('/api/finance/material-prices/:materialId', (req, res) => {
+  try {
+    const { priceInr, packSize, packUnit } = req.body || {};
+    res.json(saveMaterialPrice({ materialId: req.params.materialId, priceInr, packSize, packUnit }));
+  } catch (err) {
+    console.error('Error in PUT /api/finance/material-prices/:materialId:', err);
+    res.status(err.status || 500).json({ error: err.message || String(err) });
+  }
+});
+
 // Purchase Logger — the spend ledger with a category on it. See
 // server/finance/purchaseLog.js for why this writes the same `purchase`
 // table Weekly Purchasing does rather than a book of its own, and
@@ -2634,6 +2750,18 @@ app.post('/api/today-tasks/:taskId', (req, res) => {
   }
 });
 
+// Hands one to someone else for this week — the override Daily View's
+// assignee box writes, so the two screens agree on whose it is.
+app.post('/api/today-tasks/:taskId/assignee', (req, res) => {
+  try {
+    const { assignedTo } = req.body || {};
+    res.json(reassignTodayTask({ taskId: req.params.taskId, assignedTo }));
+  } catch (err) {
+    console.error('Error in POST /api/today-tasks/:taskId/assignee:', err);
+    res.status(err.status || 500).json({ error: err.message || String(err) });
+  }
+});
+
 
 // The panel's whole payload: the newest notes oldest-first, the board counts,
 // and the names that have posted. Polled by every open dashboard, so it stays
@@ -2658,6 +2786,16 @@ app.post('/api/notes', (req, res) => {
   try {
     const { body, author } = req.body || {};
     res.status(201).json(addNote({ body, author }));
+    // Filed to GitHub after the reply, never before it — see
+    // server/integrations/noteIssues.js. Also retries any earlier note that
+    // did not get filed.
+    void fileUnfiledNotes().then((results) => {
+      results.forEach((r) =>
+        r.error
+          ? console.error(`Note ${r.noteId} not filed to GitHub: ${r.error}`)
+          : console.log(`Note ${r.noteId} filed as issue #${r.issue} under #${r.category}`),
+      );
+    });
   } catch (err) {
     console.error('Error in POST /api/notes:', err);
     res.status(err.status || 500).json({ error: err.message || String(err) });
@@ -2673,6 +2811,17 @@ app.patch('/api/notes/:id', (req, res) => {
     res.json(setNoteDone({ id: req.params.id, done, by }));
   } catch (err) {
     console.error('Error in PATCH /api/notes/:id:', err);
+    res.status(err.status || 500).json({ error: err.message || String(err) });
+  }
+});
+
+// Hands a note to someone else, or back to nobody with a blank name.
+app.patch('/api/notes/:id/assignee', (req, res) => {
+  try {
+    const { assignedTo } = req.body || {};
+    res.json(assignNote({ id: req.params.id, assignedTo }));
+  } catch (err) {
+    console.error('Error in PATCH /api/notes/:id/assignee:', err);
     res.status(err.status || 500).json({ error: err.message || String(err) });
   }
 });
@@ -2819,5 +2968,25 @@ if (process.env.PUSH_REMINDERS !== 'off') {
   }
 }
 
+// Sprint rollover: open items left in a sprint that has ended move into the
+// current one. Hourly is plenty — the move only matters once a week, and each
+// pass is a handful of GitHub reads when there is nothing to carry. Also run at
+// startup so a server that was asleep over the boundary catches up right away.
+// SPRINT_CARRYOVER=off disables it.
+const SPRINT_CARRYOVER_MS = 60 * 60 * 1000;
+if (process.env.SPRINT_CARRYOVER !== 'off' && getGithubConfig().configured) {
+  const carryOver = () => {
+    carryOverOpenItems()
+      .then(({ sprint, moved }) => {
+        if (moved.length) {
+          console.log(`[sprint] carried ${moved.length} open item(s) into ${sprint}:`, moved.map((m) => m.number ?? m.title).join(', '));
+        }
+      })
+      .catch((err) => console.error('[sprint] carry-over failed —', err.message));
+  };
+  setInterval(carryOver, SPRINT_CARRYOVER_MS).unref();
+  carryOver();
+}
+
 const port = process.env.PORT || 4000;
-app.listen(port, () => console.log(`Reddit poster server listening on http://localhost:${port}`));
+app.listen(port, () => console.log(`Smoke Rings server listening on http://localhost:${port}`));

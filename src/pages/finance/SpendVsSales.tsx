@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { defaultWeekendRange } from '../ops/shared/packing';
 import { REPORT_START } from '../reportRange';
 
 // Spending vs Sales — money out against money in, one row per trading week.
@@ -10,11 +11,10 @@ import { REPORT_START } from '../reportRange';
 // Two things this screen is careful to say out loud, because both would
 // otherwise be read as something they are not:
 //
-//   * Net is not profit. Rent, salaries, gas, electricity and equipment are
-//     not recorded anywhere in this app, so they are not in the spend figure.
-//     What is here is purchases plus marketing — real cash out, and most of
-//     the variable cost, but not all of the cost. The banner says so, once,
-//     above everything.
+//   * Net is not profit. Rent, electricity and anything else nobody has typed
+//     in are not in the spend figure. What is here is purchases, marketing, and
+//     the labour and miscellaneous expenses entered per week on Weekly
+//     Purchasing — real cash out, but not all of the cost.
 //
 //   * Booked is not banked. A wholesale invoice is revenue the day the food
 //     is delivered and cash whenever the client pays, which on 15-day terms
@@ -79,6 +79,8 @@ type B2cSourceRow = {
   unattributed: boolean;
 };
 
+type Discounts = { total: number; onItems: number; coupons: number; orders: number };
+
 type WeekRow = {
   weekStart: string;
   weekEnd: string;
@@ -89,7 +91,12 @@ type WeekRow = {
     uncategorised: number;
     purchases: number;
     marketing: number;
+    // Optional: server/ is not hot-reloaded, so an older API build won't send them.
+    labour?: number;
+    misc?: number;
     total: number;
+    // Practice buying — outside `total`; see the Total investment tile.
+    practice?: number;
     b2c: number;
     b2b: number;
     shared: number;
@@ -108,13 +115,17 @@ type WeekRow = {
   };
   b2bOutstanding: number;
   b2bTaggedOdoo: number;
+  // Money taken off this week's counted B2C orders — already out of
+  // sales.b2c, so shown beside it and never subtracted again. Optional: an
+  // older API build won't send it.
+  discounts?: Discounts;
   partialMarketing: boolean;
   quiet: boolean;
 };
 
 type WeeklyReport = {
   range: { requested: { from: string; to: string }; from: string; to: string; weeks: number };
-  sources: { odoo: { configured: boolean; url: string; error: string; reachable: boolean } };
+  sources: { odoo: { configured: boolean; url: string; error: string; reachable: boolean; discountsError?: string } };
   totals: {
     spend: number;
     sales: number;
@@ -142,6 +153,20 @@ type WeeklyReport = {
     b2bTaggedOrders: number;
     pendingRevenue: number;
     pendingOrders: number;
+    discounts?: number;
+    discountOnItems?: number;
+    discountCoupons?: number;
+    discountedOrders?: number;
+    // Practice buying, left out of `spend`, and spend with it put back.
+    practice?: number;
+    practiceB2c?: number;
+    practiceB2b?: number;
+    practiceLines?: number;
+    investmentBuys?: number;
+    investmentB2c?: number;
+    investmentB2b?: number;
+    investmentLines?: number;
+    investment?: number;
   };
   sides: Sides;
   weeks: WeekRow[];
@@ -239,9 +264,18 @@ const weeksAgo = (n: number) => {
   return iso(date);
 };
 
+// Moves a yyyy-mm-dd string by whole days, in local time, for the week stepper.
+const shiftDays = (value: string, n: number) => {
+  const [y, m, d] = value.split('-').map(Number);
+  return iso(new Date(y, m - 1, d + n));
+};
+
 const SpendVsSales = () => {
-  const [from, setFrom] = useState(REPORT_START);
-  const [to, setTo] = useState(iso(new Date()));
+  // Opens on the current Mon→Sun service week, same as Marketing ROI, so the
+  // two money screens show the same week side by side. The multi-week presets
+  // are still there for the trend.
+  const [from, setFrom] = useState(() => defaultWeekendRange().from);
+  const [to, setTo] = useState(() => defaultWeekendRange().to);
   // The side filter lives up here with the date range rather than inside the
   // chart, because it is a filter on the whole screen and not a chart option:
   // the tiles, the week table and both breakdowns all read from it. A control
@@ -281,6 +315,11 @@ const SpendVsSales = () => {
     setTo(iso(new Date()));
   };
 
+  const setRange = (nextFrom: string, nextTo: string) => {
+    setFrom(nextFrom);
+    setTo(nextTo);
+  };
+
   return (
     <div className="mkt-roi">
       {/* A div, not a <header> — `.marketing-dashboard header` in App.css is
@@ -290,7 +329,8 @@ const SpendVsSales = () => {
         <h3>Spending vs Sales</h3>
         <p>
           What went out against what came in, week by week. Weeks run Monday to Sunday so Friday&apos;s buying and the
-          weekend it feeds sit in the same row.
+          weekend it feeds sit in the same row. Weekend orders count in the week of the slot they were booked for, not
+          the day they were placed.
         </p>
       </div>
 
@@ -305,6 +345,32 @@ const SpendVsSales = () => {
             <input type="date" value={to} min={from} onChange={(event) => setTo(event.target.value)} />
           </label>
           <div className="mkt-presets">
+            <button
+              type="button"
+              className="mkt-chip"
+              aria-label="Previous week"
+              onClick={() => setRange(shiftDays(from, -7), shiftDays(to, -7))}
+            >
+              ‹ Week
+            </button>
+            <button
+              type="button"
+              className="mkt-chip"
+              onClick={() => {
+                const week = defaultWeekendRange();
+                setRange(week.from, week.to);
+              }}
+            >
+              This week
+            </button>
+            <button
+              type="button"
+              className="mkt-chip"
+              aria-label="Next week"
+              onClick={() => setRange(shiftDays(from, 7), shiftDays(to, 7))}
+            >
+              Week ›
+            </button>
             <button type="button" className="mkt-chip" onClick={() => preset(4)}>
               Last 4 weeks
             </button>
@@ -316,6 +382,9 @@ const SpendVsSales = () => {
             </button>
             <button type="button" className="mkt-chip" onClick={() => preset(26)}>
               Last 26 weeks
+            </button>
+            <button type="button" className="mkt-chip" onClick={() => setRange(REPORT_START, iso(new Date()))}>
+              All time
             </button>
           </div>
         </div>
@@ -353,39 +422,40 @@ const Report = ({ report, side }: { report: WeeklyReport; side: Side }) => {
   // passed down, so no panel can end up computing the filtered total its own
   // slightly different way.
   const shown = totalsOf(report, side);
+  // Practice cooks fed no sale, so the server leaves them out of every spend,
+  // net and margin figure on this screen. They are still money out, and this
+  // is where they come back: spending on the side shown, plus its practice.
+  const practice =
+    side === 'b2c' ? totals.practiceB2c ?? 0 : side === 'b2b' ? totals.practiceB2b ?? 0 : totals.practice ?? 0;
+  // Investment-tab buys (a smoker, a freezer) are left out the same way.
+  const investmentBuys =
+    side === 'b2c'
+      ? totals.investmentB2c ?? 0
+      : side === 'b2b'
+        ? totals.investmentB2b ?? 0
+        : totals.investmentBuys ?? 0;
+  const investment = shown.spend + practice + investmentBuys;
 
   return (
     <div className="mkt-body">
-      <div className="mkt-sources">
-        <span className="mkt-source is-on">Purchases and wholesale invoices from this app&apos;s own database</span>
-        {/* Odoo supplies the B2C half only, so on a wholesale-only view its
-            state changes nothing on screen and the row is dropped rather than
-            inviting the reader to wonder what it affects here. */}
-        {side === 'b2b' ? null : sources.odoo.reachable ? (
-          <span className="mkt-source is-on">Odoo connected — B2C orders counted</span>
-        ) : (
+      {/* Only surfaces when something is wrong: Odoo supplies the B2C half, so
+          a wholesale-only view has nothing to warn about. */}
+      {side !== 'b2b' && !sources.odoo.reachable ? (
+        <div className="mkt-sources">
           <span className="mkt-source is-off" title={sources.odoo.error}>
             Odoo {sources.odoo.configured ? 'unavailable' : 'not connected'} — the B2C half of sales is missing.{' '}
             {sources.odoo.error}
           </span>
-        )}
-      </div>
+        </div>
+      ) : null}
 
-      {/* The one caveat that changes how every figure below should be read,
-          so it goes above them rather than in a footnote. */}
-      <div className="mkt-alert">
-        <strong>Net here is sales minus what this app can see going out</strong> — purchases and marketing. Rent,
-        salaries, gas, electricity and equipment are not recorded anywhere in this app and are not in it, so read net as
-        contribution towards those, not as profit.
-        {side !== 'all' && report.sides.shared.spend > 0 ? (
-          <>
-            {' '}
-            Showing <strong>{SIDE_LABELS[side]}</strong> only, which also excludes the{' '}
-            {money(report.sides.shared.spend)} of marketing that worked both sides — that spend is in neither side&apos;s
-            net.
-          </>
-        ) : null}
-      </div>
+      {side !== 'all' && report.sides.shared.spend > 0 ? (
+        <div className="mkt-alert">
+          Showing <strong>{SIDE_LABELS[side]}</strong> only, which excludes the{' '}
+          {money(report.sides.shared.spend)} of marketing that worked both sides — that spend is in neither side&apos;s
+          net.
+        </div>
+      ) : null}
 
       <div className="mkt-tiles">
         <Tile
@@ -410,6 +480,20 @@ const Report = ({ report, side }: { report: WeeklyReport; side: Side }) => {
                   totals.purchaseLines === 1 ? '' : 's'
                 }`
               : `Bought for this side only · ${money(totals.sharedSpend)} of shared marketing sits outside it`
+          }
+        />
+        <Tile
+          label={side === 'all' ? 'Total investment' : `${SIDE_LABELS[side]} investment`}
+          value={money(investment)}
+          sub={
+            practice > 0 || investmentBuys > 0
+              ? `Spending plus ${[
+                  practice > 0 ? `${money(practice)} on practice cooks` : '',
+                  investmentBuys > 0 ? `${money(investmentBuys)} of investment` : '',
+                ]
+                  .filter(Boolean)
+                  .join(' and ')} — left out of spending, net and margin`
+              : 'Same as spending — no practice or investment buying in this range'
           }
         />
         <Tile
@@ -471,6 +555,27 @@ const Report = ({ report, side }: { report: WeeklyReport; side: Side }) => {
           </strong>{' '}
           Wholesale is counted from the B2B sales book, and adding these too would count the same deliveries twice. If
           they are genuinely separate sales, log them in B2B Sales instead.
+        </div>
+      ) : null}
+
+      {/* Discounts only exist on the Odoo (B2C) side. The sales figures are
+          already net of them, so this is what was given away, not a cost. */}
+      {side !== 'b2b' && (totals.discounts ?? 0) > 0 ? (
+        <div className="mkt-alert">
+          <strong>{money(totals.discounts ?? 0)} given away in discounts</strong> across {totals.discountedOrders}{' '}
+          order{totals.discountedOrders === 1 ? '' : 's'} —{' '}
+          {[
+            (totals.discountOnItems ?? 0) > 0 ? `${money(totals.discountOnItems ?? 0)} as a percentage on dishes` : '',
+            (totals.discountCoupons ?? 0) > 0 ? `${money(totals.discountCoupons ?? 0)} as discount or coupon lines` : '',
+          ]
+            .filter(Boolean)
+            .join(', ')}
+          . Sales above are already after these, so they are not taken off again.
+        </div>
+      ) : null}
+      {side !== 'b2b' && sources.odoo.reachable && sources.odoo.discountsError ? (
+        <div className="mkt-alert mkt-alert-warn">
+          Could not read order lines from Odoo, so discounts are not shown: {sources.odoo.discountsError}
         </div>
       ) : null}
 
@@ -841,6 +946,14 @@ const WeekTooltip = ({
         </span>
       </span>
     ) : null}
+    {side !== 'b2b' && (week.discounts?.total ?? 0) > 0 ? (
+      <span className="fin-tip-row fin-tip-note">
+        <span>Discounts given</span>
+        <span>
+          {money(week.discounts?.total ?? 0)} · {week.discounts?.orders} order{week.discounts?.orders === 1 ? '' : 's'}
+        </span>
+      </span>
+    ) : null}
     <div className="fin-tip-sep" />
     <span className="fin-tip-row">
       <span>Net</span>
@@ -895,7 +1008,7 @@ const WeekTable = ({
         <thead>
           <tr>
             <th rowSpan={2}>Week</th>
-            <th className="fin-group" colSpan={3}>
+            <th className="fin-group" colSpan={4}>
               B2C weekend
             </th>
             <th className="fin-group" colSpan={3}>
@@ -911,6 +1024,9 @@ const WeekTable = ({
           <tr>
             <th className="mkt-num fin-group-start">Out</th>
             <th className="mkt-num">In</th>
+            <th className="mkt-num" title="Discounts on these orders — already taken out of In">
+              Discounts
+            </th>
             <th className="mkt-num">Net</th>
             <th className="mkt-num fin-group-start">Out</th>
             <th className="mkt-num">In</th>
@@ -937,6 +1053,7 @@ const WeekTable = ({
               </td>
               <td className="mkt-num fin-group-start">{money(week.spend.b2c)}</td>
               <td className="mkt-num">{money(week.sales.b2c)}</td>
+              <DiscountCell discounts={week.discounts} />
               <td className={`mkt-num fin-net ${week.sides.b2c.net >= 0 ? 'mkt-good' : 'mkt-bad'}`}>
                 {signed(week.sides.b2c.net)}
               </td>
@@ -977,6 +1094,7 @@ const WeekTable = ({
             <th>Total</th>
             <th className="mkt-num fin-group-start">{money(totals.b2cSpend)}</th>
             <th className="mkt-num">{money(totals.b2c)}</th>
+            <th className="mkt-num">{(totals.discounts ?? 0) > 0 ? money(totals.discounts ?? 0) : '—'}</th>
             <th className={`mkt-num fin-net ${totals.b2c - totals.b2cSpend >= 0 ? 'mkt-good' : 'mkt-bad'}`}>
               {signed(totals.b2c - totals.b2cSpend)}
             </th>
@@ -1002,6 +1120,23 @@ const WeekTable = ({
   </section>
   );
 };
+
+// A week's discounts: the rupees, how many orders got one, and the split
+// between the two ways Odoo books money off in the hover title.
+const DiscountCell = ({ discounts }: { discounts?: Discounts }) =>
+  discounts && discounts.total > 0 ? (
+    <td
+      className="mkt-num"
+      title={`${money(discounts.onItems)} as % off dishes · ${money(discounts.coupons)} as discount/coupon lines`}
+    >
+      {money(discounts.total)}
+      <span className="mkt-block mkt-muted">
+        {discounts.orders} order{discounts.orders === 1 ? '' : 's'}
+      </span>
+    </td>
+  ) : (
+    <td className="mkt-num mkt-muted">—</td>
+  );
 
 // One side, week by week. The same figures the grouped table shows for it,
 // with room for the margin and the receivable that the wide layout has to
@@ -1029,6 +1164,11 @@ const SideWeekTable = ({
               <th>Week</th>
               <th className="mkt-num">Spending</th>
               <th className="mkt-num">Sales</th>
+              {side === 'b2c' ? (
+                <th className="mkt-num" title="Discounts on these orders — already taken out of Sales">
+                  Discounts
+                </th>
+              ) : null}
               <th className="mkt-num">Net</th>
               <th className="mkt-num">Margin</th>
               {side === 'b2b' ? <th className="mkt-num">Still owed</th> : null}
@@ -1052,6 +1192,7 @@ const SideWeekTable = ({
                   </td>
                   <td className="mkt-num">{money(row.spend)}</td>
                   <td className="mkt-num">{money(row.sales)}</td>
+                  {side === 'b2c' ? <DiscountCell discounts={week.discounts} /> : null}
                   <td className={`mkt-num fin-net ${row.net >= 0 ? 'mkt-good' : 'mkt-bad'}`}>{signed(row.net)}</td>
                   <td className="mkt-num">{percent(row.margin)}</td>
                   {side === 'b2b' ? (
@@ -1066,6 +1207,9 @@ const SideWeekTable = ({
               <th>Total</th>
               <th className="mkt-num">{money(totalSpend)}</th>
               <th className="mkt-num">{money(totalSales)}</th>
+              {side === 'b2c' ? (
+                <th className="mkt-num">{(totals.discounts ?? 0) > 0 ? money(totals.discounts ?? 0) : '—'}</th>
+              ) : null}
               <th className={`mkt-num fin-net ${totalNet >= 0 ? 'mkt-good' : 'mkt-bad'}`}>{signed(totalNet)}</th>
               <th className="mkt-num">{percent(totalSales > 0 ? Math.round((totalNet / totalSales) * 10000) / 100 : null)}</th>
               {side === 'b2b' ? (
@@ -1115,12 +1259,6 @@ const WhereItWent = ({ report, side }: { report: WeeklyReport; side: Side }) => 
 
     {vendors.length ? (
       <>
-        <p className="mkt-panel-hint">
-          {side === 'all'
-            ? 'By vendor, largest first, and split by the side each line was bought for — one butcher usually supplies both, and which half of the bill is wholesale is what makes a wholesale price worth renegotiating.'
-            : `By vendor, largest first, counting only what was bought for ${SIDE_LABELS[side]}.`}{' '}
-          Marketing spend has no vendor book behind it and is not in this table — it is in the list above.
-        </p>
         <div className="mkt-table-wrap">
           <table className="mkt-table">
             <thead>
@@ -1172,7 +1310,6 @@ const WhereItWent = ({ report, side }: { report: WeeklyReport; side: Side }) => 
 
 const WhereItCameFrom = ({ report, side }: { report: WeeklyReport; side: Side }) => {
   const { totals, clients } = report;
-  const split = totals.sales > 0 ? (totals.b2c / totals.sales) * 100 : null;
 
   return (
     <section className="mkt-panel">
@@ -1193,18 +1330,6 @@ const WhereItCameFrom = ({ report, side }: { report: WeeklyReport; side: Side })
               <strong>{money(totals.b2b)}</strong>
             </li>
           </ul>
-
-          <p className="mkt-panel-hint">
-            {split === null
-              ? 'No sales in this range.'
-              : `${percent(split)} of sales came from the B2C weekend, ${percent(100 - split)} from wholesale.`}{' '}
-            {totals.b2bOutstanding > 0 ? (
-              <>
-                <strong>{money(totals.b2bOutstanding)}</strong> of the wholesale figure has not been paid yet — booked
-                revenue, not cash in the account.
-              </>
-            ) : null}
-          </p>
         </>
       ) : (
         <ul className="mkt-category-list">
@@ -1229,13 +1354,6 @@ const WhereItCameFrom = ({ report, side }: { report: WeeklyReport; side: Side })
         <B2cSources rows={report.b2cSources} total={totals.b2c} orders={totals.b2cOrders} />
       ) : clients.length ? (
         <>
-          <p className="mkt-panel-hint">
-            Per account: what it bought against what was bought for it. Only purchases tagged to the account are in the
-            spend column
-            {report.untaggedB2bSpend > 0
-              ? ` — a further ${money(report.untaggedB2bSpend)} of wholesale buying named no account and is in none of these rows.`
-              : '.'}
-          </p>
           <div className="mkt-table-wrap">
             <table className="mkt-table">
               <thead>
@@ -1315,13 +1433,6 @@ const B2cSources = ({ rows, total, orders }: { rows?: B2cSourceRow[]; total: num
 
   return (
     <>
-      <p className="mkt-panel-hint">
-        By channel, largest first. Weekend orders come out of Odoo as orders and not as accounts, so this is the
-        per-source answer to the question the wholesale side answers per client. An order is credited to the channel
-        its <code>utm_source</code> names, in preference to the Order Source it was filed under — the same rule
-        Marketing ROI applies, so the two screens cannot disagree about an order.
-      </p>
-
       <div className="mkt-table-wrap">
         <table className="mkt-table">
           <thead>

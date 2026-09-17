@@ -56,6 +56,13 @@ import {
 } from '../integrations/googleAnalytics.js';
 import { getConfig as getOdooConfig } from '../integrations/odoo.js';
 
+// Visits that are us, not customers: the hosting control panel's "view site"
+// link shows up as a referral every time somebody checks a deploy.
+const IGNORED_GA_SOURCES = new Set(['hpanel.hostinger.com']);
+// GA4 writes "(not set)" or "(data not available)" for the same missing value
+// depending on the report and the date range.
+const gaBlank = (value) => !value || value === '(not set)' || value === '(data not available)';
+
 const round = (value) => Math.round(value);
 // Two places, and only for ratios. A return of 3.47x is a real distinction
 // from 3.4x; a rupee figure to two decimals is noise.
@@ -138,7 +145,8 @@ function buildTrafficSources({ sourceRows = [], campaignRows = [], links = [], u
   // `label: true` means the caller is GA, whose spelling wins for display:
   // it is the one the reader will recognise from the GA report itself.
   const rowFor = (source, { label = false } = {}) => {
-    const raw = String(source || '').trim() || '(not set)';
+    const trimmed = String(source || '').trim();
+    const raw = gaBlank(trimmed) ? '(not set)' : trimmed;
     const key = slug(raw) || raw;
     if (!rows.has(key)) {
       rows.set(key, {
@@ -169,7 +177,9 @@ function buildTrafficSources({ sourceRows = [], campaignRows = [], links = [], u
     return row;
   };
 
-  sourceRows.forEach((row) => {
+  const ignored = (row) => IGNORED_GA_SOURCES.has(String(row.source || '').trim().toLowerCase());
+
+  sourceRows.filter((row) => !ignored(row)).forEach((row) => {
     const bucket = rowFor(row.source, { label: true });
     bucket.seenByGa = true;
     bucket.sessions += row.sessions || 0;
@@ -182,9 +192,9 @@ function buildTrafficSources({ sourceRows = [], campaignRows = [], links = [], u
   // source's totals -- those came from GA at source grain above, and adding
   // a finer report's users into them is exactly the double count
   // fetchTrafficBySource exists to avoid.
-  campaignRows.forEach((row) => {
+  campaignRows.filter((row) => !ignored(row)).forEach((row) => {
     const bucket = rowFor(row.source, { label: true });
-    const medium = row.medium || '(not set)';
+    const medium = gaBlank(row.medium) ? '(not set)' : row.medium;
     bucket.mediums.set(medium, (bucket.mediums.get(medium) || 0) + (row.sessions || 0));
     if (row.campaign) {
       bucket.campaigns.set(row.campaign, (bucket.campaigns.get(row.campaign) || 0) + (row.sessions || 0));
@@ -592,13 +602,18 @@ async function buildRoiReport({ fromDate, toDate }) {
       bucket.sessions += row.sessions;
       bucket.users += row.users;
       bucket.keyEvents += row.keyEvents;
-    } else {
-      const key = `${row.source} / ${row.medium}`;
-      const existing = gaOnly.get(key) || { source: row.source, medium: row.medium, sessions: 0, users: 0, keyEvents: 0 };
+    } else if (!IGNORED_GA_SOURCES.has(String(row.source || '').toLowerCase())) {
+      // One row per source, whatever the medium: tea_shop / offline and
+      // tea_shop / qr_code are the same poster, and GA's two spellings of
+      // "unknown" are the same nothing.
+      const source = gaBlank(row.source) ? '(not set)' : row.source;
+      const medium = gaBlank(row.medium) ? '(not set)' : row.medium;
+      const existing = gaOnly.get(source) || { source, mediums: new Set(), sessions: 0, users: 0, keyEvents: 0 };
+      existing.mediums.add(medium);
       existing.sessions += row.sessions;
       existing.users += row.users;
       existing.keyEvents += row.keyEvents;
-      gaOnly.set(key, existing);
+      gaOnly.set(source, existing);
     }
 
     // A GA campaign name only joins onto a campaign row that already exists
@@ -697,7 +712,9 @@ async function buildRoiReport({ fromDate, toDate }) {
     categories: [...byCategory.entries()]
       .map(([category, invested]) => ({ category, invested: round(invested) }))
       .sort((a, b) => b.invested - a.invested),
-    gaOnly: [...gaOnly.values()].sort((a, b) => b.sessions - a.sessions),
+    gaOnly: [...gaOnly.values()]
+      .map(({ mediums, ...row }) => ({ ...row, medium: [...mediums].sort().join(', ') }))
+      .sort((a, b) => b.sessions - a.sessions),
     // The traffic-sources tab. Built from the links table as well as from
     // GA, so it is present even when GA is not: a list of the sources we
     // publish to, all reading zero, is a truthful answer to "who arrived

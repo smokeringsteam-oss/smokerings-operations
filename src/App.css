@@ -1,23 +1,23 @@
 :root {
-  --color-bg: #fbf4ea;
-  --color-bg-alt: #f6ead9;
+  --color-bg: #f7f5f0;
+  --color-bg-alt: #eeeae2;
   --color-surface: #ffffff;
-  --color-surface-alt: #fff8ef;
-  --color-border: #ecdfc9;
-  --color-border-strong: #e0cba8;
-  --color-text: #2a1d13;
-  --color-text-muted: #7a6a58;
-  --color-text-soft: #9c8b78;
+  --color-surface-alt: #fbfaf6;
+  --color-border: #e7e2d8;
+  --color-border-strong: #d5cebf;
+  --color-text: #1c1b19;
+  --color-text-muted: #625d55;
+  --color-text-soft: #8f897f;
 
-  --color-ember: #d9480f;
-  --color-ember-dark: #a8330a;
-  --color-ember-light: #ffe4d1;
-  --color-charcoal: #241a14;
-  --color-charcoal-soft: #3a2c22;
+  --color-ember: #e0a526;
+  --color-ember-dark: #8a6500;
+  --color-ember-light: #fcefc4;
+  --color-charcoal: #161616;
+  --color-charcoal-soft: #272727;
 
-  --shadow-sm: 0 2px 8px rgba(42, 29, 19, 0.06);
-  --shadow-md: 0 10px 30px rgba(42, 29, 19, 0.08);
-  --shadow-lg: 0 18px 44px rgba(42, 29, 19, 0.14);
+  --shadow-sm: 0 2px 8px rgba(20, 18, 14, 0.06);
+  --shadow-md: 0 10px 30px rgba(20, 18, 14, 0.08);
+  --shadow-lg: 0 18px 44px rgba(20, 18, 14, 0.14);
 
   --radius-sm: 8px;
   --radius-md: 12px;
@@ -35,8 +35,8 @@ body {
   margin: 0;
   font-family: var(--font-body);
   background:
-    radial-gradient(1200px 600px at 100% -10%, #ffe6cc 0%, transparent 55%),
-    radial-gradient(900px 500px at -10% 10%, #ffd9bd 0%, transparent 45%),
+    radial-gradient(1200px 600px at 100% -10%, #fcefc4 0%, transparent 55%),
+    radial-gradient(900px 500px at -10% 10%, #f1ebdf 0%, transparent 45%),
     linear-gradient(180deg, var(--color-bg) 0%, var(--color-bg-alt) 100%);
   background-attachment: fixed;
   color: var(--color-text);
@@ -54,34 +54,44 @@ h1, h2, h3, h4 {
 
 .app-sidebar {
   width: 280px;
-  background: linear-gradient(180deg, var(--color-charcoal) 0%, #17110d 100%);
-  color: #f3e9de;
+  /* Starts on the logo's own black (#000) so the logo image sits on the
+     sidebar with no visible edge, then lifts to charcoal further down. */
+  background: linear-gradient(180deg, #000000 0%, #000000 220px, var(--color-charcoal) 100%);
+  color: #ece8e1;
   padding: 28px 22px;
   box-sizing: border-box;
   box-shadow: var(--shadow-lg);
   position: relative;
 }
 
+/* Brand block: the Smokerings logo, centred. The wordmark in the logo already
+   says the name, so the h1/p stay in the DOM for screen readers only. */
 .sidebar-brand {
+  position: relative;
   display: flex;
+  flex-direction: column;
   align-items: center;
-  gap: 14px;
-  margin-bottom: 36px;
-  padding-bottom: 24px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  margin: -8px -6px 28px;
+  padding-bottom: 22px;
+  border-bottom: 1px solid rgba(240, 192, 90, 0.18);
 }
 
 .brand-badge {
-  width: 50px;
-  height: 50px;
-  border-radius: 14px;
-  background: linear-gradient(135deg, var(--color-ember) 0%, #ff8a4c 100%);
-  color: #ffffff;
-  display: grid;
-  place-items: center;
-  font-weight: 800;
-  font-size: 1.4rem;
-  box-shadow: 0 8px 20px rgba(217, 72, 15, 0.45);
+  width: 100%;
+  height: 150px;
+  background: url('/smokerings-logo.png') center / contain no-repeat;
+  color: transparent;
+  font-size: 0;
+  user-select: none;
+}
+
+.sidebar-brand > div:last-child {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
 }
 
 .sidebar-brand h1 {
@@ -92,7 +102,7 @@ h1, h2, h3, h4 {
 
 .sidebar-brand p {
   margin: 2px 0 0;
-  color: #c9b8a6;
+  color: #b3ac9e;
   font-size: 0.85rem;
 }
 
@@ -171,7 +181,7 @@ h1, h2, h3, h4 {
 .sidebar-submenu li.active a,
 .sidebar-submenu li.active button {
   color: #ffffff;
-  background: linear-gradient(90deg, rgba(217, 72, 15, 0.55), rgba(217, 72, 15, 0.18));
+  background: linear-gradient(90deg, rgba(224, 165, 38, 0.55), rgba(224, 165, 38, 0.18));
   box-shadow: var(--shadow-sm);
 }
 
@@ -219,15 +229,15 @@ h1, h2, h3, h4 {
 }
 
 .tab-button.active {
-  background: linear-gradient(90deg, var(--color-ember) 0%, #ff7a3d 100%);
+  background: linear-gradient(90deg, var(--color-ember) 0%, #f0c05a 100%);
   border-color: transparent;
-  color: white;
-  box-shadow: 0 10px 26px rgba(217, 72, 15, 0.32);
+  color: var(--color-charcoal);
+  box-shadow: 0 10px 26px rgba(224, 165, 38, 0.32);
 }
 
 .marketing-dashboard header {
-  background: linear-gradient(120deg, var(--color-charcoal) 0%, #4a2f1c 100%);
-  color: #fff5ea;
+  background: linear-gradient(120deg, var(--color-charcoal) 0%, #3a3222 100%);
+  color: #f8f6f1;
   padding: 28px 30px;
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-md);
@@ -251,7 +261,7 @@ h1, h2, h3, h4 {
 
 .marketing-dashboard header p {
   margin: 0;
-  color: #e6d3c1;
+  color: #cbc4b6;
   position: relative;
 }
 
@@ -289,8 +299,8 @@ h1, h2, h3, h4 {
     top: 0;
     z-index: 40;
     padding: 10px 14px;
-    background: linear-gradient(180deg, var(--color-charcoal) 0%, #1d150f 100%);
-    color: #f3e9de;
+    background: linear-gradient(180deg, var(--color-charcoal) 0%, #0b0b0b 100%);
+    color: #ece8e1;
     box-shadow: var(--shadow-sm);
   }
 
@@ -302,7 +312,7 @@ h1, h2, h3, h4 {
     place-items: center;
     font-size: 1.25rem;
     line-height: 1;
-    color: #f3e9de;
+    color: #ece8e1;
     background: rgba(255, 255, 255, 0.08);
     border: 1px solid rgba(255, 255, 255, 0.12);
     border-radius: var(--radius-sm);
@@ -406,10 +416,10 @@ h1, h2, h3, h4 {
 }
 
 .wizard-step.active {
-  background: linear-gradient(90deg, var(--color-ember) 0%, #ff7a3d 100%);
+  background: linear-gradient(90deg, var(--color-ember) 0%, #f0c05a 100%);
   border-color: transparent;
-  color: #ffffff;
-  box-shadow: 0 10px 22px rgba(217, 72, 15, 0.28);
+  color: var(--color-charcoal);
+  box-shadow: 0 10px 22px rgba(224, 165, 38, 0.28);
 }
 
 /* .wizard-step doubles as a tab button (e.g. Smoking Session's Pre/Post
@@ -485,16 +495,6 @@ button.wizard-step:hover:not(.active) {
   font-weight: 700;
 }
 
-.image-preview {
-  margin-top: 16px;
-}
-
-.image-preview img {
-  width: 100%;
-  max-width: 360px;
-  border-radius: var(--radius-md);
-}
-
 .group-list {
   display: grid;
   gap: 10px;
@@ -534,17 +534,6 @@ button.wizard-step:hover:not(.active) {
   font-weight: 600;
 }
 
-.add-group-row {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  gap: 12px;
-  margin-bottom: 18px;
-}
-
-.add-group-row input {
-  width: 100%;
-}
-
 .secondary-button.small,
 .primary-button.small {
   padding: 8px 12px;
@@ -552,46 +541,7 @@ button.wizard-step:hover:not(.active) {
 }
 
 .primary-button.small {
-  box-shadow: 0 6px 16px rgba(217, 72, 15, 0.26);
-}
-
-.group-summary {
-  margin-top: 16px;
-  color: var(--color-text-muted);
-  font-size: 0.92rem;
-}
-
-.flair-badge {
-  font-weight: 400;
-  color: var(--color-text-muted);
-  font-size: 0.85rem;
-}
-
-.review-block {
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  padding: 20px;
-  background: var(--color-surface-alt);
-}
-
-.review-block h3 {
-  margin-top: 0;
-  color: var(--color-charcoal);
-}
-
-.review-text {
-  white-space: pre-wrap;
-  margin: 8px 0 0;
-  padding: 14px;
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-sm);
-  color: var(--color-text);
-}
-
-.review-title {
-  font-weight: 700;
-  font-family: var(--font-display);
+  box-shadow: 0 6px 16px rgba(224, 165, 38, 0.26);
 }
 
 .primary-button,
@@ -606,14 +556,14 @@ button.wizard-step:hover:not(.active) {
 }
 
 .primary-button {
-  background: linear-gradient(90deg, var(--color-ember) 0%, #ff7a3d 100%);
-  color: #ffffff;
-  box-shadow: 0 10px 24px rgba(217, 72, 15, 0.3);
+  background: linear-gradient(90deg, var(--color-ember) 0%, #f0c05a 100%);
+  color: var(--color-charcoal);
+  box-shadow: 0 10px 24px rgba(224, 165, 38, 0.3);
 }
 
 .primary-button:hover:not(:disabled) {
   transform: translateY(-1px);
-  box-shadow: 0 14px 30px rgba(217, 72, 15, 0.38);
+  box-shadow: 0 14px 30px rgba(224, 165, 38, 0.38);
 }
 
 .primary-button:disabled {
@@ -682,70 +632,6 @@ button.wizard-step:hover:not(.active) {
   margin-bottom: 20px;
 }
 
-.image-preview-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-  gap: 16px;
-  margin-top: 16px;
-}
-
-.image-preview-card {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  border: 1px solid var(--color-border);
-  padding: 12px;
-  border-radius: var(--radius-md);
-  background: var(--color-surface-alt);
-  transition: box-shadow 160ms ease;
-}
-
-.image-preview-card:hover {
-  box-shadow: var(--shadow-sm);
-}
-
-.image-preview-card img,
-.image-preview-card video {
-  width: 100%;
-  height: 120px;
-  object-fit: cover;
-  border-radius: var(--radius-sm);
-  background: #000;
-}
-
-.image-preview-label {
-  font-size: 0.88rem;
-  color: var(--color-text-muted);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-weight: 600;
-}
-
-.remove-image-button {
-  padding: 8px 10px;
-  background: #fff1ee;
-  border: 1px solid #f0bdb3;
-  color: #b83a24;
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-  font-weight: 700;
-  font-size: 0.85rem;
-}
-
-.remove-image-button:hover {
-  background: #ffe3dc;
-}
-
-.review-images-list {
-  margin: 8px 0 0;
-  padding-left: 18px;
-}
-
-.review-images-list li {
-  margin-bottom: 6px;
-}
-
 .chat-window {
   display: flex;
   flex-direction: column;
@@ -800,7 +686,7 @@ button.wizard-step:hover:not(.active) {
 
 .chat-message.user .chat-message-bubble {
   background: linear-gradient(135deg, var(--color-charcoal) 0%, var(--color-charcoal-soft) 100%);
-  color: #fff5ea;
+  color: #f8f6f1;
   border-bottom-right-radius: 4px;
 }
 
@@ -1087,6 +973,55 @@ button.wizard-step:hover:not(.active) {
   color: var(--color-ember-dark);
 }
 
+/* Swiggy Instamart order: names read down a left edge, numbers line up on the
+   right, and the notes sit on their own quieter line instead of trailing the
+   name. `.prep-table td` centres everything and outranks a bare
+   `.prep-item-col`, hence the doubled-up selectors. */
+.swiggy-table td,
+.swiggy-table th {
+  vertical-align: middle;
+}
+
+.swiggy-table .prep-item-col {
+  text-align: left;
+  white-space: normal;
+  padding-left: 20px;
+}
+
+.swiggy-table .swiggy-num {
+  text-align: right;
+  width: 16%;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  color: var(--color-charcoal);
+  padding-right: 20px;
+}
+
+.swiggy-table .prep-group-row td {
+  padding: 12px 20px 6px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.swiggy-name {
+  font-weight: 600;
+}
+
+.swiggy-sub {
+  margin-top: 2px;
+  color: var(--color-text-soft);
+  font-size: 0.74rem;
+  font-weight: 500;
+}
+
+.swiggy-empty {
+  color: var(--color-border-strong);
+  font-weight: 400;
+}
+
+.swiggy-table .swiggy-cost {
+  color: var(--color-ember-dark);
+}
+
 .prep-summary-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
@@ -1103,12 +1038,12 @@ button.wizard-step:hover:not(.active) {
 }
 
 .prep-summary-card-total {
-  background: linear-gradient(120deg, var(--color-charcoal) 0%, #4a2f1c 100%);
+  background: linear-gradient(120deg, var(--color-charcoal) 0%, #3a3222 100%);
   border-color: transparent;
 }
 
 .prep-summary-card-total .prep-summary-label {
-  color: #e6d3c1;
+  color: #cbc4b6;
 }
 
 .prep-summary-card-total .prep-summary-value {
@@ -1139,10 +1074,24 @@ button.wizard-step:hover:not(.active) {
   padding-top: 8px;
   border-top: 1px dashed var(--color-border);
   display: flex;
+  flex-wrap: wrap;
   justify-content: center;
-  gap: 14px;
+  gap: 4px 14px;
   font-size: 0.78rem;
   color: var(--color-text-muted);
+}
+
+/* Prime Cuts: burnt ends and ribs each on their own line, with the rib sizes
+   set smaller under Ribs. */
+.prep-summary-split--stacked {
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+
+.prep-summary-split-sub {
+  font-size: 0.72rem;
+  opacity: 0.85;
 }
 
 .prep-summary-split strong {
@@ -1184,9 +1133,9 @@ button.wizard-step:hover:not(.active) {
 }
 
 .slot-picker-btn.active {
-  background: linear-gradient(135deg, var(--color-charcoal) 0%, #4a2f1c 100%);
+  background: linear-gradient(135deg, var(--color-charcoal) 0%, #3a3222 100%);
   border-color: transparent;
-  color: #fff5ea;
+  color: #f8f6f1;
   box-shadow: var(--shadow-sm);
 }
 
@@ -1209,7 +1158,7 @@ button.wizard-step:hover:not(.active) {
 /* Inherit the light text when the tile is the dark selected one — the muted
    token is a dark brown and would vanish against it. */
 .slot-picker-btn.active .slot-picker-count {
-  color: #e6d3c1;
+  color: #cbc4b6;
 }
 
 .slot-picker-btn.empty .slot-picker-name,
@@ -1666,7 +1615,9 @@ button.wizard-step:hover:not(.active) {
 }
 
 .pack-order-card {
-  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  padding: 16px 18px;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
   background: var(--color-surface);
@@ -1683,8 +1634,8 @@ button.wizard-step:hover:not(.active) {
 .pack-order-rank {
   padding: 3px 10px;
   border-radius: 999px;
-  background: linear-gradient(90deg, var(--color-ember) 0%, #ff7a3d 100%);
-  color: #ffffff;
+  background: linear-gradient(90deg, var(--color-ember) 0%, #f0c05a 100%);
+  color: var(--color-charcoal);
   font-size: 0.75rem;
   font-weight: 800;
   white-space: nowrap;
@@ -1713,9 +1664,80 @@ button.wizard-step:hover:not(.active) {
   align-items: baseline;
   justify-content: space-between;
   gap: 10px;
-  margin-top: 2px;
-  font-size: 0.85rem;
-  color: var(--color-text-soft);
+  margin-top: 8px;
+  font-size: 0.95rem;
+  color: var(--color-text);
+}
+
+.pack-order-customer-name {
+  font-weight: 700;
+}
+
+/* "📍 ~4.2 km · Koramangala" — the number the board is sorted by. */
+.pack-distance {
+  align-self: flex-start;
+  margin-top: 6px;
+  padding: 2px 10px;
+  border-radius: 999px;
+  background: var(--color-ember-light);
+  color: var(--color-ember-dark);
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.pack-distance.muted {
+  background: var(--color-surface-alt);
+  color: var(--color-text-muted);
+  font-weight: 600;
+}
+
+/* Heading + sort toggle on one line above the cards. */
+.pack-orders-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 14px 0 8px;
+}
+
+.pack-orders-toolbar .pack-orders-title {
+  margin: 0;
+}
+
+.pack-sort-toggle {
+  display: inline-flex;
+  padding: 3px;
+  border-radius: 999px;
+  background: var(--color-surface-alt);
+  border: 1px solid var(--color-border);
+}
+
+.pack-sort-toggle button {
+  padding: 5px 12px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--color-text-muted);
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.pack-sort-toggle button.active {
+  background: var(--color-surface);
+  color: var(--color-charcoal);
+  box-shadow: var(--shadow-sm);
+}
+
+.pack-order-section-label {
+  margin-top: 12px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
 }
 
 /* Where the order goes and who to ring. Stacked under the customer line, in
@@ -1725,10 +1747,13 @@ button.wizard-step:hover:not(.active) {
 .pack-order-contact {
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  margin-top: 6px;
-  font-size: 0.82rem;
-  line-height: 1.35;
+  gap: 6px;
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-alt);
+  font-size: 0.85rem;
+  line-height: 1.4;
   color: var(--color-text-soft);
 }
 
@@ -1763,9 +1788,10 @@ button.wizard-step:hover:not(.active) {
   font-size: 0.75rem;
   line-height: 1.5;
   cursor: pointer;
+  background: var(--color-surface);
   /* Held wide enough for "Couldn't copy" so the row does not jump when the
      label changes under the finger. */
-  min-width: 84px;
+  min-width: 64px;
   text-align: center;
 }
 
@@ -1811,9 +1837,89 @@ button.wizard-step:hover:not(.active) {
 
 /* In Smoker -> Prepping -> Packed -> Finding Partner -> Partner Assigned -> Out for Delivery -> Delivered per order */
 .pack-status-block {
-  margin-top: 10px;
-  padding-top: 10px;
-  border-top: 1px dashed var(--color-border-strong);
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--color-border);
+}
+
+/* Porter tracking link — the delivery hand-off on the card. */
+.pack-tracking {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-top: 12px;
+}
+
+.pack-tracking-label {
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.pack-tracking-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.pack-tracking-row input {
+  flex: 1;
+  min-width: 0;
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px dashed var(--color-border-strong);
+  background: var(--color-surface);
+  font: inherit;
+  font-size: 0.88rem;
+  color: var(--color-text);
+}
+
+.pack-tracking-row input:focus {
+  outline: none;
+  border-style: solid;
+  border-color: var(--color-ember);
+}
+
+.pack-tracking-saved .pack-tracking-row {
+  justify-content: space-between;
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  background: #efe8ff;
+  border: 1px solid #c9b6f2;
+}
+
+.pack-tracking-link {
+  color: #4b2f96;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.pack-tracking-link:hover {
+  text-decoration: underline;
+}
+
+.pack-tracking-hint {
+  font-size: 0.76rem;
+  color: var(--color-text-muted);
+}
+
+.pack-tracking-error {
+  font-size: 0.78rem;
+  color: #8a2b2b;
+}
+
+.pack-link-btn {
+  flex: none;
+  padding: 2px 4px;
+  border: 0;
+  background: transparent;
+  color: var(--color-text-muted);
+  font: inherit;
+  font-size: 0.8rem;
+  text-decoration: underline;
+  cursor: pointer;
 }
 
 .pack-status-badge {
@@ -1828,9 +1934,9 @@ button.wizard-step:hover:not(.active) {
 }
 
 .pack-status-badge.pack-status-in_smoker {
-  background: #ffe1d6;
-  border-color: #d9632f;
-  color: #a8330a;
+  background: #fcefc4;
+  border-color: #f0c05a;
+  color: #8a6500;
 }
 
 .pack-status-badge.pack-status-prepping {
@@ -1906,9 +2012,32 @@ button.wizard-step:hover:not(.active) {
 .pack-invoice-error {
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
+  justify-content: space-between;
   gap: 10px;
-  color: #a8330a;
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  background: #fff4e0;
+  border: 1px solid #e0a54a;
+  color: #8a5200;
+}
+
+.pack-invoice-error strong {
+  display: block;
+  font-size: 0.85rem;
+}
+
+/* Odoo's raw error text — kept for whoever fixes it, but small and quiet. */
+.pack-invoice-error-detail {
+  display: block;
+  margin-top: 2px;
+  font-size: 0.74rem;
+  line-height: 1.35;
+  opacity: 0.85;
+}
+
+.pack-invoice-muted {
+  color: var(--color-text-muted);
+  font-size: 0.8rem;
 }
 
 .pack-status-error {
@@ -1917,7 +2046,7 @@ button.wizard-step:hover:not(.active) {
 
 .pack-order-items {
   list-style: none;
-  margin: 10px 0 0;
+  margin: 6px 0 0;
   padding: 0;
   display: grid;
   gap: 6px;
@@ -1925,10 +2054,9 @@ button.wizard-step:hover:not(.active) {
 
 .pack-order-items li {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 6px 10px;
+  align-items: baseline;
+  gap: 10px;
+  padding: 7px 10px;
   border-radius: var(--radius-sm);
   background: var(--color-surface-alt);
   font-size: 0.88rem;
@@ -1936,8 +2064,22 @@ button.wizard-step:hover:not(.active) {
 }
 
 .pack-order-item-qty {
-  font-weight: 700;
-  color: var(--color-charcoal);
+  flex: none;
+  min-width: 2ch;
+  font-weight: 800;
+  color: var(--color-ember-dark);
+}
+
+.pack-order-item-name {
+  flex: 1;
+  font-weight: 600;
+}
+
+.pack-order-item-code {
+  margin-left: 6px;
+  font-size: 0.72rem;
+  font-weight: 500;
+  color: var(--color-text-muted);
 }
 
 .pack-order-smart {
@@ -1959,8 +2101,8 @@ button.wizard-step:hover:not(.active) {
 .pack-order-savings {
   padding: 2px 9px;
   border-radius: 999px;
-  background: linear-gradient(90deg, var(--color-ember) 0%, #ff7a3d 100%);
-  color: #ffffff;
+  background: linear-gradient(90deg, var(--color-ember) 0%, #f0c05a 100%);
+  color: var(--color-charcoal);
   font-size: 0.72rem;
   font-weight: 800;
   white-space: nowrap;
@@ -2563,19 +2705,32 @@ button.wizard-step:hover:not(.active) {
   font-size: 0.9rem;
 }
 
+/* Square tiles. align-items: start keeps the closed tiles square when a
+   neighbour's "dishes" list is opened and that one tile grows taller. */
 .inv-compact-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 190px), 1fr));
+  align-items: start;
   gap: 14px;
   margin-bottom: 8px;
 }
 
 .inv-compact-tile {
-  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  aspect-ratio: 1;
+  min-width: 0;
+  padding: 14px;
   border-radius: var(--radius-md);
   border: 1px solid var(--color-border);
   background: var(--color-surface-alt);
   border-left: 4px solid var(--color-border-strong);
+}
+
+/* An open dish list is allowed to break the square rather than clip. */
+.inv-compact-tile:has(.inv-compact-details[open]) {
+  aspect-ratio: auto;
 }
 
 .inv-compact-tile.pork {
@@ -2596,13 +2751,13 @@ button.wizard-step:hover:not(.active) {
 
 .inv-compact-head {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
 }
 
 .inv-compact-title {
-  font-size: 0.95rem;
+  font-size: 1rem;
   font-weight: 800;
   color: var(--color-charcoal);
 }
@@ -2635,35 +2790,30 @@ button.wizard-step:hover:not(.active) {
   color: var(--color-text-muted);
 }
 
-.inv-compact-breakdown li span:first-child {
+.inv-compact-dish {
   flex: 1;
   min-width: 0;
+  display: flex;
+  flex-direction: column;
 }
 
-.inv-compact-breakdown li span:last-child {
+.inv-compact-dish small {
+  font-size: 0.72rem;
+  color: var(--color-text-soft);
+}
+
+.inv-compact-dish-grams {
   flex-shrink: 0;
   white-space: nowrap;
-  font-weight: 600;
-}
-
-.inv-compact-total {
-  display: flex;
-  justify-content: space-between;
-  gap: 8px;
-  margin-top: 8px;
-  padding-top: 8px;
-  border-top: 1px dashed var(--color-border);
-  font-size: 0.82rem;
   font-weight: 700;
-  color: var(--color-text-muted);
+  color: var(--color-charcoal);
 }
 
 .inv-compact-buy {
   display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 10px;
-  margin-top: 10px;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: auto;
   padding: 10px 12px;
   border-radius: var(--radius-sm);
   background: var(--color-ember-light);
@@ -2679,10 +2829,90 @@ button.wizard-step:hover:not(.active) {
 
 .inv-compact-buy-value {
   font-family: var(--font-display);
-  font-size: 1.55rem;
+  font-size: 1.7rem;
+  line-height: 1.1;
   font-weight: 800;
   color: var(--color-ember-dark);
-  text-align: right;
+  white-space: nowrap;
+}
+
+.inv-compact-buy-sub {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--color-ember-dark);
+  opacity: 0.8;
+}
+
+.inv-compact-details summary {
+  cursor: pointer;
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--color-text-muted);
+  padding: 2px 0;
+}
+
+.inv-compact-details[open] summary {
+  margin-bottom: 2px;
+}
+
+.inv-compact-details .inv-compact-breakdown {
+  margin-top: 4px;
+}
+
+@media (max-width: 520px) {
+  .inv-compact-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+  }
+
+  .inv-compact-tile {
+    padding: 10px;
+    gap: 6px;
+  }
+
+  .inv-compact-title {
+    font-size: 0.88rem;
+    line-height: 1.2;
+  }
+
+  .inv-pct-static {
+    white-space: normal;
+    font-size: 0.66rem;
+    padding: 1px 6px;
+  }
+
+  .inv-compact-buy {
+    padding: 8px;
+  }
+
+  .inv-compact-buy-label {
+    font-size: 0.64rem;
+    letter-spacing: 0.02em;
+    line-height: 1.25;
+  }
+
+  .inv-compact-buy-value {
+    font-size: 1.3rem;
+  }
+
+  .inv-compact-buy-sub {
+    font-size: 0.68rem;
+  }
+
+  .inv-compact-breakdown li {
+    font-size: 0.74rem;
+  }
+}
+
+.inv-compact-skipped {
+  margin: 10px 0 0;
+  font-size: 0.82rem;
+  color: var(--color-text-soft);
+}
+
+.inv-compact-skipped span {
+  font-weight: 700;
+  color: var(--color-text-muted);
 }
 
 .inv-compact-caption {
@@ -2832,12 +3062,66 @@ button.wizard-step:hover:not(.active) {
   margin-top: -10px;
 }
 
-.purch-add-line {
+.purch-add-line,
+.purch-expense-form {
   padding: 16px;
   border: 1px dashed var(--color-border-strong);
   border-radius: var(--radius-md);
   background: var(--color-surface-alt);
   margin-bottom: 8px;
+}
+
+/* Purchase / Labour / Misc switch at the top of the Log card. */
+.purch-entry-modes {
+  display: flex;
+  margin-bottom: 16px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.purch-entry-modes button {
+  flex: 1;
+  padding: 10px 12px;
+  border: none;
+  background: var(--color-surface);
+  color: var(--color-text-muted);
+  font-size: 0.85rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.purch-entry-modes button + button {
+  border-left: 1px solid var(--color-border-strong);
+}
+
+.purch-entry-modes button.is-active {
+  background: var(--color-charcoal);
+  color: #fff;
+}
+
+/* Five tabs don't fit one row on a phone — "Misc" was pushed off the edge.
+   Two rows of three instead, the 1px gap over the border colour drawing the
+   dividers; the last tab stretches to fill the second row. */
+@media (max-width: 520px) {
+  .purch-entry-modes {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 1px;
+    background: var(--color-border-strong);
+  }
+
+  .purch-entry-modes button + button {
+    border-left: none;
+  }
+
+  .purch-entry-modes button:last-child:nth-child(3n + 2) {
+    grid-column: span 2;
+  }
+}
+
+.purch-expense-form > button {
+  margin-top: 8px;
 }
 
 .purch-add-vendor-toggle {
@@ -2848,6 +3132,7 @@ button.wizard-step:hover:not(.active) {
    quieter box than it: the scan fills the cart in, the cart is still where
    the buy is checked and logged. */
 .purch-scan {
+  position: relative;
   padding: 14px 16px;
   border: 1px solid var(--color-border-strong);
   border-radius: var(--radius-md);
@@ -2874,7 +3159,11 @@ button.wizard-step:hover:not(.active) {
    but stays in the layout (rather than display:none) so the file dialog has
    something to anchor to on mobile Safari. */
 .purch-scan-input {
+  /* Pinned to the corner: left at its static spot it sat past the right edge
+     and gave the whole page a sideways scroll. */
   position: absolute;
+  top: 0;
+  left: 0;
   width: 1px;
   height: 1px;
   opacity: 0;
@@ -2994,6 +3283,95 @@ button.wizard-step:hover:not(.active) {
   color: #b83a24;
 }
 
+/* Each cart line is a card — name across the top with × beside it, then
+   Qty / Price / Total side by side with their headings above. The purchase
+   card is too narrow for a five-column table at any width: the inputs were
+   squeezed until a scanned "560" read as "5" and a "1.85" qty as blank.
+   Doubled-up selectors outrank the plain .prep-table rules, including the
+   ones in the 720px block further down. */
+.prep-table.purch-cart-table {
+  display: block;
+  min-width: 0;
+}
+
+.prep-table.purch-cart-table thead {
+  display: none;
+}
+
+.prep-table.purch-cart-table tbody,
+.prep-table.purch-cart-table tfoot {
+  display: block;
+}
+
+.prep-table.purch-cart-table tbody tr {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr)) auto;
+  gap: 8px 10px;
+  padding: 12px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.prep-table.purch-cart-table tbody tr.purch-cart-unmatched {
+  background: #fffaf0;
+}
+
+.prep-table.purch-cart-table td {
+  display: block;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  text-align: left;
+  background: transparent;
+}
+
+.prep-table.purch-cart-table td[data-label]::before {
+  content: attr(data-label);
+  display: block;
+  margin-bottom: 2px;
+  color: var(--color-text-muted);
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.prep-table.purch-cart-table td.prep-item-col {
+  grid-column: 1 / 4;
+  white-space: normal;
+}
+
+.prep-table.purch-cart-table td.purch-remove-cell {
+  grid-column: 4;
+  grid-row: 1;
+}
+
+.prep-table.purch-cart-table td[data-label='Client'] {
+  grid-column: 1 / -1;
+}
+
+.prep-table.purch-cart-table td.purch-cart-total {
+  grid-column: 3 / 5;
+  font-weight: 600;
+}
+
+.prep-table.purch-cart-table .purch-cart-num {
+  max-width: none;
+  text-align: left;
+  border-color: var(--color-border);
+  background: var(--color-surface);
+}
+
+.prep-table.purch-cart-table tfoot tr {
+  display: flex;
+  justify-content: space-between;
+  padding: 12px;
+}
+
+.prep-table.purch-cart-table tfoot td {
+  padding: 0;
+  border: 0;
+}
+
 .purch-actions {
   margin-top: 20px;
 }
@@ -3027,68 +3405,107 @@ button.wizard-step:hover:not(.active) {
    between each step, instead of an order-agnostic grid, so the Fri plan →
    buy → smoke / Sat–Sun serve pipeline reads as one continuous flow. */
 
+/* The grid sizes itself off the content column (not the viewport, which
+   includes the sidebar), so the 5-step flow picks a column count that
+   actually fits and never strands one card on a row of its own. */
+.marketing-content:has(> .ops-flow-grid) {
+  container-type: inline-size;
+}
+
 .ops-flow-grid {
-  display: flex;
-  flex-wrap: wrap;
+  --ops-gap: 28px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
   align-items: stretch;
-  gap: 20px;
+  gap: var(--ops-gap);
 }
 
 .ops-box {
+  --ops-accent: var(--color-ember);
+  --ops-accent-soft: rgba(224, 165, 38, 0.1);
+  position: relative;
   display: flex;
-  flex: 1 1 240px;
   flex-direction: column;
   align-items: flex-start;
-  gap: 10px;
-  padding: 26px;
+  gap: 12px;
+  min-width: 0;
+  padding: 28px 24px 24px;
   text-align: left;
-  background: var(--color-surface);
+  background: linear-gradient(180deg, var(--color-surface) 55%, var(--color-surface-alt) 100%);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-md);
+  box-shadow: var(--shadow-sm);
   cursor: pointer;
   font: inherit;
-  transition: transform 160ms ease, box-shadow 160ms ease, border-color 160ms ease;
+  transition: transform 180ms ease, box-shadow 180ms ease, border-color 180ms ease;
+}
+
+/* Accent strip along the top edge. */
+.ops-box::before {
+  content: '';
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 4px;
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  background: linear-gradient(90deg, var(--ops-accent), transparent 90%);
+  opacity: 0.55;
+  transition: opacity 180ms ease;
 }
 
 .ops-box:hover {
-  transform: translateY(-2px);
-  border-color: var(--color-ember);
-  box-shadow: 0 14px 30px rgba(217, 72, 15, 0.2);
+  transform: translateY(-4px);
+  border-color: var(--ops-accent);
+  box-shadow: 0 18px 36px rgba(224, 165, 38, 0.16);
 }
 
-.ops-flow-arrow {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex: 0 0 auto;
-  font-size: 1.5rem;
-  color: var(--color-ember);
-  opacity: 0.6;
+.ops-box:hover::before {
+  opacity: 1;
+}
+
+.ops-box:focus-visible {
+  outline: 3px solid var(--color-ember-light);
+  outline-offset: 2px;
+  border-color: var(--ops-accent);
 }
 
 .ops-box-step {
   align-self: flex-start;
-  padding: 3px 10px;
+  padding: 4px 11px;
   border-radius: 999px;
-  background: rgba(217, 72, 15, 0.12);
-  color: var(--color-ember);
-  font-size: 0.75rem;
+  background: var(--ops-accent-soft);
+  color: var(--ops-accent);
+  font-size: 0.7rem;
   font-weight: 700;
-  letter-spacing: 0.02em;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
+  white-space: nowrap;
 }
 
 .ops-box-icon {
-  font-size: 2rem;
+  display: grid;
+  place-items: center;
+  width: 56px;
+  height: 56px;
+  margin-top: 2px;
+  border-radius: 16px;
+  background: var(--ops-accent-soft);
+  font-size: 1.8rem;
+  line-height: 1;
+  transition: transform 180ms ease;
+}
+
+.ops-box:hover .ops-box-icon {
+  transform: scale(1.08) rotate(-4deg);
 }
 
 .ops-box-title {
   display: flex;
   align-items: center;
   gap: 10px;
-  font-size: 1.1rem;
-  font-weight: 800;
+  font-family: var(--font-display);
+  font-size: 1.12rem;
+  font-weight: 700;
+  line-height: 1.25;
   color: var(--color-charcoal);
 }
 
@@ -3098,26 +3515,124 @@ button.wizard-step:hover:not(.active) {
 
 .ops-box-desc {
   color: var(--color-text-muted);
-  font-size: 0.92rem;
-  line-height: 1.4;
+  font-size: 0.9rem;
+  line-height: 1.55;
+}
+
+/* ---- The numbered weekend flow (only grids that carry arrows) ---------- */
+/* The inline arrow spans are hidden; each card draws its own connector in
+   the gap instead, so arrows never dangle at the start of a wrapped row. */
+.ops-flow-arrow {
+  display: none;
+}
+
+.ops-flow-grid:has(.ops-flow-arrow) {
+  grid-template-columns: 1fr;
+}
+
+/* Sat–Sun service steps (4 and 5) in a deeper smoke tone, so the Friday
+   prep run and the weekend service read as two phases. Boxes sit at odd
+   child positions because the hidden arrows are still in the DOM. */
+.ops-flow-grid:has(.ops-flow-arrow) .ops-box:nth-child(7),
+.ops-flow-grid:has(.ops-flow-arrow) .ops-box:nth-child(9) {
+  --ops-accent: var(--color-ember-dark);
+  --ops-accent-soft: rgba(138, 101, 0, 0.1);
+}
+
+.ops-flow-grid:has(.ops-flow-arrow) .ops-box:not(:last-child)::after {
+  content: '↓';
+  position: absolute;
+  z-index: 1;
+  left: 50%;
+  bottom: calc(var(--ops-gap) / -2 - 14px);
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  margin-left: -14px;
+  border-radius: 50%;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-strong);
+  box-shadow: var(--shadow-sm);
+  color: var(--color-ember-dark);
+  font-size: 0.85rem;
+  font-weight: 700;
+  pointer-events: none;
+}
+
+@container (min-width: 620px) {
+  .ops-flow-grid:has(.ops-flow-arrow) {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .ops-flow-grid:has(.ops-flow-arrow) .ops-box:not(:last-child)::after {
+    content: '→';
+    left: auto;
+    top: 50%;
+    bottom: auto;
+    right: calc(var(--ops-gap) / -2 - 14px);
+    margin: -14px 0 0;
+  }
+
+  /* End of each row of two: no connector off the right edge. */
+  .ops-flow-grid:has(.ops-flow-arrow) .ops-box:nth-child(3)::after,
+  .ops-flow-grid:has(.ops-flow-arrow) .ops-box:nth-child(7)::after {
+    display: none;
+  }
+}
+
+@container (min-width: 900px) {
+  .ops-flow-grid:has(.ops-flow-arrow) {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .ops-flow-grid:has(.ops-flow-arrow) .ops-box:nth-child(3)::after,
+  .ops-flow-grid:has(.ops-flow-arrow) .ops-box:nth-child(7)::after {
+    display: grid;
+  }
+
+  .ops-flow-grid:has(.ops-flow-arrow) .ops-box:nth-child(5)::after {
+    display: none;
+  }
+}
+
+@container (min-width: 1240px) {
+  .ops-flow-grid:has(.ops-flow-arrow) {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    --ops-gap: 24px;
+  }
+
+  .ops-flow-grid:has(.ops-flow-arrow) .ops-box:nth-child(5)::after {
+    display: grid;
+  }
+
+  .ops-flow-grid:has(.ops-flow-arrow) .ops-box {
+    padding: 26px 20px 22px;
+  }
 }
 
 .ops-back-button {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  margin-bottom: 20px;
-  padding: 0;
-  border: none;
-  background: none;
+  margin-bottom: 22px;
+  padding: 7px 14px 7px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  background: var(--color-surface);
+  box-shadow: var(--shadow-sm);
   color: var(--color-ember-dark);
+  font: inherit;
   font-weight: 700;
-  font-size: 0.92rem;
+  font-size: 0.88rem;
   cursor: pointer;
+  transition: background 160ms ease, border-color 160ms ease, transform 160ms ease;
 }
 
 .ops-back-button:hover {
-  text-decoration: underline;
+  background: var(--color-ember-light);
+  border-color: var(--color-ember);
+  transform: translateX(-2px);
 }
 
 /* ---- B2C Dashboard > Service Weeks strip ------------------------------- */
@@ -3171,7 +3686,7 @@ button.wizard-step:hover:not(.active) {
 
 .svc-week-month-step:hover {
   border-color: var(--color-ember);
-  color: var(--color-ember);
+  color: var(--color-ember-dark);
 }
 
 .svc-week-month-title {
@@ -3194,7 +3709,7 @@ button.wizard-step:hover:not(.active) {
 
 .svc-week-month-today:hover {
   border-color: var(--color-ember);
-  color: var(--color-ember);
+  color: var(--color-ember-dark);
 }
 
 .svc-week-month-loading {
@@ -3281,8 +3796,8 @@ button.wizard-step:hover:not(.active) {
 .svc-week-now {
   padding: 2px 9px;
   border-radius: 999px;
-  background: rgba(217, 72, 15, 0.12);
-  color: var(--color-ember);
+  background: rgba(224, 165, 38, 0.12);
+  color: var(--color-ember-dark);
   font-size: 0.68rem;
   font-weight: 700;
   letter-spacing: 0.03em;
@@ -3466,7 +3981,7 @@ button.wizard-step:hover:not(.active) {
 
 .svc-week-picker-title em {
   font-style: normal;
-  color: var(--color-ember);
+  color: var(--color-ember-dark);
 }
 
 .svc-week-picker-group {
@@ -3482,7 +3997,7 @@ button.wizard-step:hover:not(.active) {
   font-weight: 800;
   letter-spacing: 0.04em;
   text-transform: uppercase;
-  color: var(--color-ember);
+  color: var(--color-ember-dark);
 }
 
 .svc-week-picker-item {
@@ -3524,7 +4039,7 @@ button.wizard-step:hover:not(.active) {
   padding: 0;
   border: none;
   background: none;
-  color: var(--color-ember);
+  color: var(--color-ember-dark);
   font: inherit;
   font-size: 0.8rem;
   font-weight: 700;
@@ -3556,37 +4071,209 @@ button.wizard-step:hover:not(.active) {
   border-bottom: 1px solid var(--color-border);
 }
 
+.menu-items-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.menu-items-head-text {
+  min-width: 0;
+}
+
+.menu-items-head .inv-section-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.menu-items-count {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--color-text-muted);
+}
+
+.menu-items-refresh {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+}
+
+.menu-items-refresh-icon {
+  display: inline-block;
+  font-size: 1rem;
+  line-height: 1;
+}
+
+.menu-items-refresh-icon.is-spinning {
+  animation: menu-items-spin 0.9s linear infinite;
+}
+
+@keyframes menu-items-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Pinned under the page top while the list scrolls. Painted with the page
+   background so rows slide underneath it rather than showing through. */
+.menu-items-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0 -4px;
+  padding: 8px 4px;
+  background: var(--color-bg);
+  border-bottom: 1px solid transparent;
+}
+
+.menu-items-search-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.menu-items-search-icon {
+  position: absolute;
+  left: 12px;
+  color: var(--color-text-soft);
+  font-size: 1.1rem;
+  pointer-events: none;
+}
+
 .menu-items-search {
-  min-width: 180px;
-  padding: 7px 11px;
+  width: 100%;
+  min-width: 0;
+  padding: 10px 38px 10px 36px;
   border: 1px solid var(--color-border-strong);
-  border-radius: var(--radius-sm);
+  border-radius: 999px;
   background: var(--color-surface);
   color: var(--color-text);
   font: inherit;
-  font-size: 0.86rem;
+  font-size: 0.9rem;
+}
+
+.menu-items-search:focus {
+  outline: none;
+  border-color: var(--color-ember);
+  box-shadow: 0 0 0 3px var(--color-ember-light);
+}
+
+/* The browser's own clear "x" is inconsistent (absent on Firefox, tiny on
+   iOS), so it's replaced with one that's a proper tap target everywhere. */
+.menu-items-search::-webkit-search-cancel-button {
+  display: none;
+}
+
+.menu-items-search-clear {
+  position: absolute;
+  right: 4px;
+  width: 32px;
+  height: 32px;
+  border: 0;
+  border-radius: 50%;
+  background: none;
+  color: var(--color-text-muted);
+  font-size: 1.3rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.menu-items-search-clear:hover {
+  background: var(--color-bg-alt);
+}
+
+/* One scrollable row on a phone rather than wrapping to three lines of
+   chips that push the list down. */
+.menu-items-chips {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+
+.menu-items-chips::-webkit-scrollbar {
+  display: none;
+}
+
+.menu-items-chip {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 6px 5px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  background: var(--color-surface);
+  color: var(--color-text);
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.menu-items-chip:hover {
+  border-color: var(--color-ember);
+}
+
+.menu-items-chip-count {
+  min-width: 20px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--color-bg-alt);
+  color: var(--color-text-muted);
+  font-size: 0.72rem;
+  text-align: center;
 }
 
 .menu-item-group {
-  margin-top: 14px;
+  margin-top: 16px;
+  /* Clears the sticky toolbar when a chip scrolls a category into view. */
+  scroll-margin-top: 110px;
 }
 
 .menu-item-group-title {
-  display: block;
-  margin-bottom: 6px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
   font-size: 0.72rem;
   font-weight: 800;
   letter-spacing: 0.04em;
   text-transform: uppercase;
-  color: var(--color-ember);
+  color: var(--color-ember-dark);
+}
+
+.menu-item-group-count {
+  color: var(--color-text-soft);
+  font-weight: 700;
 }
 
 .menu-item-row {
-  margin-bottom: 6px;
+  margin-bottom: 8px;
   background: var(--color-surface);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
   overflow: hidden;
+  /* clip, not hidden: hidden makes the row a scroll container, which would
+     pin the sticky save bar to the row instead of the screen. */
+  overflow: clip;
+  scroll-margin-top: 110px;
+  transition: border-color 150ms, box-shadow 150ms;
+}
+
+.menu-item-row:not(.is-open):hover {
+  border-color: var(--color-border-strong);
+  box-shadow: var(--shadow-sm);
 }
 
 /* The open card is lifted out of the list so it reads as the one thing being
@@ -3597,11 +4284,12 @@ button.wizard-step:hover:not(.active) {
 }
 
 .menu-item-open {
-  display: flex;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   gap: 14px;
   width: 100%;
-  padding: 11px 14px;
+  padding: 12px 14px;
   background: none;
   border: 0;
   font: inherit;
@@ -3610,42 +4298,59 @@ button.wizard-step:hover:not(.active) {
   cursor: pointer;
 }
 
-.menu-item-open:hover {
-  background: var(--color-surface-alt);
+.menu-item-open:focus-visible {
+  outline: 2px solid var(--color-ember);
+  outline-offset: -2px;
 }
 
 .menu-item-row.is-open .menu-item-open {
   background: var(--color-surface-alt);
 }
 
+.menu-item-side {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .menu-item-chevron {
   flex: 0 0 auto;
-  width: 14px;
-  color: var(--color-text-muted);
-  font-size: 0.8rem;
+  color: var(--color-text-soft);
+  transition: transform 180ms ease;
+}
+
+.menu-item-row.is-open .menu-item-chevron {
+  transform: rotate(90deg);
+  color: var(--color-ember-dark);
 }
 
 .menu-item-main {
   display: flex;
-  flex: 1 1 auto;
   flex-direction: column;
   gap: 3px;
   min-width: 0;
 }
 
+.menu-item-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
 .menu-item-thumb {
   flex: 0 0 auto;
-  width: 52px;
-  height: 52px;
+  width: 60px;
+  height: 60px;
   object-fit: cover;
-  border-radius: var(--radius-sm);
+  border-radius: 10px;
   border: 1px solid var(--color-border);
   background: var(--color-surface-alt);
 }
 
 .menu-item-thumb.is-large {
-  width: 104px;
-  height: 104px;
+  width: 120px;
+  height: 120px;
 }
 
 /* Placeholder for an item with no picture yet — same footprint as a real
@@ -3696,11 +4401,9 @@ button.wizard-step:hover:not(.active) {
 }
 
 .menu-item-name {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
   font-weight: 700;
+  font-size: 0.98rem;
+  line-height: 1.3;
   color: var(--color-charcoal);
 }
 
@@ -3722,17 +4425,31 @@ button.wizard-step:hover:not(.active) {
   text-transform: uppercase;
 }
 
+/* The full blurb is in the edit card; in the list two lines is enough to
+   recognise the dish, and it keeps every row the same scannable height. */
 .menu-item-desc {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
   color: var(--color-text-muted);
   font-size: 0.82rem;
   line-height: 1.4;
 }
 
+.menu-item-row.is-open .menu-item-desc {
+  display: none;
+}
+
 .menu-item-price {
   flex: 0 0 auto;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--color-ember-light);
   font-weight: 800;
   color: var(--color-charcoal);
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 /* Both halves of a dish live here — the Odoo sales fields and the recipe —
@@ -3765,7 +4482,7 @@ button.wizard-step:hover:not(.active) {
   font-weight: 800;
   letter-spacing: 0.04em;
   text-transform: uppercase;
-  color: var(--color-ember);
+  color: var(--color-ember-dark);
 }
 
 .menu-item-edit-row {
@@ -3797,207 +4514,159 @@ button.wizard-step:hover:not(.active) {
   width: 100%;
 }
 
+.menu-item-price-field input[type='number'] {
+  width: 130px;
+}
+
 @media (max-width: 720px) {
-  .menu-item-open {
-    flex-wrap: wrap;
+  /* Below the mobile topbar, which is itself sticky at top: 0. */
+  .menu-items-toolbar {
+    top: 62px;
   }
-}
 
-/* ---- CSV Editor (Tools > CSV Editor) --------------------------------- */
+  .menu-items-refresh-label {
+    display: none;
+  }
 
-.csv-editor-page {
-  max-width: 1180px;
-}
+  .menu-items-refresh {
+    width: 40px;
+    height: 40px;
+    justify-content: center;
+    padding: 0;
+    border-radius: 50%;
+  }
 
-.csv-hidden-input {
-  display: none;
-}
+  .menu-item-group,
+  .menu-item-row {
+    scroll-margin-top: 170px;
+  }
 
-.csv-toolbar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 14px;
-  padding: 20px 24px;
-  margin-bottom: 20px;
-}
+  /* Thumb | name + blurb, with the price tucked under the name instead of
+     squeezing the blurb into a narrow middle column. */
+  .menu-item-open {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-areas:
+      'thumb main chev'
+      'thumb price chev';
+    align-items: start;
+    gap: 4px 12px;
+    padding: 12px;
+  }
 
-.csv-toolbar-left {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-}
+  .menu-item-open > .menu-item-thumb {
+    grid-area: thumb;
+    width: 64px;
+    height: 64px;
+  }
 
-.csv-toolbar-right {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 2px;
-}
+  .menu-item-main {
+    grid-area: main;
+  }
 
-.csv-file-name {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-weight: 700;
-  color: var(--color-charcoal);
-}
+  .menu-item-side {
+    display: contents;
+  }
 
-.csv-dirty-dot {
-  color: var(--color-ember);
-  font-size: 0.7rem;
-}
+  .menu-item-price {
+    grid-area: price;
+    justify-self: start;
+    margin-top: 4px;
+    padding: 2px 9px;
+    font-size: 0.88rem;
+  }
 
-.csv-file-meta {
-  color: var(--color-text-muted);
-  font-size: 0.82rem;
-}
+  .menu-item-chevron {
+    grid-area: chev;
+    align-self: center;
+  }
 
-.csv-editor-card {
-  padding: 20px;
-}
+  .menu-item-name {
+    font-size: 0.94rem;
+  }
 
-.csv-grid-controls {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 12px;
-}
+  .menu-item-desc {
+    font-size: 0.8rem;
+  }
 
-.csv-grid-controls-right {
-  display: flex;
-  gap: 8px;
-}
+  .menu-item-card {
+    padding: 0 12px 12px;
+  }
 
-.csv-filter-input {
-  flex: 1 1 260px;
-  min-width: 200px;
-  padding: 10px 14px;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-sm);
-  font: inherit;
-  color: var(--color-text);
-  background: var(--color-surface);
-}
+  /* Picture beside its buttons, then the fields full width underneath. */
+  .menu-item-image-edit {
+    flex: 1 1 100%;
+    flex-direction: row;
+    align-items: center;
+    gap: 14px;
+  }
 
-.csv-filter-input:focus {
-  outline: none;
-  border-color: var(--color-ember);
-}
+  .menu-item-thumb.is-large {
+    width: 96px;
+    height: 96px;
+  }
 
-.csv-grid-wrap {
-  overflow: auto;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  background: var(--color-surface);
-}
+  .menu-item-image-actions {
+    gap: 10px;
+  }
 
-.csv-table {
-  border-collapse: collapse;
-  table-layout: fixed;
-}
+  .menu-item-image-actions .svc-week-menu-edit {
+    padding: 4px 0;
+    font-size: 0.88rem;
+  }
 
-.csv-table th,
-.csv-table td {
-  border-bottom: 1px solid var(--color-border);
-  border-right: 1px solid var(--color-border);
-  padding: 0;
-}
+  .menu-item-edit-fields {
+    flex: 1 1 100%;
+  }
 
-.csv-table thead th {
-  position: sticky;
-  top: 0;
-  z-index: 1;
-  background: var(--color-surface-alt);
-  border-bottom: 2px solid var(--color-border-strong);
-}
+  .menu-item-edit-fields .svc-week-field,
+  .menu-item-edit-fields .svc-week-field.is-wide {
+    flex: 1 1 100%;
+  }
 
-.csv-header-cell {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 6px 6px 6px 10px;
-}
+  .menu-item-price-field input[type='number'] {
+    width: 100%;
+  }
 
-.csv-header-cell input {
-  flex: 1;
-  min-width: 0;
-  border: none;
-  background: transparent;
-  font: inherit;
-  font-weight: 700;
-  color: var(--color-charcoal);
-  padding: 6px 4px;
-}
+  .menu-item-card .svc-week-form-actions {
+    flex-wrap: nowrap;
+  }
 
-.csv-header-cell input:focus {
-  outline: 2px solid var(--color-ember);
-  outline-offset: -2px;
-  border-radius: 4px;
-  background: var(--color-surface);
-}
+  /* Once there's something to save, the buttons stay reachable at the bottom
+     of the screen while a long blurb is being edited. */
+  .menu-item-card .menu-item-actions.is-dirty {
+    position: sticky;
+    bottom: 0;
+    z-index: 2;
+    margin: 0 -12px;
+    padding: 10px 12px calc(10px + env(safe-area-inset-bottom));
+    background: var(--color-surface);
+    border-top: 1px solid var(--color-border);
+    box-shadow: 0 -6px 16px rgba(20, 18, 14, 0.06);
+  }
 
-.csv-col-delete,
-.csv-row-delete {
-  flex-shrink: 0;
-  border: none;
-  background: none;
-  color: var(--color-text-soft);
-  cursor: pointer;
-  font-size: 0.78rem;
-  padding: 2px 4px;
-  border-radius: 4px;
-  line-height: 1;
-}
+  .menu-item-card .svc-week-form-actions > button {
+    flex: 1 1 0;
+    min-height: 44px;
+  }
 
-.csv-col-delete:hover,
-.csv-row-delete:hover {
-  color: var(--color-ember-dark);
-  background: var(--color-ember-light);
-}
+  .menu-recipe-line {
+    padding: 8px 4px;
+  }
 
-.csv-table td input {
-  width: 100%;
-  border: none;
-  background: transparent;
-  font: inherit;
-  color: var(--color-text);
-  padding: 8px 10px;
-  box-sizing: border-box;
-}
+  .menu-recipe-qty input[type='number'] {
+    width: 84px;
+    min-height: 40px;
+  }
 
-.csv-table td input:focus {
-  outline: 2px solid var(--color-ember);
-  outline-offset: -2px;
-  border-radius: 4px;
-  background: var(--color-surface-alt);
-}
+  /* A line with two figures needs the full width for its inputs, or the name
+     gets squeezed to one word per line; put the inputs under the name. */
+  .menu-recipe-line:has(.is-base) {
+    grid-template-columns: minmax(0, 1fr);
+  }
 
-.csv-rownum-col {
-  width: 60px;
-  background: var(--color-surface-alt);
-  text-align: center;
-  color: var(--color-text-soft);
-  font-size: 0.78rem;
-  white-space: nowrap;
-}
-
-td.csv-rownum-col {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 2px;
-  padding: 0 6px;
-  height: 100%;
-}
-
-.csv-no-rows {
-  text-align: center;
-  color: var(--color-text-muted);
-  padding: 24px !important;
+  .menu-recipe-line:has(.is-base) .menu-recipe-inputs {
+    justify-self: end;
+  }
 }
 
 .smoke-page {
@@ -4073,6 +4742,20 @@ td.csv-rownum-col {
    SmokingSession.tsx). Blue-grey rather than the ember palette the rest of
    this screen uses: it is a note about the form itself, not about the cook,
    and it must not read as an error the way .chat-error would. */
+/* Weight correction in the "All sessions" table — inputs swap in for the
+   kg values on the row being edited, sized to fit a "12.345" reading. */
+.smoke-weight-input {
+  width: 5.5rem;
+  max-width: 100%;
+}
+
+.smoke-weight-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+
 .smoke-draft-banner {
   display: flex;
   flex-wrap: wrap;
@@ -4115,7 +4798,7 @@ td.csv-rownum-col {
   padding: 10px 12px;
   border-radius: 10px;
   border: 1px solid #e0b74b;
-  border-left: 4px solid #d9632f;
+  border-left: 4px solid #f0c05a;
   background: #fff8e6;
 }
 
@@ -4137,7 +4820,7 @@ td.csv-rownum-col {
 .pack-time-pref-hint {
   font-size: 0.75rem;
   font-weight: 600;
-  color: #a8330a;
+  color: #8a6500;
 }
 
 /* A vague note read a shade cooler, so a confident "by 1:00 PM" and a hedged
@@ -4147,6 +4830,52 @@ td.csv-rownum-col {
   border-color: var(--color-border-strong);
   border-left-color: #e0b74b;
   background: var(--color-surface-alt);
+}
+
+/* When the rider has to go for a timed ask — deadline less the ride estimate. */
+.pack-time-pref-leave {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: #8a4a12;
+}
+
+/* Beside the order name on the Priority sort: this card is up here because
+   the customer asked for a time, not because it happens to be far. */
+.pack-priority-chip {
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: #8a4a12;
+  background: #fff1cc;
+  border: 1px solid #f0c05a;
+  white-space: nowrap;
+}
+
+/* Gemini's other reads of the note: must-not-miss tags and the kitchen line. */
+.pack-urgency-flags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.pack-urgency-flag {
+  padding: 3px 8px;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #9a2a1a;
+  background: #fdecea;
+  border: 1px solid #f1b8ae;
+}
+
+.pack-kitchen-line {
+  margin-top: 8px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  line-height: 1.4;
+  color: var(--color-charcoal);
 }
 
 /* The customer's own note, straight off the Odoo order (CustomerNote in
@@ -4195,7 +4924,7 @@ td.csv-rownum-col {
   font: inherit;
   font-size: 0.78rem;
   font-weight: 600;
-  color: var(--color-ember);
+  color: var(--color-ember-dark);
   text-decoration: underline;
   cursor: pointer;
 }
@@ -5483,7 +6212,7 @@ a.b2b-chip {
 .menu-detail-dirty {
   font-size: 0.78rem;
   font-weight: 700;
-  color: var(--color-ember);
+  color: var(--color-ember-dark);
 }
 
 /* Form pages, mirroring the tabs on Odoo's own product form. */
@@ -5510,7 +6239,7 @@ a.b2b-chip {
 .menu-detail-tab.is-active {
   background: var(--color-ember);
   border-color: var(--color-ember);
-  color: var(--color-surface);
+  color: var(--color-charcoal);
 }
 
 /* Marks a page holding unsaved edits, so switching tabs doesn't hide the
@@ -5577,7 +6306,7 @@ a.b2b-chip {
 .menu-detail-required {
   font-size: 0.65rem;
   font-style: normal;
-  color: var(--color-ember);
+  color: var(--color-ember-dark);
 }
 
 .menu-detail-field input[type='text'],
@@ -5738,7 +6467,7 @@ a.b2b-chip {
    bottom of a panel that scrolls, so "what did I change" has to be visible
    next to the number, not only in the count up top. */
 .menu-recipe-line.is-changed {
-  background: rgba(217, 72, 15, 0.08);
+  background: rgba(224, 165, 38, 0.08);
   box-shadow: inset 2px 0 0 var(--color-ember);
 }
 
@@ -5799,7 +6528,7 @@ a.b2b-chip {
 
 .menu-recipe-drift {
   font-weight: 700;
-  color: var(--color-ember);
+  color: var(--color-ember-dark);
 }
 
 /* ======================================================================
@@ -5847,8 +6576,7 @@ html {
   }
 
   .wizard-page,
-  .purch-page,
-  .csv-editor-page {
+  .purch-page {
     max-width: 100%;
   }
 
@@ -5867,18 +6595,11 @@ html {
 
   /* Anything below 16px makes iOS Safari zoom the page in on focus and never
      zoom back out — the single most common "the app went weird" on a phone.
-     Blanket rule rather than a class list so new fields inherit the fix; the
-     CSV grid is exempt because it is a spreadsheet in its own scroller and
-     16px cells would double its width for no gain. */
+     Blanket rule rather than a class list so new fields inherit the fix. */
   .app-main input:not([type='checkbox']):not([type='radio']),
   .app-main select,
   .app-main textarea {
     font-size: 16px;
-  }
-
-  .csv-table input,
-  .csv-header-cell input {
-    font-size: 0.85rem;
   }
 
   /* ---- Panel headers ----------------------------------------------------
@@ -5963,8 +6684,7 @@ html {
 
   /* The scrollers need to be able to shrink inside their flex/grid parents,
      or they size to the table and scroll nothing. */
-  .prep-table-wrap,
-  .csv-grid-wrap {
+  .prep-table-wrap {
     max-width: 100%;
     min-width: 0;
   }
@@ -5973,11 +6693,11 @@ html {
     min-width: 520px;
   }
 
-  /* "All sessions" carries nine columns; at the shared floor above they
+  /* "All sessions" carries twelve columns; at the shared floor above they
      squeeze to two-character words. Its own floor, scrolled sideways in the
      same .prep-table-wrap, keeps them readable. */
   .smoke-sessions-table {
-    min-width: 820px;
+    min-width: 1080px;
   }
 
   /* The draft banner's two buttons drop onto their own full-width row rather
@@ -6178,7 +6898,7 @@ html {
   background: var(--color-ember);
   font-size: 0.72rem;
   font-weight: 700;
-  color: #fff;
+  color: var(--color-charcoal);
 }
 
 .mkt-body {
@@ -6434,7 +7154,7 @@ html {
   background: var(--color-charcoal);
   box-shadow: var(--shadow-md);
   font-size: 0.78rem;
-  color: #f3e9de;
+  color: #ece8e1;
   pointer-events: none;
 }
 
@@ -6604,12 +7324,12 @@ html {
   font-family: inherit;
   font-size: 0.86rem;
   font-weight: 600;
-  color: #fff;
+  color: var(--color-charcoal);
   cursor: pointer;
 }
 
 .mkt-primary:hover:not(:disabled) {
-  background: var(--color-ember-dark);
+  background: #f0b400;
 }
 
 .mkt-primary:disabled {
@@ -6862,7 +7582,7 @@ html {
   padding: 9px 11px;
   border-radius: var(--radius-sm);
   background: var(--color-charcoal);
-  color: #f7ede2;
+  color: #efebe4;
   font-size: 0.76rem;
   line-height: 1.35;
   box-shadow: var(--shadow-md);
@@ -6900,7 +7620,7 @@ html {
 }
 
 .fin-tip-note {
-  color: #cbb9a6;
+  color: #a59e92;
 }
 
 /* The week table. Right-aligned money columns with tabular figures, and the
@@ -7020,14 +7740,14 @@ html {
 }
 
 .qrb-tile:hover {
-  border-color: #d9480f;
+  border-color: #e0a526;
 }
 
 /* Selected reads as on through border, tint and the tick together, not colour
    alone — this gets used on a phone in daylight. */
 .qrb-tile.is-on {
-  border-color: #d9480f;
-  box-shadow: inset 3px 0 0 #d9480f;
+  border-color: #e0a526;
+  box-shadow: inset 3px 0 0 #e0a526;
 }
 
 .qrb-tile-head {
@@ -7062,9 +7782,9 @@ html {
 }
 
 .qrb-tile.is-on .qrb-tick {
-  border-color: #d9480f;
-  background: #d9480f;
-  color: #fff;
+  border-color: #e0a526;
+  background: #e0a526;
+  color: var(--color-charcoal);
 }
 
 .qrb-tile-name {
@@ -7080,7 +7800,7 @@ html {
 }
 
 .qrb-tile.is-on .qrb-tile-name strong {
-  color: #96320c;
+  color: #6b4e00;
 }
 
 .qrb-tile-name span {
@@ -7127,13 +7847,13 @@ html {
 }
 
 .qrb-pill:hover {
-  border-color: #d9480f;
+  border-color: #e0a526;
 }
 
 .qrb-pill.is-on {
-  border-color: #d9480f;
-  background: #d9480f;
-  color: #fff;
+  border-color: #e0a526;
+  background: #e0a526;
+  color: var(--color-charcoal);
   font-weight: 600;
 }
 
@@ -7163,7 +7883,7 @@ html {
 }
 
 .qrb-more:hover {
-  color: #96320c;
+  color: #6b4e00;
 }
 
 .qrb-custom {
@@ -7658,7 +8378,7 @@ html {
   padding: 9px 11px;
   border-radius: var(--radius-sm);
   background: var(--color-charcoal);
-  color: #f7ede2;
+  color: #efebe4;
   font-size: 0.76rem;
   line-height: 1.35;
   box-shadow: var(--shadow-md);
@@ -7695,7 +8415,7 @@ html {
 }
 
 .sal-tip-note {
-  color: #cbb9a6;
+  color: #a59e92;
 }
 
 /* ---- What is catching on -------------------------------------------------- */
@@ -7922,6 +8642,82 @@ html {
 .mkt-tile-value.sal-tile-name {
   font-size: 1.05rem;
   line-height: 1.3;
+}
+
+/* The week the one-week view is on, beside its ‹ Week / Week › chips. */
+.sal-week-label {
+  align-self: center;
+  font-size: 0.95rem;
+  white-space: nowrap;
+}
+
+/* The one-week table: a dish name wraps to five lines on a phone without a
+   floor under the column, and the tiles above sit flush on the panel. */
+.sal-week-table td:first-child {
+  min-width: 170px;
+}
+
+.sal-week-table td.sal-grid-cell {
+  font-weight: 600;
+}
+
+.sal-week-table td.sal-grid-cell.is-zero {
+  font-weight: 400;
+  color: var(--color-text-soft);
+}
+
+.sal-side > .mkt-tiles + .mkt-panel {
+  margin-top: 12px;
+}
+
+/* ---- Week by week grid (the simple view) --------------------------------- */
+
+/* Items down, weeks across, newest week first. The item column stays put while
+   the weeks scroll, or a long range loses which row is which. */
+.sal-grid td,
+.sal-grid th {
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+.sal-grid .sal-grid-item {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background: var(--color-surface);
+  white-space: normal;
+  min-width: 160px;
+}
+
+.sal-grid td.sal-grid-cell {
+  font-weight: 600;
+}
+
+.sal-grid td.sal-grid-cell.is-zero {
+  font-weight: 400;
+  color: var(--color-text-soft);
+}
+
+.sal-grid .sal-grid-total {
+  border-left: 1px solid var(--color-border);
+  font-weight: 700;
+}
+
+.sal-grid tfoot th,
+.sal-grid tfoot td {
+  font-size: 0.84rem;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--color-text);
+  font-weight: 700;
+  border-top: 2px solid var(--color-border);
+}
+
+.sal-grid tfoot tr + tr th,
+.sal-grid tfoot tr + tr td {
+  border-top: 0;
+  font-weight: 400;
+  color: var(--color-text-soft);
 }
 
 /* ---- The item table ------------------------------------------------------ */
@@ -8591,7 +9387,7 @@ html {
   height: 100%;
   padding: 0;
   border: none;
-  background: rgba(217, 72, 15, 0.9);
+  background: rgba(224, 165, 38, 0.9);
   cursor: ew-resize;
   touch-action: none;
 }
@@ -9324,6 +10120,114 @@ html {
   font-weight: 600;
 }
 
+/* Order / Practice tag on a purchase line. */
+.purch-purpose {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+  margin-bottom: 16px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.purch-purpose-label {
+  font-size: 0.92rem;
+  font-weight: 600;
+}
+
+.purch-purpose-modes {
+  display: inline-flex;
+  padding: 3px;
+  gap: 3px;
+  border-radius: 999px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-strong);
+}
+
+.purch-purpose-modes button {
+  padding: 6px 14px;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--color-text-muted);
+  font-size: 0.82rem;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.purch-purpose-modes button.is-active {
+  background: var(--color-charcoal);
+  color: #fff;
+}
+
+.purch-purpose-modes button.is-practice.is-active {
+  background: #1f4f8f;
+}
+
+/* The whole entry box turns blue while Practice is on, so it can't be
+   forgotten between lines. */
+.purch-add-line.is-practice {
+  border-color: #8fb4e6;
+  background: #f1f6fd;
+}
+
+/* Checkbox beside its words, not stretched above them like a text input. */
+.wizard-card label.purch-form-check {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.wizard-card .purch-form-check input {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  padding: 0;
+  flex: none;
+  accent-color: var(--color-charcoal);
+}
+
+.purch-add-line-btn {
+  width: 100%;
+}
+
+.purch-purpose-pill {
+  display: inline-block;
+  margin: 2px 0;
+  padding: 2px 8px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 999px;
+  background: var(--color-surface);
+  color: var(--color-text-muted);
+  font-size: 0.66rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  vertical-align: middle;
+  cursor: pointer;
+}
+
+.purch-purpose-pill.is-practice {
+  border-color: #b9d3f5;
+  background: #e6f0fd;
+  color: #1f4f8f;
+}
+
+span.purch-purpose-pill {
+  cursor: default;
+}
+
+.purch-practice-total {
+  padding-left: 12px;
+  color: var(--color-text-muted);
+  font-size: 0.85em;
+}
+
 .purch-uncat-pill {
   display: inline-block;
   padding: 2px 8px;
@@ -9556,46 +10460,7 @@ html {
 .wa-inbox {
   display: flex;
   flex-direction: column;
-  gap: 18px;
-}
-
-/* Filters on the left, freshness and the manual refresh on the right. The
-   list reloads itself on a timer, so the button is a reassurance rather than
-   the way the screen is meant to be used. */
-.wa-toolbar {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 12px;
-  flex-wrap: wrap;
-}
-
-.wa-inbox-actions {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.wa-refresh {
-  border: 1px solid var(--color-border-strong);
-  background: var(--color-surface);
-  color: var(--color-text);
-  font-family: var(--font-body);
-  font-weight: 600;
-  font-size: 0.85rem;
-  padding: 7px 14px;
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-}
-
-.wa-refresh:disabled {
-  opacity: 0.6;
-  cursor: default;
-}
-
-.wa-fetched {
-  font-size: 0.78rem;
-  color: var(--color-text-soft);
+  gap: 14px;
 }
 
 .wa-error,
@@ -9618,55 +10483,43 @@ html {
   border: 1px solid var(--color-border);
 }
 
-.wa-summary {
-  display: flex;
-  gap: 12px;
-  flex-wrap: wrap;
-}
-
-.wa-stat {
-  flex: 1 1 130px;
+/* Two panes, the way every desktop messaging app is laid out: the list you
+   pick from, and the chat you are in. A fixed height so the chat scrolls
+   inside itself and the composer stays pinned where your hands are. */
+.wa-layout {
+  display: grid;
+  grid-template-columns: minmax(260px, 340px) 1fr;
+  height: min(78vh, 820px);
+  min-height: 460px;
   background: var(--color-surface);
   border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  padding: 12px 16px;
+  border-radius: var(--radius-lg);
   box-shadow: var(--shadow-sm);
+  overflow: hidden;
+}
+
+.wa-list-pane {
+  min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  border-right: 1px solid var(--color-border);
+  min-height: 0;
+  background: var(--color-surface);
 }
 
-/* Only a non-zero count is coloured. A tile reading 0 in alarm red would
-   train people to stop seeing the colour. */
-.wa-stat.is-hot {
-  border-color: #f0b9a4;
-  background: #fff4ef;
-}
-
-.wa-stat.is-bad {
-  border-color: #f5c6c1;
-  background: #fdecea;
-}
-
-.wa-stat-value {
-  font-family: var(--font-display);
-  font-size: 1.6rem;
-  font-weight: 700;
-  line-height: 1.1;
-}
-
-.wa-stat-label {
-  font-size: 0.75rem;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--color-text-muted);
-  font-weight: 700;
+.wa-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--color-border);
 }
 
 .wa-filter {
   display: flex;
-  gap: 8px;
+  gap: 6px;
   flex-wrap: wrap;
+  flex: 1 1 auto;
 }
 
 .wa-filter-pill {
@@ -9675,8 +10528,8 @@ html {
   color: var(--color-text-muted);
   font-family: var(--font-body);
   font-weight: 600;
-  font-size: 0.85rem;
-  padding: 7px 14px;
+  font-size: 0.78rem;
+  padding: 5px 11px;
   border-radius: 999px;
   cursor: pointer;
 }
@@ -9684,7 +10537,28 @@ html {
 .wa-filter-pill.is-on {
   background: var(--color-ember);
   border-color: var(--color-ember);
-  color: #ffffff;
+  color: var(--color-charcoal);
+}
+
+.wa-refresh {
+  flex: 0 0 auto;
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--color-border-strong);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-size: 1rem;
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.wa-refresh:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.wa-list-pane > .wa-notice {
+  margin: 12px;
 }
 
 .wa-empty {
@@ -9693,10 +10567,8 @@ html {
   align-items: center;
   gap: 8px;
   padding: 40px 20px;
-  background: var(--color-surface);
-  border: 1px dashed var(--color-border-strong);
-  border-radius: var(--radius-lg);
   color: var(--color-text-muted);
+  text-align: center;
 }
 
 .wa-empty span {
@@ -9705,27 +10577,42 @@ html {
 
 .wa-empty p {
   margin: 0;
-  font-size: 0.95rem;
+  font-size: 0.9rem;
 }
 
 .wa-thread-list {
   list-style: none;
   margin: 0;
   padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
+  overflow-y: auto;
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
+/* One row per conversation: avatar, name and time, last line, then the
+   verdict chips. The left edge still carries the verdict colour, so the state
+   of a dozen threads reads down the list without reading any of them. */
 .wa-thread {
+  display: flex;
+  gap: 10px;
+  width: 100%;
+  text-align: left;
+  padding: 11px 12px 11px 10px;
+  border: none;
+  border-left: 3px solid transparent;
+  border-bottom: 1px solid var(--color-border);
   background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  box-shadow: var(--shadow-sm);
-  overflow: hidden;
-  /* The left edge carries the verdict, so the state of a dozen threads reads
-     down the page without stopping to read any of them. */
-  border-left: 4px solid var(--color-border-strong);
+  color: var(--color-text);
+  font-family: var(--font-body);
+  cursor: pointer;
+}
+
+.wa-thread:hover {
+  background: var(--color-surface-alt);
+}
+
+.wa-thread.is-open {
+  background: var(--color-ember-light);
 }
 
 .wa-thread-waiting {
@@ -9736,55 +10623,92 @@ html {
   border-left-color: #e5342a;
 }
 
-.wa-thread-clear {
-  border-left-color: #cfe3d2;
+.wa-avatar {
+  flex: 0 0 auto;
+  width: 40px;
+  height: 40px;
+  border-radius: 999px;
+  background: var(--color-charcoal);
+  color: #ffffff;
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 0.85rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
-.wa-thread-main {
-  padding: 14px 16px;
+.wa-thread-body {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 3px;
+  min-width: 0;
+  flex: 1 1 auto;
 }
 
-.wa-thread-who {
+.wa-thread-top {
   display: flex;
   align-items: baseline;
-  gap: 10px;
-  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .wa-thread-name {
   font-family: var(--font-display);
   font-weight: 700;
-  font-size: 1rem;
+  font-size: 0.95rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1 1 auto;
 }
 
-.wa-thread-phone {
-  font-size: 0.8rem;
+.wa-thread-time {
+  flex: 0 0 auto;
+  font-size: 0.72rem;
+  color: var(--color-text-soft);
+}
+
+.wa-thread-preview {
+  font-size: 0.84rem;
+  color: var(--color-text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wa-thread-you {
   color: var(--color-text-soft);
 }
 
 .wa-thread-tags {
   display: flex;
-  gap: 8px;
+  gap: 6px;
   flex-wrap: wrap;
+}
+
+.wa-thread-tags:empty {
+  display: none;
 }
 
 .wa-status,
 .wa-window,
 .wa-unread {
-  padding: 2px 9px;
+  padding: 1px 8px;
   border-radius: 999px;
-  font-size: 0.7rem;
+  font-size: 0.66rem;
   font-weight: 800;
   text-transform: uppercase;
   letter-spacing: 0.04em;
+  white-space: nowrap;
 }
 
 .wa-status-waiting {
   background: var(--color-ember-light);
   color: var(--color-ember-dark);
+}
+
+.wa-thread.is-open .wa-status-waiting {
+  background: var(--color-surface);
 }
 
 .wa-status-failed {
@@ -9810,56 +10734,86 @@ html {
 }
 
 .wa-unread {
-  background: #efece7;
-  color: #6b6459;
+  background: #e5342a;
+  color: #ffffff;
 }
 
-.wa-thread-preview {
-  margin: 0;
-  font-size: 0.92rem;
-  color: var(--color-text);
+/* ---- The chat pane ---- */
+
+.wa-chat {
   display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  background: var(--color-surface-alt);
+}
+
+.wa-chat-empty {
+  align-items: center;
+  justify-content: center;
   gap: 8px;
+  color: var(--color-text-muted);
 }
 
-.wa-thread-from {
-  flex: 0 0 auto;
+.wa-chat-empty span {
+  font-size: 2rem;
 }
 
-.wa-thread-failure {
+.wa-chat-empty p {
   margin: 0;
-  font-size: 0.82rem;
-  color: #8a2019;
 }
 
-.wa-thread-foot {
+.wa-chat-head {
   display: flex;
   align-items: center;
-  gap: 14px;
-  flex-wrap: wrap;
-  font-size: 0.82rem;
+  gap: 10px;
+  padding: 10px 14px;
+  background: var(--color-surface);
+  border-bottom: 1px solid var(--color-border);
 }
 
-.wa-thread-time {
-  color: var(--color-text-soft);
-  margin-right: auto;
-}
-
-.wa-thread-toggle {
+/* Only a phone needs a way back — on a wide screen the list is right there. */
+.wa-chat-back {
+  display: none;
   border: none;
   background: none;
-  padding: 0;
-  color: var(--color-text-muted);
-  font-family: var(--font-body);
-  font-weight: 600;
-  font-size: 0.82rem;
+  font-size: 1.3rem;
+  padding: 0 4px;
   cursor: pointer;
-  text-decoration: underline;
+  color: var(--color-text);
+}
+
+.wa-chat-who {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.wa-chat-name {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 1rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wa-chat-sub {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 0.76rem;
+  color: var(--color-text-soft);
 }
 
 .wa-thread-open {
+  flex: 0 0 auto;
   color: var(--color-ember-dark);
   font-weight: 700;
+  font-size: 0.8rem;
   text-decoration: none;
 }
 
@@ -9867,59 +10821,230 @@ html {
   text-decoration: underline;
 }
 
+.wa-chat-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.wa-chat-note {
+  align-self: center;
+  margin: 0;
+  font-size: 0.75rem;
+  color: var(--color-text-soft);
+}
+
 .wa-messages {
   list-style: none;
   margin: 0;
-  padding: 14px 16px;
-  border-top: 1px solid var(--color-border);
-  background: var(--color-surface-alt);
+  padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 6px;
+}
+
+.wa-message-row {
+  display: flex;
+  flex-direction: column;
+}
+
+.wa-day {
+  align-self: center;
+  margin: 10px 0 6px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: var(--color-text-muted);
 }
 
 /* Customer left, us right — the arrangement every messaging app uses, so who
    said what needs no legend. */
 .wa-message {
-  max-width: 78%;
-  padding: 8px 12px;
-  border-radius: var(--radius-md);
+  max-width: 72%;
+  padding: 7px 11px 5px;
+  border-radius: 12px;
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 2px;
+  box-shadow: 0 1px 1px rgba(0, 0, 0, 0.05);
 }
 
 .wa-message-customer {
   align-self: flex-start;
   background: var(--color-surface);
   border: 1px solid var(--color-border);
-  border-bottom-left-radius: 3px;
+  border-top-left-radius: 3px;
 }
 
 .wa-message-us {
   align-self: flex-end;
   background: var(--color-ember-light);
   border: 1px solid #f3d3bf;
-  border-bottom-right-radius: 3px;
+  border-top-right-radius: 3px;
+}
+
+.wa-message.is-pending {
+  opacity: 0.75;
+}
+
+.wa-message.is-error {
+  border-color: #f5c6c1;
+  background: #fdecea;
+  opacity: 1;
 }
 
 .wa-message-text {
-  font-size: 0.88rem;
+  font-size: 0.9rem;
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .wa-message-meta {
-  font-size: 0.68rem;
+  align-self: flex-end;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.66rem;
   color: var(--color-text-soft);
 }
 
+.wa-message-author::after {
+  content: '·';
+  margin-left: 5px;
+}
+
+.wa-tick {
+  font-size: 0.72rem;
+  letter-spacing: -0.2em;
+  color: var(--color-text-soft);
+}
+
+.wa-tick-read {
+  color: #3a8ee6;
+}
+
+.wa-tick-error {
+  letter-spacing: 0;
+  color: #c0271d;
+  font-weight: 800;
+}
+
+.wa-message-failure {
+  font-size: 0.74rem;
+  color: #8a2019;
+}
+
+.wa-retry {
+  border: none;
+  background: none;
+  padding: 0;
+  color: #8a2019;
+  font-family: var(--font-body);
+  font-weight: 700;
+  font-size: 0.74rem;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.wa-composer {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  padding: 10px 12px;
+  background: var(--color-surface);
+  border-top: 1px solid var(--color-border);
+}
+
+.wa-composer-input {
+  flex: 1 1 auto;
+  resize: none;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 20px;
+  padding: 9px 14px;
+  font-family: var(--font-body);
+  font-size: 0.92rem;
+  line-height: 1.35;
+  background: var(--color-surface);
+  color: var(--color-text);
+  max-height: 140px;
+}
+
+.wa-composer-input:focus {
+  outline: none;
+  border-color: var(--color-ember);
+  box-shadow: 0 0 0 2px var(--color-ember-light);
+}
+
+.wa-composer-send {
+  flex: 0 0 auto;
+  width: 40px;
+  height: 40px;
+  border: none;
+  border-radius: 999px;
+  background: var(--color-ember);
+  color: var(--color-charcoal);
+  font-size: 1rem;
+  cursor: pointer;
+}
+
+.wa-composer-send:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.wa-composer-closed {
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  font-size: 0.82rem;
+  color: #7a5b06;
+  background: #fffaeb;
+}
+
+/* A phone gets one pane at a time: the list, or — once a conversation is
+   picked — the chat full-height with a back arrow. */
 @media (max-width: 720px) {
-  .wa-message {
-    max-width: 90%;
+  .wa-layout {
+    grid-template-columns: minmax(0, 1fr);
+    height: calc(100dvh - 150px);
+    min-height: 420px;
   }
 
-  .wa-inbox-actions {
-    width: 100%;
+  .wa-layout .wa-chat {
+    display: none;
+  }
+
+  .wa-layout.has-selection .wa-list-pane {
+    display: none;
+  }
+
+  /* The open chat takes the whole screen, over the app's top bar and page
+     header, so the reply box sits at the bottom edge where a thumb reaches. */
+  .wa-layout.has-selection .wa-chat {
+    display: flex;
+    position: fixed;
+    inset: 0;
+    height: 100dvh;
+    z-index: 1200;
+  }
+
+  .wa-list-pane {
+    border-right: none;
+  }
+
+  .wa-chat-back {
+    display: inline-block;
+  }
+
+  .wa-message {
+    max-width: 88%;
   }
 }
 /* ---- Customer Map (Marketing > Customer Map) ---------------------------- */
@@ -9961,7 +11086,7 @@ html {
   font-size: 0.78rem;
   line-height: 1.45;
   color: #f6ece2;
-  background: rgba(36, 26, 20, 0.95);
+  background: rgba(18, 18, 18, 0.95);
   border: none;
   border-radius: var(--radius-sm);
   box-shadow: var(--shadow-md);
@@ -9974,7 +11099,7 @@ html {
 }
 
 .cmap-tip::before {
-  border-top-color: rgba(36, 26, 20, 0.95);
+  border-top-color: rgba(18, 18, 18, 0.95);
 }
 
 /* The legend's third entry: a hollow dashed ring, matching how a circle whose
@@ -10164,7 +11289,7 @@ html {
   padding: 0 6px;
   border-radius: 11px;
   background: var(--color-ember);
-  color: #fff;
+  color: var(--color-charcoal);
   font-size: 0.78rem;
   font-weight: 700;
   display: inline-flex;
@@ -10178,7 +11303,7 @@ html {
   bottom: 6px;
   padding: 1px 6px;
   border-radius: 8px;
-  background: rgba(36, 26, 20, 0.78);
+  background: rgba(18, 18, 18, 0.78);
   color: #fff;
   font-size: 0.7rem;
   font-variant-numeric: tabular-nums;
@@ -10408,7 +11533,7 @@ html {
   border-radius: 50%;
   border: 1px solid rgba(255, 255, 255, 0.14);
   background: linear-gradient(180deg, var(--color-charcoal-soft) 0%, var(--color-charcoal) 100%);
-  color: #f3e9de;
+  color: #ece8e1;
   box-shadow: var(--shadow-md);
   cursor: pointer;
   transition: transform 140ms ease, box-shadow 140ms ease;
@@ -10441,7 +11566,7 @@ html {
   padding: 0 5px;
   border-radius: 999px;
   background: var(--color-ember);
-  color: #ffffff;
+  color: var(--color-charcoal);
   font-family: var(--font-body);
   font-size: 0.66rem;
   font-weight: 800;
@@ -10484,6 +11609,14 @@ html {
   left: auto;
 }
 
+/* One row of names while the keyboard is up, however many there are. The
+   panel is down to whatever strip the keyboard leaves, and three rows of chips
+   in that is the composer's space — but hiding the row outright would take the
+   filter away at the one moment the list is shortest and hardest to read. */
+.notes-panel.is-lifted .notes-people {
+  max-height: 46px;
+}
+
 /* No empty floor while the keyboard is up. The reserved 260/320px that stops
    a quiet board opening as a letterbox is exactly the wrong trade here: with
    half the screen gone, the space is worth more to the note being typed than
@@ -10492,13 +11625,26 @@ html {
   min-height: 0;
 }
 
+/* Every band above and below the list is fixed furniture: it keeps its height
+   and .notes-scroll is the only thing that gives. Without this the browser is
+   free to shrink them to fit — and it does, starting with the ones that have
+   their own overflow, which is how the name filters ended up squashed to a
+   sliver on a phone. */
+.notes-panel-head,
+.notes-alert,
+.notes-search,
+.notes-people,
+.notes-composer {
+  flex: none;
+}
+
 .notes-panel-head {
   display: flex;
   align-items: flex-start;
   gap: 12px;
   padding: 14px 16px;
-  background: linear-gradient(180deg, var(--color-charcoal) 0%, #1d150f 100%);
-  color: #f3e9de;
+  background: linear-gradient(180deg, var(--color-charcoal) 0%, #0b0b0b 100%);
+  color: #ece8e1;
 }
 
 .notes-panel-head h2 {
@@ -10523,7 +11669,7 @@ html {
   border-radius: var(--radius-sm);
   border: 1px solid rgba(255, 255, 255, 0.14);
   background: rgba(255, 255, 255, 0.08);
-  color: #f3e9de;
+  color: #ece8e1;
   font-size: 0.8rem;
   cursor: pointer;
 }
@@ -10606,16 +11752,22 @@ html {
   color: var(--color-ember-dark);
 }
 
-/* The row of names under the search box. Scrolls sideways rather than wrapping
-   — the panel is a phone-width column, and a roster that grew to two rows
-   would push the notes themselves off the screen every time someone new
-   posted. */
+/* The row of names under the search box. Wraps rather than scrolling sideways:
+   a chip row with a hidden scrollbar looks like the whole roster, so the third
+   and fourth names simply did not exist to anyone holding a phone. Two rows of
+   chips cost about thirty pixels and are the only version of this control that
+   can be used with a thumb.
+
+   Capped and scrollable past three rows, so a board that has collected a dozen
+   names still cannot eat the list underneath it. */
 .notes-people {
   display: flex;
+  flex-wrap: wrap;
   gap: 6px;
   align-items: center;
   padding: 8px 12px;
-  overflow-x: auto;
+  max-height: 108px;
+  overflow-y: auto;
   background: var(--color-surface);
   border-bottom: 1px solid var(--color-border);
   scrollbar-width: none;
@@ -10631,9 +11783,11 @@ html {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  padding: 5px 11px;
+  /* 32px tall at this padding — a thumb target rather than a mouse one, since
+     this row is worked from a phone far more often than from a desk. */
+  padding: 7px 12px;
   font-family: var(--font-body);
-  font-size: 0.74rem;
+  font-size: 0.76rem;
   line-height: 1.2;
   color: var(--color-text-muted);
   background: var(--color-surface-alt);
@@ -10653,7 +11807,7 @@ html {
 .notes-person.is-on {
   background: var(--color-ember);
   border-color: var(--color-ember);
-  color: #fff;
+  color: var(--color-charcoal);
   font-weight: 600;
 }
 
@@ -10662,129 +11816,10 @@ html {
   outline-offset: 1px;
 }
 
-/* Today's cadence, pinned above the board. Tinted rather than plain so the two
-   halves of the panel are told apart at a glance: this one comes back every
-   week on its own, the notes below it were typed by someone. */
-.notes-tasks {
-  /* Shrinkable, not fixed. .notes-scroll below has a 260px floor it will not
-     go under, so on a short screen with the keyboard up something has to give
-     — and it should be the pinned strip, which scrolls inside itself, rather
-     than the composer, which would be pushed out of the panel entirely. */
-  flex: 0 1 auto;
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  background: var(--color-surface-alt);
-  border-bottom: 1px solid var(--color-border);
-}
-
-.notes-tasks-head {
-  flex: none;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  padding: 9px 12px;
-  font-family: var(--font-body);
-  font-size: 0.72rem;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: var(--color-text-muted);
-  background: none;
-  border: 0;
-  cursor: pointer;
-}
-
-.notes-tasks-title {
-  font-weight: 700;
-  color: var(--color-text);
-}
-
-.notes-tasks-count {
-  margin-left: auto;
-  font-weight: 600;
-  text-transform: none;
-  letter-spacing: 0;
-  color: var(--color-ember-dark);
-}
-
-/* Nothing left today. Said in the muted colour rather than the ember one, so
-   the header stops asking for attention once there is nothing to act on. */
-.notes-tasks-count.is-clear {
-  color: var(--color-text-muted);
-  font-weight: 500;
-}
-
-.notes-tasks-chevron {
-  flex: none;
-  font-size: 0.6rem;
-  opacity: 0.6;
-}
-
-/* Capped and scrollable. A Saturday with nine jobs on it would otherwise push
-   the notes off the bottom of the panel, and the notes are what the bubble is
-   for. Deep enough that the cap only bites on a long day, and padded at the
-   bottom so the last row never sits flush against the cut. */
-.notes-tasks-list {
-  flex: 1 1 auto;
-  min-height: 0;
-  max-height: min(46vh, 340px);
-  overflow-y: auto;
-  padding: 0 12px 10px;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.notes-task {
-  display: flex;
-  align-items: flex-start;
-  gap: 9px;
-  padding: 6px 8px;
-  border-radius: var(--radius-sm);
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  cursor: pointer;
-}
-
-.notes-task:hover {
-  border-color: var(--color-border-strong);
-}
-
-.notes-task-main {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-}
-
-.notes-task-label {
-  font-size: 0.82rem;
-  line-height: 1.35;
-  color: var(--color-text);
-}
-
-.notes-task-meta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  font-size: 0.68rem;
-  color: var(--color-text-muted);
-}
-
-.notes-task-time {
-  font-variant-numeric: tabular-nums;
-}
-
-.notes-task-who {
-  font-weight: 600;
-  color: var(--color-ember-dark);
-}
-
-/* What kind of job it is. Marketing gets the ember tint because it is the
-   half of the list that is nobody's kitchen shift and therefore the half that
-   gets forgotten; everything else stays neutral so the strip does not turn
-   into a row of competing colours. */
+/* What kind of job a scheduled row is. Marketing gets the ember tint because
+   it is the half of the day that is nobody's kitchen shift and therefore the
+   half that gets forgotten; everything else stays neutral so the board does
+   not turn into a column of competing colours. */
 .notes-task-tag {
   padding: 0 6px;
   border-radius: 999px;
@@ -10804,22 +11839,10 @@ html {
   color: var(--color-ember-dark);
 }
 
-/* A ticked job, still in the list where it was. Faded and struck through, the
-   same way a ticked note is, so the two lists agree on what finished looks
-   like. */
-.notes-task.is-done {
-  opacity: 0.6;
-}
-
-.notes-task.is-done .notes-task-label {
-  text-decoration: line-through;
-}
-
-.notes-tasks-clear {
-  margin: 0;
-  padding: 2px 0 4px;
-  font-size: 0.76rem;
-  color: var(--color-text-muted);
+.notes-task-time {
+  font-size: 0.68rem;
+  color: var(--color-text-soft);
+  font-variant-numeric: tabular-nums;
 }
 
 /* The matched run inside a note. Amber rather than the ember used for actions,
@@ -10889,6 +11912,38 @@ html {
   box-shadow: var(--shadow-sm);
 }
 
+/* A scheduled job sitting in the same column as the notes. The only thing
+   marking it out is a hairline down its left edge — enough to see that a run
+   of rows is the cadence, not enough to make it a second list, which is the
+   whole reason it was moved in here. */
+.notes-item.is-task {
+  border-left: 3px solid var(--color-ember);
+}
+
+/* The ↻ that says this row comes back next week. Sits first in the meta line,
+   before the category, because it is the one thing about the row that cannot
+   be worked out from the words. */
+.notes-item-repeat {
+  font-size: 0.72rem;
+  line-height: 1;
+  color: var(--color-ember-dark);
+  cursor: help;
+}
+
+/* Read out, never drawn. The glyph beside it carries the meaning on screen and
+   would be announced as a piece of punctuation on its own. */
+.notes-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 /* A real <input type=checkbox>, only resized and recoloured: the native
    control is the one that a screen reader announces as a checkbox and that the
    space bar ticks. accent-color does the whole job in every browser this runs
@@ -10954,6 +12009,39 @@ html {
   color: var(--color-text-soft);
 }
 
+/* The name on a row is also where it is changed. Looks like plain text; tap it
+   and it becomes .notes-name-input in the same spot. */
+.notes-reassign {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font-family: var(--font-body);
+  cursor: pointer;
+}
+
+.notes-reassign:hover {
+  text-decoration: underline;
+}
+
+.notes-name-input {
+  padding: 0 4px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-ember-dark);
+  font-family: var(--font-body);
+  font-size: 0.72rem;
+  font-weight: 700;
+  max-width: 12em;
+}
+
+/* On a touch screen, 16px stops iOS zooming the page in on focus. */
+@media (pointer: coarse) {
+  .notes-name-input {
+    font-size: 16px;
+  }
+}
+
 /* Only visible once the note is hovered or the button itself is focused, so a
    column of notes reads as text rather than as a column of delete crosses. On
    a touch screen there is no hover, so it stays visible — which is the right
@@ -11012,7 +12100,7 @@ html {
 .notes-confirm-yes {
   border: 1px solid var(--color-ember-dark);
   background: var(--color-ember);
-  color: #ffffff;
+  color: var(--color-charcoal);
 }
 
 .notes-confirm-no {
@@ -11039,41 +12127,39 @@ html {
   background: var(--color-surface);
 }
 
-/* Note or task. A two-tab segment rather than a checkbox or a dropdown: there
-   are exactly two things this box can write, and which one is armed has to be
-   readable without opening anything, because the two go to different tables
-   and only one of them comes back next week. */
-.notes-mode {
-  display: inline-flex;
-  gap: 2px;
-  margin-bottom: 8px;
-  padding: 2px;
-  border-radius: var(--radius-sm);
-  background: var(--color-surface-alt);
-  border: 1px solid var(--color-border);
-}
+/* Does it come back next week. Under the box rather than above it, and a tick
+   box rather than a pair of mode tabs: the tabs made choosing between a note
+   and a task the first thing you did, when the answer is nearly always "just
+   write it down" and the repeat is the exception worth one deliberate tap.
 
-.notes-mode-tab {
-  padding: 4px 14px;
-  border: 0;
-  border-radius: calc(var(--radius-sm) - 2px);
-  background: none;
-  font-family: var(--font-body);
-  font-size: 0.72rem;
-  font-weight: 700;
+   Padded to a thumb's worth of height, since the whole row is the target. */
+.notes-repeat {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin-top: 9px;
+  padding: 4px 2px;
+  font-size: 0.76rem;
   color: var(--color-text-muted);
   cursor: pointer;
 }
 
-.notes-mode-tab.is-on {
-  background: var(--color-surface);
-  color: var(--color-text);
-  box-shadow: var(--shadow-sm);
+.notes-repeat input {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  accent-color: var(--color-ember);
+  cursor: pointer;
 }
 
-.notes-mode-tab:focus-visible {
+.notes-repeat input:checked + span {
+  color: var(--color-ember-dark);
+  font-weight: 700;
+}
+
+.notes-repeat input:focus-visible {
   outline: 2px solid var(--color-ember);
-  outline-offset: 1px;
+  outline-offset: 2px;
 }
 
 /* Category, time and assignee: one row of small fields under the task box.
@@ -11135,7 +12221,8 @@ html {
   flex: none;
 }
 
-.notes-author input {
+.notes-author input,
+.notes-author select {
   flex: 1;
   min-width: 0;
   padding: 4px 8px;
@@ -11175,7 +12262,8 @@ html {
 .notes-composer-row input[type='text']:focus-visible,
 .notes-task-fields input:focus-visible,
 .notes-task-fields select:focus-visible,
-.notes-author input:focus-visible {
+.notes-author input:focus-visible,
+.notes-author select:focus-visible {
   outline: 2px solid var(--color-ember);
   outline-offset: 1px;
   border-color: transparent;
@@ -11227,9 +12315,20 @@ html {
     padding-right: 62px;
   }
 
+  /* Pinned to the screen rather than hung off the bubble, and given all of it
+     down to a thumb's clearance at the bottom. On a phone this panel is the
+     screen while it is open, and measuring its height against the bubble's
+     corner was what left the composer and the filters fighting over the last
+     hundred pixels. dvh where it exists, so the panel does not sit under the
+     browser's own toolbar as that slides away. */
   .notes-panel {
-    width: calc(100vw - 16px);
-    max-height: min(84vh, 820px);
+    position: fixed;
+    top: 58px;
+    left: 8px;
+    right: 8px;
+    width: auto;
+    max-height: calc(100vh - 70px);
+    max-height: calc(100dvh - 70px);
   }
 
   /* Both edges, so the shortened panel uses the width it has left rather than
@@ -11240,10 +12339,13 @@ html {
     width: auto;
   }
 
-  /* Taller on a phone than on a desktop, because this is where the board is
-     actually worked from and where the panel has the whole screen to use. */
+  /* Lower than the desktop floor, not higher. The panel already has the whole
+     screen here, so the list gets what is left over — and a floor tall enough
+     to push the composer or the filters out of a short phone in landscape is
+     the floor doing harm. */
   .notes-scroll {
-    min-height: 320px;
+    min-height: 180px;
+    padding: 10px 10px 14px;
   }
 
   /* Fingers, not a mouse pointer. */
@@ -11251,4 +12353,444 @@ html {
     width: 24px;
     height: 24px;
   }
+
+  /* Roomier rows: the search box, the name chips and the composer are all
+     worked with a thumb here, and 16px on the inputs is also what stops iOS
+     zooming the whole panel the moment one is focused. */
+  .notes-search {
+    padding: 8px 10px;
+  }
+
+  .notes-search input {
+    padding: 9px 10px;
+    font-size: 16px;
+  }
+
+  .notes-people {
+    padding: 8px 10px 10px;
+    max-height: 120px;
+  }
+
+  .notes-person {
+    padding: 8px 13px;
+    font-size: 0.8rem;
+  }
+
+  .notes-composer {
+    padding: 10px 10px 12px;
+  }
+
+  .notes-composer-row textarea,
+  .notes-author input,
+  .notes-author select,
+  .notes-task-fields input,
+  .notes-task-fields select {
+    font-size: 16px;
+  }
+
+  .notes-send {
+    padding: 11px 18px;
+  }
+
+  .notes-repeat {
+    padding: 6px 2px;
+    font-size: 0.8rem;
+  }
+
+  /* The delete cross is a 22px target sitting next to the text on a screen
+     worked with a thumb. */
+  .notes-item-delete {
+    width: 28px;
+    height: 28px;
+  }
+}
+
+/* ---- Cost to Make ---------------------------------------------------------
+   Only what is new to this screen. The toolbar, tiles, panels, tables and the
+   weekly column chart are .mkt-* / .sal-*, shared with the other two money
+   screens and not restyled here. */
+
+/* Only the top of a stacked column gets the 4px data-end; the segments below
+   it and the baseline stay square, same as the Sales by Item stack. */
+.ue-bar-top {
+  border-radius: 4px 4px 0 0;
+}
+
+/* Bars stay thin however few weeks are in the range. .sal-col divides the plot
+   evenly, which is right at twelve weeks and absurd at two — a pair of columns
+   half the panel wide reads as a block diagram rather than as a chart. The
+   column keeps its full width so the hover target and the tooltip anchor do
+   not move; only the mark inside it is capped. */
+.ue-plot .sal-stack {
+  max-width: 88px;
+  margin: 0 auto;
+}
+
+/* The composition bar in a table row. Every row is drawn against the same
+   rupee scale, so the track is full width and the segments fill as far as the
+   dish costs — a bar that stopped at its own total would make a burger and a
+   half-rack of ribs look alike. */
+.ue-comp {
+  display: flex;
+  gap: 2px;
+  align-items: center;
+  width: 100%;
+  min-width: 90px;
+  height: 10px;
+  border-radius: 3px;
+  background: var(--color-surface-alt);
+}
+
+.ue-comp-seg {
+  height: 100%;
+  min-width: 2px;
+  border-radius: 2px;
+}
+
+/* Coverage: the figure and a meter beside it. At 5% the figure alone reads as
+   a rounding error; the empty track is what makes it land. */
+.ue-cov {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.ue-cov-track {
+  width: 42px;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--color-surface-alt);
+  overflow: hidden;
+  flex: none;
+}
+
+.ue-cov-fill {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  background: var(--color-text-soft);
+}
+
+.ue-cov-text {
+  font-variant-numeric: tabular-nums;
+  font-size: 0.76rem;
+  color: var(--color-text-soft);
+}
+
+.ue-table td {
+  vertical-align: middle;
+}
+
+.ue-disclose {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.ue-disclose span {
+  color: var(--color-text-muted);
+  font-size: 0.7rem;
+}
+
+.ue-row-open > td {
+  background: var(--color-surface-alt);
+}
+
+.ue-detail > td {
+  background: var(--color-surface-alt);
+  padding: 14px 12px;
+}
+
+/* Counted on the left, not counted on the right. Side by side rather than one
+   list, because the second column is the reason the first one is not the whole
+   number. */
+.ue-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 18px;
+}
+
+.ue-detail-title {
+  margin: 0 0 8px;
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+/* The counted side of an open row. Rows on the surface colour with a rule
+   between them, not pills — an open row is already painted in the alt surface,
+   and a pill in that same colour is invisible on it. */
+.ue-counted {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  font-size: 0.84rem;
+}
+
+.ue-counted li {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.ue-counted li:last-child {
+  border-bottom: 0;
+}
+
+.ue-counted li > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+/* The tie back to the chart. inline-block, not the bare .mkt-swatch — that
+   class only takes a width inside .mkt-legend's flex row. */
+.ue-counted i {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  flex: none;
+}
+
+.ue-counted strong {
+  font-variant-numeric: tabular-nums;
+}
+
+.ue-missing {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 0.78rem;
+  line-height: 1.4;
+}
+
+.ue-missing li {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.ue-missing li span:first-child {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* A second line under a row's name — the order's delivery day, the session id
+   and date. Muted and small so the name stays the thing the eye lands on. */
+.ue-sub {
+  margin-top: 2px;
+  font-size: 0.74rem;
+  color: var(--color-text-soft);
+}
+
+/* The average order as one bar. Full panel width is the whole order; a 2px
+   surface gap between segments so neighbouring colours never touch. */
+.ue-avg-bar {
+  display: flex;
+  gap: 2px;
+  width: 100%;
+  height: 28px;
+}
+
+.ue-avg-seg {
+  height: 100%;
+  min-width: 2px;
+}
+
+.ue-avg-seg:first-child {
+  border-radius: 4px 0 0 4px;
+}
+
+.ue-avg-seg:last-child {
+  border-radius: 0 4px 4px 0;
+}
+
+/* Its numbers, carried on labels rather than in a tooltip — this is the
+   headline of the lens and should read without a hover. */
+.ue-avg-labels {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 22px;
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: 0.84rem;
+}
+
+.ue-avg-labels li {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.ue-avg-labels i {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  flex: none;
+}
+
+.ue-avg-labels strong {
+  font-variant-numeric: tabular-nums;
+}
+
+/* A table inside an open row. Tighter than a top-level one, and on the plain
+   surface so it stands off the alt-surface row it sits in. */
+.ue-lines {
+  margin-top: 4px;
+  background: var(--color-surface);
+  font-size: 0.8rem;
+}
+
+.ue-lines th,
+.ue-lines td {
+  padding: 6px 8px;
+}
+
+/* A cook opens into three columns: cost, yield, what it fed. The middle one
+   carries the per-dish table and gets the room; min-width: 0 lets a column
+   shrink below its table's natural width so the table scrolls inside it
+   rather than spilling into its neighbour. Stacks to one column when narrow. */
+.ue-detail-grid-3 {
+  grid-template-columns: minmax(200px, 1fr) minmax(0, 1.7fr) minmax(200px, 1fr);
+}
+
+.ue-detail-grid-3 > div {
+  min-width: 0;
+}
+
+@media (max-width: 980px) {
+  .ue-detail-grid-3 {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.ue-lines-wrap {
+  overflow-x: auto;
+}
+
+/* ---- Cost to Make: the price sheet (PriceSheet.tsx) ----------------------
+   The gap list with inputs in it. Rows stay table rows so the ingredients
+   can be scanned down one column; the inputs are small enough that a row is
+   still one line on a laptop, and the table scrolls sideways on a phone
+   like every other .mkt-table. */
+.ue-price-table td {
+  vertical-align: top;
+}
+
+/* Floors on the two text columns, so a narrow screen scrolls the table
+   sideways (as every .mkt-table does) rather than crushing the ingredient
+   name into a column one word wide. */
+.ue-price-table td:first-child {
+  min-width: 190px;
+}
+
+.ue-price-table td:nth-child(2) {
+  min-width: 160px;
+}
+
+.ue-price-done {
+  color: var(--color-text-muted);
+}
+
+.ue-price-sub {
+  margin-top: 2px;
+  font-size: 0.74rem;
+  color: var(--color-text-soft);
+}
+
+/* A value the purchase log supplied, not the person. Marked so a pre-filled
+   pack size is never mistaken for one somebody already confirmed. */
+.ue-price-hint {
+  margin-top: 4px;
+  font-size: 0.74rem;
+  color: var(--color-ember-dark);
+}
+
+.mkt-table input.ue-price-input {
+  width: 84px;
+  padding: 6px 8px;
+}
+
+.ue-price-pack {
+  display: flex;
+  gap: 6px;
+}
+
+.mkt-table .ue-price-pack select {
+  padding: 6px 8px;
+}
+
+.ue-price-saved {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.ue-price-unlinked {
+  margin-top: 16px;
+}
+
+.ue-price-unlinked-list {
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ue-price-unlinked-list li {
+  font-size: 0.86rem;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px 16px;
+  padding: 10px 0;
+  border-top: 1px solid var(--color-border);
+}
+
+.ue-price-link {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.ue-price-link select {
+  padding: 4px 8px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  font-family: inherit;
+  font-size: 0.78rem;
+  color: var(--color-text);
+}
+
+/* The flag under Save that says which week the lines went into, when the
+   purchase date was hand-set outside the week the table is showing. */
+.purch-landed {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
 }

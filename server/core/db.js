@@ -83,7 +83,33 @@ function getDb() {
   // ON is not the SQLite default — without it every REFERENCES clause in the
   // schema is decoration.
   db.exec('PRAGMA foreign_keys = ON');
+  startCheckpointing(db);
   return db;
+}
+
+// Folds the WAL back into smokerings.db itself, every 30 seconds.
+//
+// SQLite only does this on its own once the WAL reaches 1,000 pages (~4 MB),
+// or when the last connection closes — and the server's connection never
+// closes. This app writes a few kilobytes a day, so on its own the main file
+// went a week (9 Sep to 13 Sep) without a single write reaching it: the app
+// read every purchase through the WAL, while anything that opens only the .db
+// file — a SQLite viewer, a copied backup — saw the database as it was a week
+// earlier. PASSIVE never blocks a reader or a writer; a busy result simply
+// means it tries again next time. unref'd so it never keeps a test or a
+// script alive.
+let checkpointTimer = null;
+
+function startCheckpointing(handle) {
+  clearInterval(checkpointTimer);
+  checkpointTimer = setInterval(() => {
+    try {
+      handle.exec('PRAGMA wal_checkpoint(PASSIVE)');
+    } catch {
+      // Busy — nothing to do until the next tick.
+    }
+  }, 30_000);
+  checkpointTimer.unref?.();
 }
 
 // node:sqlite hands back null-prototype objects. The modules migrating off
@@ -140,6 +166,8 @@ function getDbConfig() {
 
 // Tests build a database per case; the server never calls this.
 function closeDb() {
+  clearInterval(checkpointTimer);
+  checkpointTimer = null;
   if (db) {
     db.close();
     db = null;

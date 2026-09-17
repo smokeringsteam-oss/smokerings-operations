@@ -129,3 +129,27 @@ describe('ticking from the panel', () => {
     expect(() => today.setTodayTaskDone({ taskId: 'WS-01', now: TUESDAY })).toThrow(/true or false/);
   });
 });
+
+describe('reassigning from the panel', () => {
+  it("writes this week's override and leaves the cadence alone", () => {
+    const strip = today.reassignTodayTask({ taskId: 'WS-01', assignedTo: ' Sowmya ', now: TUESDAY });
+    expect(strip.tasks.find((t) => t.id === 'WS-01').assignedTo).toBe('Sowmya');
+    expect(statusLog.getWeekStatus({ weekKey: WEEK }).weekState['WS-01']).toMatchObject({ assignedTo: 'Sowmya' });
+    expect(repo.select('scheduled_task', { task_id: 'WS-01' })[0].assigned_to).toBe('Adarsh');
+  });
+
+  it('keeps the tick and the time it already had', () => {
+    statusLog.setTaskStatus({ weekKey: WEEK, taskId: 'WS-02', done: true, assignedTo: 'Sowmya', time: '4:30 PM' });
+    today.reassignTodayTask({ taskId: 'WS-02', assignedTo: 'Naveen', now: TUESDAY });
+    expect(statusLog.getWeekStatus({ weekKey: WEEK }).weekState['WS-02']).toMatchObject({
+      done: true,
+      assignedTo: 'Naveen',
+      time: '4:30 PM',
+    });
+  });
+
+  it('refuses a blank name or an unknown task', () => {
+    expect(() => today.reassignTodayTask({ taskId: 'WS-01', assignedTo: '  ', now: TUESDAY })).toThrow(/name/);
+    expect(() => today.reassignTodayTask({ taskId: 'WS-99', assignedTo: 'Naveen', now: TUESDAY })).toThrow(/no longer/);
+  });
+});

@@ -233,7 +233,7 @@ describe('migrate', () => {
   });
 
   it('says what it changed the first time and nothing the second', () => {
-    expect(firstRun.length).toBe(13);
+    expect(firstRun.length).toBe(14);
     // Idempotence is what makes it safe to run on every open: the server
     // opens the database on the first request of every restart.
     expect(migrate(legacy)).toEqual([]);
@@ -241,5 +241,57 @@ describe('migrate', () => {
 
   it('has nothing to do to a database built from schema.sql', () => {
     expect(migrate(fresh)).toEqual([]);
+  });
+
+  it('moves labour and misc out of weekly_expense into purchase, in the week they were filed', () => {
+    const db = new DatabaseSync(path.join(dir, 'expenses.db'));
+    try {
+      db.exec(fs.readFileSync(path.resolve(import.meta.dirname, 'schema.sql'), 'utf8'));
+      db.exec(`
+        INSERT INTO vendor (vendor_id, vendor_name) VALUES ('VEN-010', 'Blinkit');
+        INSERT INTO purchase (purchase_id, purchase_date, channel, vendor_id, item_name, quantity_purchased, expense_category)
+          VALUES ('PUR-0046', '2026-09-01', 'B2C', 'VEN-010', 'Tape', 1, 'Other');
+        CREATE TABLE weekly_expense (
+          expense_id TEXT PRIMARY KEY, week_start TEXT NOT NULL, channel TEXT NOT NULL, kind TEXT NOT NULL,
+          description TEXT, amount_inr REAL NOT NULL, notes TEXT, created_at TEXT NOT NULL, odoo_bill_id INTEGER
+        );
+        -- Entered Saturday evening IST (UTC the same day): stays on that day.
+        INSERT INTO weekly_expense VALUES ('WEX-0001','2026-09-07','B2C','Miscellaneous','Chips',100,NULL,'2026-09-12T11:06:12.641Z',NULL);
+        -- Entered the Tuesday after the week it was filed for: held to its Monday.
+        INSERT INTO weekly_expense VALUES ('WEX-0002','2026-09-07','B2B','Labour',NULL,350,'cash','2026-09-15T04:00:00.000Z',NULL);
+      `);
+
+      const changes = migrate(db);
+      expect(changes.join(' ')).toMatch(/2 row\(s\) moved into purchase/);
+      expect(db.prepare("SELECT 1 FROM sqlite_master WHERE name = 'weekly_expense'").get()).toBeUndefined();
+
+      const moved = db
+        .prepare(
+          `SELECT p.purchase_id, p.purchase_date, p.channel, v.vendor_name, v.vendor_type, p.item_type, p.item_name,
+                  p.quantity_purchased, p.total_cost, p.expense_category
+             FROM purchase p JOIN vendor v USING (vendor_id)
+            WHERE p.purchase_id > 'PUR-0046' ORDER BY p.purchase_id`,
+        )
+        .all();
+      expect(moved).toEqual([
+        {
+          purchase_id: 'PUR-0047', purchase_date: '2026-09-12', channel: 'B2C', vendor_name: 'Miscellaneous',
+          vendor_type: 'Expense', item_type: 'service', item_name: 'Chips', quantity_purchased: 1, total_cost: 100,
+          expense_category: 'Miscellaneous',
+        },
+        {
+          purchase_id: 'PUR-0048', purchase_date: '2026-09-07', channel: 'B2B', vendor_name: 'Labour',
+          vendor_type: 'Expense', item_type: 'service', item_name: 'Labour', quantity_purchased: 1, total_cost: 350,
+          expense_category: 'Labour',
+        },
+      ]);
+      // The old "Other" category is the same bucket now.
+      expect(db.prepare("SELECT expense_category FROM purchase WHERE purchase_id = 'PUR-0046'").get()).toEqual({
+        expense_category: 'Miscellaneous',
+      });
+      expect(migrate(db)).toEqual([]);
+    } finally {
+      db.close();
+    }
   });
 });

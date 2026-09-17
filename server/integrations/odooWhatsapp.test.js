@@ -30,13 +30,18 @@ vi.mock('./odoo.js', () => ({
   htmlToText: (html) => String(html || '').replace(/<[^>]*>/g, ''),
 }));
 
-const { fetchWhatsappThreads } = await import('./odooWhatsapp.js');
+const { fetchWhatsappThreads, fetchWhatsappConversation, sendWhatsappReply } = await import('./odooWhatsapp.js');
 
 function fakeOdoo(model, method, args = []) {
   if (model === 'discuss.channel' && method === 'fields_get') {
     return { whatsapp_number: { type: 'char' }, whatsapp_partner_id: { type: 'many2one' } };
   }
-  if (model === 'discuss.channel' && method === 'search_read') return channels;
+  if (model === 'discuss.channel' && method === 'search_read') {
+    // A single-channel lookup filters by id; the inbox asks for them all.
+    const idClause = args[0]?.find?.((clause) => clause[0] === 'id');
+    return idClause ? channels.filter((channel) => channel.id === idClause[2]) : channels;
+  }
+  if (model === 'discuss.channel' && method === 'message_post') return [555];
   if (model === 'ir.model.data' && method === 'check_object_reference') return ['mail.message.subtype', COMMENT_SUBTYPE];
   if (model === 'res.users' && method === 'search_read') return [{ id: 2, partner_id: [SELF_PARTNER, 'us'] }];
   if (model === 'mail.message' && method === 'search_read') return messages.slice().reverse();
@@ -244,6 +249,61 @@ describe('ordering', () => {
     const { threads } = await fetchWhatsappThreads();
 
     expect(threads.map((thread) => thread.channelId)).toEqual([12, 11, 10]);
+  });
+});
+
+describe('opening one conversation', () => {
+  it('returns its longer history oldest first, without the internal atDate', async () => {
+    conversation([['customer', 'received', 60, 'first'], ['us', 'read', 30, 'second']]);
+
+    const result = await fetchWhatsappConversation({ channelId: 10 });
+
+    expect(result.messages.map((message) => message.text)).toEqual(['first', 'second']);
+    expect(result.messages[0]).not.toHaveProperty('atDate');
+  });
+
+  it('refuses an id that is not a WhatsApp conversation', async () => {
+    await expect(fetchWhatsappConversation({ channelId: 999 })).rejects.toMatchObject({ status: 404 });
+  });
+});
+
+describe('sending a reply', () => {
+  beforeEach(() => {
+    waRows = [{ mail_message_id: [555, false], message_type: 'outbound', state: 'sent', failure_reason: false }];
+  });
+
+  it('posts the way Odoo Discuss does, so the WhatsApp module actually sends it', async () => {
+    const result = await sendWhatsappReply({ channelId: 10, text: 'On its way <3\nSee you soon' });
+
+    const call = execute.mock.calls.find(([model, method]) => model === 'discuss.channel' && method === 'message_post');
+    expect(call[2]).toEqual([[10]]);
+    expect(call[3]).toMatchObject({
+      message_type: 'whatsapp_message',
+      subtype_xmlid: 'mail.mt_comment',
+      body_is_html: true,
+    });
+    // Escaped, with the line break kept.
+    expect(call[3].body).toBe('<p>On its way &lt;3<br>See you soon</p>');
+    expect(result).toEqual({ messageId: 555, state: 'sent', failureReason: null, queued: true });
+  });
+
+  it('refuses free text once the 24h window has shut, without posting anything', async () => {
+    channels[0].whatsapp_channel_valid_until = windowOpen(-1);
+
+    await expect(sendWhatsappReply({ channelId: 10, text: 'hello' })).rejects.toMatchObject({ status: 409 });
+    expect(execute.mock.calls.some(([, method]) => method === 'message_post')).toBe(false);
+  });
+
+  it('refuses an empty message', async () => {
+    await expect(sendWhatsappReply({ channelId: 10, text: '   ' })).rejects.toMatchObject({ status: 400 });
+  });
+
+  it('reports a post Odoo never queued for WhatsApp instead of calling it sent', async () => {
+    waRows = [];
+
+    const result = await sendWhatsappReply({ channelId: 10, text: 'hello' });
+
+    expect(result.queued).toBe(false);
   });
 });
 

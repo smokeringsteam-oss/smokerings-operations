@@ -186,8 +186,15 @@ For each order return:
 - "preferredTime": the time in 24-hour HH:MM if the customer named a concrete clock time, otherwise an empty string. For "by 1PM" that is "13:00". For "ASAP" or "as early as possible" it is "".
 - "quote": the customer's own words, copied verbatim from the note, that you based this on. Empty string when hasPreference is false.
 - "confidence": "high" when the customer stated a clear time, "medium" when they were vague but clearly meant timing, "low" when you are unsure it is a timing request at all.
+- "kind": what sort of timing ask it is — "by" (must arrive before a time: "by 1PM", "before the match at 4"), "around" (a target time: "around 7:30"), "asap" (as soon/early as possible), "after" (not before a time: "after 8pm", "don't come before 6"), "other" (timing-related but none of those, e.g. "as late as possible"). Use "other" when hasPreference is false.
 
-Never invent a time the note does not contain. If a note is empty or has no customer-written part, return hasPreference false for it.`;
+Separately from timing, also return for every order:
+- "urgencyFlags": up to 3 very short tags (2-5 words each, sentence case) for anything in the customer's words the delivery or packing team must not miss: an event the food is for ("Party at 1 PM", "Birthday lunch"), a gift, "Call before arriving", "Leave with security", "Elderly customer", "Hard to find address". Do not repeat the time preference label here. Empty array when there is nothing.
+- "kitchenInstructions": one short line summarising what the customer asked of the KITCHEN — cooking, spice, allergies, packing, cutlery, sauces ("No onions; extra BBQ sauce; pack sauces separately"). Only asks the kitchen can act on, never delivery or payment details. Empty string when there is none.
+
+The same exclusions apply to flags and instructions: never the "Delivery slot" line, item lists, payment, totals, addresses or phone numbers — only what the customer themselves wrote.
+
+Never invent a time, flag or instruction the note does not contain. If a note is empty or has no customer-written part, return hasPreference false, no flags and no instructions for it.`;
 
 // Gemini is asked once per distinct note, not once per board render: the
 // packing boards re-fetch whenever the date range changes or someone hits
@@ -216,7 +223,43 @@ function cacheSet(key, value) {
   }
 }
 
-const NO_TIME_PREFERENCE = { hasPreference: false, label: '', preferredTime: '', quote: '', confidence: 'high' };
+const NO_TIME_PREFERENCE = {
+  hasPreference: false,
+  label: '',
+  preferredTime: '',
+  quote: '',
+  confidence: 'high',
+  kind: 'other',
+  urgencyFlags: [],
+  kitchenInstructions: '',
+};
+
+const TIME_KINDS = ['by', 'around', 'asap', 'after', 'other'];
+
+// One Gemini row as the board may use it. Pure and exported so the checking
+// is testable without a key. A timing read with nothing to show on the card
+// collapses to no-preference, but the flags and kitchen line on the same note
+// survive it — "no onions" is worth showing whether or not a time was asked.
+export function normaliseNoteReading(row) {
+  const urgencyFlags = Array.isArray(row?.urgencyFlags)
+    ? row.urgencyFlags
+        .filter((flag) => typeof flag === 'string' && flag.trim())
+        .map((flag) => flag.trim().slice(0, 40))
+        .slice(0, 3)
+    : [];
+  const kitchenInstructions =
+    typeof row?.kitchenInstructions === 'string' ? row.kitchenInstructions.trim().slice(0, 200) : '';
+  const timing = {
+    hasPreference: Boolean(row?.hasPreference),
+    label: typeof row?.label === 'string' ? row.label.trim() : '',
+    preferredTime: /^([01]\d|2[0-3]):[0-5]\d$/.test(row?.preferredTime || '') ? row.preferredTime : '',
+    quote: typeof row?.quote === 'string' ? row.quote.trim() : '',
+    confidence: ['high', 'medium', 'low'].includes(row?.confidence) ? row.confidence : 'low',
+    kind: TIME_KINDS.includes(row?.kind) ? row.kind : 'other',
+  };
+  const usableTiming = timing.hasPreference && (timing.label || timing.quote) ? timing : NO_TIME_PREFERENCE;
+  return { ...NO_TIME_PREFERENCE, ...usableTiming, urgencyFlags, kitchenInstructions };
+}
 
 // orders: [{ orderId, note }], straight off fetchOrderPackingList. Returns
 // { preferences: { [orderId]: {...} }, read, cached } — orders with no note
@@ -272,8 +315,11 @@ export async function readOrderTimePreferences({ orders }) {
                 preferredTime: { type: Type.STRING, description: '24-hour HH:MM, or empty when no clock time was named.' },
                 quote: { type: Type.STRING, description: "The customer's own words, verbatim." },
                 confidence: { type: Type.STRING, enum: ['high', 'medium', 'low'] },
+                kind: { type: Type.STRING, enum: TIME_KINDS },
+                urgencyFlags: { type: Type.ARRAY, items: { type: Type.STRING } },
+                kitchenInstructions: { type: Type.STRING },
               },
-              required: ['orderId', 'hasPreference'],
+              required: ['orderId', 'hasPreference', 'kind', 'urgencyFlags', 'kitchenInstructions'],
             },
           },
         },
@@ -302,13 +348,7 @@ export async function readOrderTimePreferences({ orders }) {
   if (Array.isArray(parsed?.preferences)) {
     for (const row of parsed.preferences) {
       if (!row || typeof row.orderId !== 'string') continue;
-      byId.set(row.orderId, {
-        hasPreference: Boolean(row.hasPreference),
-        label: typeof row.label === 'string' ? row.label.trim() : '',
-        preferredTime: /^([01]\d|2[0-3]):[0-5]\d$/.test(row.preferredTime || '') ? row.preferredTime : '',
-        quote: typeof row.quote === 'string' ? row.quote.trim() : '',
-        confidence: ['high', 'medium', 'low'].includes(row.confidence) ? row.confidence : 'low',
-      });
+      byId.set(row.orderId, normaliseNoteReading(row));
     }
   }
 
@@ -316,9 +356,7 @@ export async function readOrderTimePreferences({ orders }) {
   // ones included — otherwise the orders without a preference (the majority)
   // would be re-sent to Gemini on every fetch and quietly burn the quota.
   for (const { orderId, note } of toRead) {
-    const result = byId.get(orderId) || NO_TIME_PREFERENCE;
-    // A preference with nothing to show on the card is just a no-preference.
-    const usable = result.hasPreference && (result.label || result.quote) ? result : NO_TIME_PREFERENCE;
+    const usable = byId.get(orderId) || NO_TIME_PREFERENCE;
     preferences[orderId] = usable;
     cacheSet(timePreferenceKey(orderId, note), usable);
   }

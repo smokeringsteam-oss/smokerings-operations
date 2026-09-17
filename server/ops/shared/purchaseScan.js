@@ -175,7 +175,7 @@ function normaliseScannedBill(parsed, { materials = [], vendors = [] } = {}) {
 
 // The route's half: validate the upload, read it, normalise it. `buffer` is
 // the raw file from multer's memory storage — a bill is read once and thrown
-// away, so unlike the Reddit image uploads there is nothing to keep on disk.
+// away, so there is nothing to keep on disk.
 async function scanPurchaseBill({ buffer, mimeType, size }) {
   if (!buffer || !buffer.length) {
     const err = new Error('No image was uploaded. Pick a photo of the bill first.');

@@ -12,7 +12,7 @@ import { createTestDb, removeTestDb } from './testDb.js';
 const { dir } = createTestDb();
 
 const { run } = await import('./db.js');
-const { listNotes, addNote, setNoteDone, deleteNote, MAX_BODY } = await import('./sharedNotes.js');
+const { listNotes, addNote, setNoteDone, assignNote, deleteNote, MAX_BODY } = await import('./sharedNotes.js');
 
 beforeEach(() => {
   run('DELETE FROM shared_note');
@@ -278,6 +278,37 @@ describe('ticking a note', () => {
     expect(() => setNoteDone({ id: 999999, done: true })).toThrow(/no longer exists/);
     expect(() => setNoteDone({ id: note.id, done: 'yes' })).toThrow(/true or false/);
     expect(() => setNoteDone({ id: 'abc', done: true })).toThrow(/note id is required/);
+  });
+});
+
+describe('assigning a note', () => {
+  it('starts unassigned and takes a name after posting', () => {
+    const note = addNote({ body: 'Create custom payment links', author: 'Sowmya' });
+    expect(note.assignedTo).toBe('');
+    expect(assignNote({ id: note.id, assignedTo: '  Adarsh ' })).toMatchObject({ assignedTo: 'Adarsh', author: 'Sowmya' });
+    expect(listNotes().notes[0].assignedTo).toBe('Adarsh');
+  });
+
+  it('can be handed on again, or cleared with a blank name', () => {
+    const note = addNote({ body: 'x', author: 'Sowmya' });
+    assignNote({ id: note.id, assignedTo: 'Adarsh' });
+    expect(assignNote({ id: note.id, assignedTo: 'Naveen' }).assignedTo).toBe('Naveen');
+    expect(assignNote({ id: note.id, assignedTo: '   ' }).assignedTo).toBe('');
+  });
+
+  it("puts the note under the assignee's chip and in a search for their name", () => {
+    const note = addNote({ body: 'Add orders after Thursday', author: 'Sowmya' });
+    addNote({ body: 'other', author: 'Sowmya' });
+    assignNote({ id: note.id, assignedTo: 'Adarsh' });
+    expect(listNotes({ author: 'adarsh' }).notes.map((n) => n.id)).toEqual([note.id]);
+    expect(listNotes({ q: 'adarsh' }).notes.map((n) => n.id)).toEqual([note.id]);
+    // Still the poster's too.
+    expect(listNotes({ author: 'Sowmya' }).notes).toHaveLength(2);
+  });
+
+  it('refuses a missing note', () => {
+    expect(() => assignNote({ id: 999999, assignedTo: 'Adarsh' })).toThrow(/no longer exists/);
+    expect(() => assignNote({ id: 'abc', assignedTo: 'Adarsh' })).toThrow(/note id is required/);
   });
 });
 

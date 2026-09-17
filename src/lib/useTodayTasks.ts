@@ -123,6 +123,34 @@ async function setTaskDone(id: string, done: boolean): Promise<void> {
   publish({ data: body as TodayTasks, error: null, loading: false });
 }
 
+// Hands a task to someone else for this week. Optimistic like the tick, so the
+// new name is on the row the moment Save is tapped.
+async function reassignTask(id: string, assignedTo: string): Promise<void> {
+  const name = assignedTo.trim();
+  if (store.data) {
+    const tasks = store.data.tasks.map((task) => (task.id === id ? { ...task, assignedTo: name } : task));
+    publish({ ...store, data: { ...store.data, tasks } });
+  }
+  let resp: Response;
+  let body: unknown;
+  try {
+    resp = await fetch(`/api/today-tasks/${encodeURIComponent(id)}/assignee`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ assignedTo: name }),
+    });
+    body = await resp.json();
+  } catch (err) {
+    await load();
+    throw err;
+  }
+  if (!resp.ok) {
+    await load();
+    throw new Error((body as { error?: string })?.error || `Request failed (${resp.status})`);
+  }
+  publish({ data: body as TodayTasks, error: null, loading: false });
+}
+
 // `active` is the panel being open. Passing false keeps the hook mounted and
 // the data addressable while costing nothing, which is what lets the bubble
 // call it unconditionally.
@@ -165,6 +193,7 @@ export function useTodayTasks(active: boolean) {
     // over a list someone is reading.
     loading: store.loading && !store.data,
     setTaskDone: useCallback((id: string, done: boolean) => setTaskDone(id, done), []),
+    reassignTask: useCallback((id: string, assignedTo: string) => reassignTask(id, assignedTo), []),
     refresh: useCallback(() => load(), []),
   };
 }

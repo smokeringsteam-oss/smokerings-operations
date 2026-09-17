@@ -100,9 +100,9 @@ async function getFields() {
 
 const SPRINT_FIELD_NAME = 'Sprint';
 
-// The Sprint iteration field's current entry — the one whose [startDate, startDate+duration)
-// window contains today. Falls back to null if no iteration covers today (e.g. between sprints).
-async function getCurrentSprint() {
+// The Sprint iteration field's entry whose [startDate, startDate+duration) window
+// contains `at` (today by default). Null if no iteration covers it (e.g. between sprints).
+async function getCurrentSprint(at = new Date()) {
   const fields = await getFields();
   const sprintField = fields.find((f) => f.name === SPRINT_FIELD_NAME && f.__typename === 'ProjectV2IterationField');
   if (!sprintField) return null;
@@ -111,7 +111,7 @@ async function getCurrentSprint() {
     ...(sprintField.configuration?.iterations || []),
     ...(sprintField.configuration?.completedIterations || []),
   ];
-  const todayMs = Date.now();
+  const todayMs = new Date(at).getTime();
   const current = allIterations.find((it) => {
     const startMs = new Date(`${it.startDate}T00:00:00Z`).getTime();
     const endMs = startMs + it.duration * 24 * 60 * 60 * 1000;
@@ -201,10 +201,11 @@ async function ensureDayField() {
 }
 
 const ITEMS_QUERY = `
-  query($projectId: ID!) {
+  query($projectId: ID!, $after: String) {
     node(id: $projectId) {
       ... on ProjectV2 {
-        items(first: 100) {
+        items(first: 100, after: $after) {
+          pageInfo { hasNextPage endCursor }
           nodes {
             id
             fieldValues(first: 20) {
@@ -246,12 +247,16 @@ function simplifyItem(node) {
   let status = null;
   let assignedTo = '';
   let sprintTitle = null;
+  let sprintEndMs = null;
   let day = null;
   node.fieldValues.nodes.forEach((fv) => {
     const fieldName = fv.field?.name;
     if (fieldName === 'Status') status = fv.name || null;
     if (fieldName === ASSIGNED_TO_FIELD_NAME) assignedTo = fv.text || '';
-    if (fieldName === SPRINT_FIELD_NAME) sprintTitle = fv.title || null;
+    if (fieldName === SPRINT_FIELD_NAME) {
+      sprintTitle = fv.title || null;
+      if (fv.startDate) sprintEndMs = new Date(`${fv.startDate}T00:00:00Z`).getTime() + fv.duration * 24 * 60 * 60 * 1000;
+    }
     if (fieldName === DAY_FIELD_NAME) day = fv.name || null;
   });
 
@@ -266,6 +271,8 @@ function simplifyItem(node) {
     status,
     assignedTo,
     sprintTitle,
+    // Exclusive end of the item's sprint, ms since epoch — null when no sprint is set.
+    sprintEndMs,
     day,
     isDraft,
     title: content.title || '(untitled)',
@@ -279,10 +286,19 @@ function simplifyItem(node) {
   };
 }
 
+// Every item, a page of 100 at a time — GitHub's maximum per request. Reading
+// only the first page silently dropped the newest items once the project
+// passed 100, which is exactly where the current sprint's issues sit.
 async function getAllBoardItems() {
   const projectId = await getProjectId();
-  const data = await graphql(ITEMS_QUERY, { projectId });
-  const nodes = data?.node?.items?.nodes || [];
+  const nodes = [];
+  let after = null;
+  do {
+    const data = await graphql(ITEMS_QUERY, { projectId, after });
+    const page = data?.node?.items;
+    nodes.push(...(page?.nodes || []));
+    after = page?.pageInfo?.hasNextPage ? page.pageInfo.endCursor : null;
+  } while (after);
   return nodes.map(simplifyItem);
 }
 
@@ -567,6 +583,60 @@ async function createSubIssueTask({ parentIssueId, title, body = '', status, ass
   };
 }
 
+// Puts an existing issue on the project board, in the sprint that covers `at`
+// (when one does), with Status Done or Backlog. Safe to repeat: adding an issue
+// that is already on the board hands back its existing item.
+async function placeIssueOnBoard({ issueNodeId, at = new Date(), done = false }) {
+  const projectId = await getProjectId();
+  const added = await graphql(
+    `mutation($projectId: ID!, $contentId: ID!) {
+      addProjectV2ItemById(input: { projectId: $projectId contentId: $contentId }) {
+        item { id }
+      }
+    }`,
+    { projectId, contentId: issueNodeId },
+  );
+  const itemId = added.addProjectV2ItemById.item.id;
+  await setItemStatus(itemId, done ? 'Done' : 'Backlog');
+  const sprint = await getCurrentSprint(at);
+  if (sprint) await setItemSprint(itemId, sprint.id);
+  return { itemId, sprint: sprint?.title || null };
+}
+
+// Which items a sprint rollover moves: anything sitting in a sprint that has
+// already ended and is still open — not Done or Cancelled on the board and not
+// a closed issue. Items with no sprint are left alone (they were never scheduled), and
+// so is anything already in `currentSprintTitle`.
+function itemsToCarryOver(items, currentSprintTitle, at = new Date()) {
+  const nowMs = new Date(at).getTime();
+  return items.filter(
+    (item) =>
+      item.sprintTitle &&
+      item.sprintTitle !== currentSprintTitle &&
+      item.sprintEndMs !== null &&
+      item.sprintEndMs <= nowMs &&
+      item.status !== 'Done' &&
+      item.status !== 'Cancelled' &&
+      item.state !== 'CLOSED',
+  );
+}
+
+// Moves every open item from an ended sprint into the sprint covering `at`.
+// Safe to run as often as you like: once moved, an item is in the current
+// sprint and no longer matches. Does nothing between sprints (no current
+// iteration to move into). Status and Day are kept as they were.
+async function carryOverOpenItems({ at = new Date(), dryRun = false } = {}) {
+  const sprint = await getCurrentSprint(at);
+  if (!sprint) return { sprint: null, moved: [] };
+  const toMove = itemsToCarryOver(await getAllBoardItems(), sprint.title, at);
+  const moved = [];
+  for (const item of toMove) {
+    if (!dryRun) await setItemSprint(item.id, sprint.id);
+    moved.push({ id: item.id, number: item.number, title: item.title, from: item.sprintTitle });
+  }
+  return { sprint: sprint.title, moved };
+}
+
 async function githubRest(path, params = {}, { method = 'GET', body } = {}) {
   const token = process.env.GITHUB_TOKEN;
   if (!token) {
@@ -611,5 +681,8 @@ export {
   getAssignableUsers,
   addDraftItem,
   createSubIssueTask,
+  placeIssueOnBoard,
   migrateDraftsToIssues,
+  itemsToCarryOver,
+  carryOverOpenItems,
 };

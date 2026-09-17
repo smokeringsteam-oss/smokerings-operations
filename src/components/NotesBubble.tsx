@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { readNotesAuthor, useSharedNotes, writeNotesAuthor, type SharedNote } from '../lib/useSharedNotes';
-import { usePersistedState } from '../lib/usePersistedState';
 import { useTodayTasks, type TodayTask } from '../lib/useTodayTasks';
 import {
   createScheduleTask,
@@ -29,17 +28,31 @@ import {
 // devices working the board at once cannot clobber each other's text — see the
 // note at the top of server/core/sharedNotes.js.
 //
-// Pinned above the board is today's row of the weekly cadence, which is the
-// other half of "what needs doing". The cadence is what was always going to
-// happen today and the board is what came up since; keeping them a screen
-// apart meant the tick box for hosing down the smoker lived nowhere near the
-// note saying the hose is broken. Those tick boxes write to the same table
-// Daily View writes to — see server/sprint/todayTasks.js — so a job ticked
-// here is ticked there, and neither screen can claim it is still open.
+// Today's row of the weekly cadence sits in that same list, under Today,
+// rather than in a strip of its own above it. The strip was a second board
+// with its own heading, its own collapse and its own tick boxes, and it took
+// a third of the panel before a single note was read — on a phone it pushed
+// the name filters off the screen altogether. What someone opening this wants
+// is one column of everything still to do; that a row comes back every week
+// is a detail of the row, marked on the row, not a reason to keep it
+// somewhere else. Those tick boxes write to the same table Daily View writes
+// to — see server/sprint/todayTasks.js — so a job ticked here is ticked
+// there, and neither screen can claim it is still open.
 
 // Same threshold the sidebar badge uses, so the two bubbles never disagree
 // about what a big number looks like.
 const MAX_BADGE = 99;
+
+// The two people who work the board. A fixed pair rather than free text, so a
+// typo ("sowmya ", "Adarsh K") never splits one person across two name chips.
+const TEAM = ['Adarsh', 'Sowmya'];
+
+// The team, plus a name already on a row or in storage that is not one of
+// them — so a select never silently shows the wrong person for an old value.
+function teamWith(current: string): string[] {
+  const name = current.trim();
+  return name && !TEAM.some((member) => member.toLowerCase() === name.toLowerCase()) ? [...TEAM, name] : TEAM;
+}
 
 // "09:14" for today, "Sat 09:14" within the week, "8 Sep 09:14" beyond it.
 //
@@ -102,23 +115,43 @@ function highlight(text: string, term: string): ReactNode {
   return parts;
 }
 
-type Group = { key: string; label: string; notes: SharedNote[] };
+// One row of the board. A note and a scheduled job are different records with
+// different lifetimes, but they are the same thing to read — a line with a
+// tick box — so they travel through the list as one type and only the row
+// renderer tells them apart.
+type BoardItem =
+  | { kind: 'note'; key: string; note: SharedNote }
+  | { kind: 'task'; key: string; task: TodayTask };
 
-// Consecutive notes sharing a calendar day, in the order they arrived. The
-// server already returns them oldest first, so this only has to break the run
-// whenever the label changes.
+type Group = { key: string; label: string; items: BoardItem[] };
+
+// The board as days, newest day last, with today's scheduled jobs at the head
+// of Today.
 //
-// Ticked notes stay where they were written rather than sinking to the bottom.
-// A board this size is read as a list of the last few days, and an item that
-// jumped somewhere else the instant you ticked it would take the thing you had
-// just been looking at out from under you.
-function groupByDay(notes: SharedNote[]): Group[] {
+// The server already returns notes oldest first, so the run only has to be
+// broken whenever the day label changes. Tasks are not dated the same way —
+// they are today's row of a weekly cadence — so they go in at the top of
+// Today, ahead of the notes typed since, and Today is created for them on a
+// day nobody has written anything.
+//
+// Ticked rows stay where they are rather than sinking to the bottom. A board
+// this size is read as a list of the last few days, and an item that jumped
+// somewhere else the instant you ticked it would take the thing you had just
+// been looking at out from under you.
+function buildGroups(notes: SharedNote[], tasks: TodayTask[]): Group[] {
   const groups: Group[] = [];
   for (const note of notes) {
     const label = dayLabel(note.createdAt);
+    const item: BoardItem = { kind: 'note', key: `note-${note.id}`, note };
     const last = groups[groups.length - 1];
-    if (last && last.label === label) last.notes.push(note);
-    else groups.push({ key: `${label}-${note.id}`, label, notes: [note] });
+    if (last && last.label === label) last.items.push(item);
+    else groups.push({ key: `${label}-note-${note.id}`, label, items: [item] });
+  }
+  if (tasks.length) {
+    const items: BoardItem[] = tasks.map((task) => ({ kind: 'task', key: `task-${task.id}`, task }));
+    const today = groups.find((group) => group.label === 'Today');
+    if (today) today.items.unshift(...items);
+    else groups.push({ key: 'today-tasks', label: 'Today', items });
   }
   return groups;
 }
@@ -142,6 +175,7 @@ const NotesBubble = () => {
     loading,
     addNote,
     setDone,
+    assignNote,
     deleteNote,
   } = useSharedNotes();
   const [open, setOpen] = useState(false);
@@ -152,8 +186,14 @@ const NotesBubble = () => {
     doneCount: tasksDone,
     error: tasksError,
     setTaskDone,
+    reassignTask,
     refresh: refreshTasks,
   } = useTodayTasks(open);
+  // The row whose assignee is being changed — its board key, "task-WS-01" or
+  // "note-12" — and the name typed so far. One at a time: a second open picker
+  // on a phone-width panel is two half-seen forms rather than two useful ones.
+  const [reassigningId, setReassigningId] = useState<string | null>(null);
+  const [reassignName, setReassignName] = useState('');
   const [draft, setDraft] = useState('');
   // What is in the search box right now. Separate from `query`, which is the
   // search the rows on screen actually answer: the box must respond to every
@@ -177,21 +217,15 @@ const NotesBubble = () => {
   // Same, for today's tasks. A separate set because the ids are strings from a
   // different table and a note and a task could otherwise collide.
   const [tickingTask, setTickingTask] = useState<string[]>([]);
-  // Whether the pinned strip is expanded. Remembered, because whether today's
-  // list is worth the top third of the panel is a standing preference — the
-  // person who works off it wants it open every time, and the person who came
-  // for the notes wants it out of the way every time.
-  const [tasksShown, setTasksShown] = usePersistedState<boolean>(
-    'smokerings.notesTasksShown',
-    true,
-    (stored) => (typeof stored === 'boolean' ? stored : undefined),
-  );
-  // Which composer is at the bottom: the note board, or a new job for the
-  // cadence. One box would have to guess, and the two write to different
-  // tables with different lifetimes — a note is gone when it is deleted, a
-  // task comes back every week — so the choice is worth one visible tab.
-  const [composerMode, setComposerMode] = useState<'note' | 'task'>('note');
-  const [taskDraft, setTaskDraft] = useState('');
+  // Whether what is being typed joins the weekly cadence instead of being a
+  // one-off note. A tick box on the composer rather than a pair of mode tabs
+  // above it: there is one box, one Add button and one thing being written
+  // down, and the only real question is whether it comes back next week.
+  //
+  // Not remembered between opens. A tab that stayed on Task was how a note
+  // ended up filed as a standing job, and unpicking that means a trip to
+  // Daily View.
+  const [repeatWeekly, setRepeatWeekly] = useState(false);
   const [taskTime, setTaskTime] = useState('');
   const [taskWho, setTaskWho] = useState('');
   // Marketing by default. That is what actually gets added on the fly here —
@@ -210,7 +244,6 @@ const NotesBubble = () => {
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
-  const taskInputRef = useRef<HTMLInputElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const toggleRef = useRef<HTMLButtonElement>(null);
 
@@ -221,7 +254,25 @@ const NotesBubble = () => {
   const localWeekday = useMemo(() => new Date().toLocaleDateString('en-US', { weekday: 'long' }), []);
   const today = weekday || localWeekday;
 
-  const groups = useMemo(() => groupByDay(notes), [notes]);
+  // Today's jobs, narrowed by whatever the board is narrowed by. The search
+  // and the name chips are filters on the list, and the list now has tasks in
+  // it — a search that quietly left five unrelated jobs sitting at the top of
+  // Today would read as five results that do not match.
+  //
+  // Read off `query` and `filteredAuthor` — the server's echo of the filter
+  // the notes on screen actually answer — rather than off the controls, so the
+  // two halves of the list never show two different searches for a frame.
+  const visibleTasks = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    const who = filteredAuthor.trim().toLowerCase();
+    return tasks.filter((task) => {
+      if (who && task.assignedTo.trim().toLowerCase() !== who) return false;
+      if (!needle) return true;
+      return `${task.label} ${task.assignedTo} ${task.category}`.toLowerCase().includes(needle);
+    });
+  }, [tasks, query, filteredAuthor]);
+
+  const groups = useMemo(() => buildGroups(notes, visibleTasks), [notes, visibleTasks]);
   const newest = notes.length ? notes[notes.length - 1].id : 0;
 
   // One request per pause in typing rather than one per keystroke. 220ms is
@@ -245,19 +296,20 @@ const NotesBubble = () => {
     if (!open) {
       setTerm('');
       setOnly('');
-      // Back to the note board. Task mode is a detour taken deliberately, and
-      // reopening the bubble to a half-filled task form would put the wrong
-      // box under the cursor for the thing people mostly open it to do.
-      setComposerMode('note');
+      // Back to a plain note. Filing something under the weekly cadence is a
+      // deliberate detour, and reopening the bubble with the box still armed
+      // to repeat would turn the next thing typed into a standing job.
+      setRepeatWeekly(false);
       setTaskAdded('');
+      setReassigningId(null);
     }
   }, [open]);
 
-  // The category chips, the first time the task tab is opened. Falls back to
-  // whatever today's own rows are already tagged with, so the chips are never
+  // The categories, the first time the repeat box is ticked. Falls back to
+  // whatever today's own rows are already tagged with, so the picker is never
   // empty even with the schedule request refused.
   useEffect(() => {
-    if (composerMode !== 'task' || categories.length) return;
+    if (!repeatWeekly || categories.length) return;
     let live = true;
     void fetchRecurringSchedule().then((schedule) => {
       if (live) setCategories(getCategoryNames(schedule));
@@ -265,15 +317,7 @@ const NotesBubble = () => {
     return () => {
       live = false;
     };
-  }, [composerMode, categories.length]);
-
-  // Whichever composer is on screen gets the cursor. Skipped on the first
-  // render of the panel, where the open effect above has already done it.
-  useEffect(() => {
-    if (!open) return;
-    if (composerMode === 'task') taskInputRef.current?.focus();
-    else inputRef.current?.focus();
-  }, [composerMode, open]);
+  }, [repeatWeekly, categories.length]);
 
   // Everything that has to happen on open, in one effect because they are one
   // event: focus the composer, jump to the newest note, and clear the badge.
@@ -372,6 +416,11 @@ const NotesBubble = () => {
     if (!open) return undefined;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
+      // An open reassign box is the innermost thing of all.
+      if (reassigningId) {
+        closeNameEditor();
+        return;
+      }
       // A search on screen is the innermost thing Escape should undo. Clearing
       // it first means one Escape gets you back to the whole board and the
       // next one closes — rather than a mistyped search taking the panel with
@@ -403,7 +452,7 @@ const NotesBubble = () => {
       window.removeEventListener('keydown', onKeyDown);
       document.removeEventListener('mousedown', onPointerDown, true);
     };
-  }, [open, term, only]);
+  }, [open, term, only, reassigningId]);
 
   const rememberAuthor = (name: string) => {
     setAuthor(name);
@@ -441,6 +490,24 @@ const NotesBubble = () => {
     }
   };
 
+  // Everyone the board knows about: whoever has posted a note, plus whoever
+  // today's jobs are on. Both, because the chips filter one list now — a
+  // Sowmya who has three jobs today but has not typed a note would otherwise
+  // be missing from the row that exists to answer "what is mine".
+  const people = useMemo(() => {
+    const seen = new Map<string, string>();
+    // Tolerates a missing name: a server not yet restarted onto the assignee
+    // column sends notes without one.
+    const add = (name: string | undefined) => {
+      const trimmed = (name || '').trim();
+      if (trimmed && !seen.has(trimmed.toLowerCase())) seen.set(trimmed.toLowerCase(), trimmed);
+    };
+    authors.forEach(add);
+    tasks.forEach((task) => add(task.assignedTo));
+    notes.forEach((note) => add(note.assignedTo));
+    return Array.from(seen.values());
+  }, [authors, tasks, notes]);
+
   const tickTask = async (id: string, done: boolean) => {
     if (tickingTask.includes(id)) return;
     setActionError(null);
@@ -454,8 +521,80 @@ const NotesBubble = () => {
     }
   };
 
+  // The row being edited, mirrored in a ref so Enter and the blur that follows
+  // it do not both save.
+  const editingRef = useRef<string | null>(null);
+
+  const closeNameEditor = () => {
+    editingRef.current = null;
+    setReassigningId(null);
+  };
+
+  // The name on a row, which is also where it is changed: tap it and it
+  // becomes a text box in the same spot; Enter or tapping away saves, Escape
+  // puts it back. No buttons or explanation — the name just changes.
+  //
+  // A task needs a name; a note cleared to blank goes back to showing its
+  // poster.
+  const renderName = (opts: {
+    key: string;
+    shown: string;
+    allowBlank: boolean;
+    label: string;
+    write: (name: string) => Promise<void>;
+  }) => {
+    const save = async (picked: string) => {
+      if (editingRef.current !== opts.key) return;
+      const name = picked.trim();
+      closeNameEditor();
+      if ((!name && !opts.allowBlank) || name === opts.shown.trim()) return;
+      setActionError(null);
+      try {
+        await opts.write(name);
+      } catch (err) {
+        setActionError(err instanceof Error ? err.message : String(err));
+      }
+    };
+    if (reassigningId === opts.key) {
+      return (
+        <select
+          className="notes-name-input"
+          value={reassignName}
+          aria-label={`Assignee for "${opts.label}"`}
+          autoFocus
+          onChange={(event) => {
+            setReassignName(event.target.value);
+            void save(event.target.value);
+          }}
+          onBlur={() => closeNameEditor()}
+        >
+          {opts.allowBlank ? <option value="">Poster</option> : null}
+          {teamWith(opts.shown).map((name) => (
+            <option key={name} value={name}>
+              {name}
+            </option>
+          ))}
+        </select>
+      );
+    }
+    return (
+      <button
+        type="button"
+        className="notes-item-author notes-reassign"
+        aria-label={`Change who "${opts.label}" is on, now ${opts.shown || 'nobody'}`}
+        onClick={() => {
+          editingRef.current = opts.key;
+          setReassigningId(opts.key);
+          setReassignName(opts.shown);
+        }}
+      >
+        {highlight(opts.shown || 'Someone', query)}
+      </button>
+    );
+  };
+
   // Adds a job to today's row of the cadence — the same write Daily View's
-  // add row makes, from the panel that is already open.
+  // add row makes, from the composer that is already open.
   //
   // It lands in `scheduled_task`, which is the weekly cadence and not a list
   // for today only: a task added here comes back next Tuesday too. That is
@@ -463,7 +602,7 @@ const NotesBubble = () => {
   // post" is a standing job someone forgot to write down — but it is not
   // guessable from a text box, so the form says so in as many words.
   const submitTask = async () => {
-    const label = taskDraft.trim();
+    const label = draft.trim();
     if (!label || addingTask) return;
     setAddingTask(true);
     setActionError(null);
@@ -478,14 +617,13 @@ const NotesBubble = () => {
         assignedTo: taskWho.trim(),
         category: taskCategory,
       });
-      // The strip is the confirmation — the job appears in it — so it has to
-      // be open, or a task would be added into what looks like no change.
+      // The list is the confirmation — the job appears under Today — so it is
+      // refetched here rather than waited on at the next poll.
       await refreshTasks();
-      setTaskDraft('');
+      setDraft('');
       setTaskTime('');
       setTaskAdded(label);
-      setTasksShown(true);
-      taskInputRef.current?.focus();
+      inputRef.current?.focus();
     } catch (err) {
       setActionError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -519,9 +657,6 @@ const NotesBubble = () => {
     .filter(Boolean)
     .join(' ');
 
-  // Only what is still open. A strip that listed ticked jobs too would be the
-  // whole day by evening, which is the one time the panel is least worth
-  // scrolling — the count in the header is what carries the finished ones.
   // The categories the picker offers. The fetched list once it is there, and
   // until then Marketing plus whatever today's own rows are tagged with, so
   // it is never empty while a request is in flight.
@@ -534,24 +669,101 @@ const NotesBubble = () => {
     return Array.from(found);
   }, [categories, tasks]);
 
-  const tasksSummary =
-    tasksOpen === 0
-      ? 'all done'
-      : [`${tasksOpen} to do`, tasksDone > 0 ? `${tasksDone} done` : null].filter(Boolean).join(' · ');
+  // One count for the whole board, now that it is one board. Two numbers in
+  // the header — one for notes, one for the cadence — would put back in the
+  // heading the split the list itself no longer makes.
+  const openTotal = openCount + tasksOpen;
+  const doneTotal = doneCount + tasksDone;
 
   const summary =
-    total === 0
+    total + tasks.length === 0
       ? 'Nothing yet'
-      : [openCount > 0 ? `${openCount} to do` : null, doneCount > 0 ? `${doneCount} done` : null]
+      : [openTotal > 0 ? `${openTotal} to do` : null, doneTotal > 0 ? `${doneTotal} done` : null]
           .filter(Boolean)
           .join(' · ') || 'All done';
 
-  // One row of the pinned strip. Pulled out of the JSX because it is rendered
-  // from two lists now — what is left to do, and the ticked ones underneath
-  // when they have been asked for — and two copies of a row with a tick box
-  // in it is how the two quietly stop behaving the same.
-  const renderTask = (task: TodayTask) => (
-    <label key={task.id} className={`notes-task${task.done ? ' is-done' : ''}`}>
+  // Nothing to show at all, as against nothing that matches. The two need
+  // different words and only one of them means the board is empty.
+  const boardEmpty = notes.length === 0 && visibleTasks.length === 0;
+  // How many rows a filter found across the whole board: the server's count
+  // for notes plus today's matching jobs, which are filtered here.
+  const matchedTotal = matched + visibleTasks.length;
+
+  // A note, rendered as a row of the board. The same card the scheduled jobs
+  // above use, so a column of the two reads as one list of things to do.
+  const renderNote = (note: SharedNote, key: string) => (
+    <article key={key} className={`notes-item${note.done ? ' is-done' : ''}`}>
+      {/* A real checkbox, not a styled button: it is a to-do, so
+          a screen reader should hear a checkbox and the space
+          bar should tick it. */}
+      <input
+        type="checkbox"
+        className="notes-check"
+        checked={note.done}
+        disabled={ticking.includes(note.id)}
+        aria-label={`Mark "${note.body.slice(0, 60)}" as ${note.done ? 'not done' : 'done'}`}
+        onChange={() => void tick(note)}
+      />
+
+      <div className="notes-item-main">
+        <p className="notes-item-body">{highlight(note.body, query)}</p>
+        <div className="notes-item-meta">
+          {/* One name: whoever it is on, else whoever posted it. Tap to
+              change it. Highlighted too, since searching a name is how you
+              find what is yours. */}
+          {renderName({
+            key,
+            shown: note.assignedTo || note.author || '',
+            allowBlank: true,
+            label: note.body.slice(0, 60),
+            write: (name) => assignNote(note.id, name),
+          })}
+          <span className="notes-item-time">{formatWhen(note.createdAt)}</span>
+          {/* Who ticked it. The point of a shared board is that
+              "already handled" is only useful if you can tell
+              who handled it — otherwise two people both go and
+              order the gas. */}
+          {note.done && note.doneBy ? (
+            <span className="notes-item-doneby">✓ {note.doneBy}</span>
+          ) : null}
+
+          {confirmingId === note.id ? (
+            <span className="notes-item-confirm">
+              <button type="button" className="notes-confirm-yes" onClick={() => void remove(note.id)}>
+                Delete
+              </button>
+              <button type="button" className="notes-confirm-no" onClick={() => setConfirmingId(null)}>
+                Keep
+              </button>
+            </span>
+          ) : (
+            // Two taps to delete. One is too few for a control
+            // sitting next to the text on a phone screen, and a
+            // deleted note has nowhere to come back from.
+            <button
+              type="button"
+              className="notes-item-delete"
+              aria-label={`Delete note from ${note.author || 'someone'}`}
+              onClick={() => setConfirmingId(note.id)}
+            >
+              <span aria-hidden="true">✕</span>
+            </button>
+          )}
+        </div>
+      </div>
+    </article>
+  );
+
+  // A scheduled job, rendered as a row of the board — the same card, the same
+  // tick box in the same column as a note's, because the whole point of
+  // putting the two in one list is that reading it is one job and not two.
+  //
+  // What still marks it out is on the row itself: the ↻ that says it comes
+  // back, and the category chip. No delete cross, because a row of the weekly
+  // cadence is not deleted from a day — that is Daily View's to do, and a ✕
+  // here would have to mean something different from the one two rows down.
+  const renderTask = (task: TodayTask, key: string) => (
+    <article key={key} className={`notes-item is-task${task.done ? ' is-done' : ''}`}>
       {/* Ticking here is the same write Daily View makes, so this is not a
           copy of the checklist that can drift from it — see
           server/sprint/todayTasks.js. */}
@@ -563,13 +775,21 @@ const NotesBubble = () => {
         aria-label={`Mark "${task.label}" as ${task.done ? 'not done' : 'done'}`}
         onChange={() => void tickTask(task.id, !task.done)}
       />
-      <span className="notes-task-main">
-        <span className="notes-task-label">{task.label}</span>
-        <span className="notes-task-meta">
+      <div className="notes-item-main">
+        <p className="notes-item-body">{highlight(task.label, query)}</p>
+        <div className="notes-item-meta">
+          {/* Says this one is the cadence rather than something somebody
+              typed today. One glyph, because it is the only thing about the
+              row a reader has to be told and the rest of the line is already
+              doing work. */}
+          <span className="notes-item-repeat" title={`Repeats every ${today} — change it in Daily View`}>
+            <span aria-hidden="true">↻</span>
+            <span className="notes-sr">Repeats every {today}</span>
+          </span>
           {/* What kind of job it is. Worth a chip rather than being left
-              implicit in the wording: on most days this strip is a mix of
-              marketing and kitchen work, and which of the two a row is
-              decides whether it is yours before the words are read. */}
+              implicit in the wording: on most days this is a mix of marketing
+              and kitchen work, and which of the two a row is decides whether
+              it is yours before the words are read. */}
           {task.category ? (
             <span
               className={`notes-task-tag${
@@ -579,13 +799,20 @@ const NotesBubble = () => {
               {task.category}
             </span>
           ) : null}
+          {/* Who it is on. The board is read by whoever picked the tablet up,
+              and half of what it has to answer is whether the job is theirs.
+              Tap it to change it — for this week only. */}
+          {renderName({
+            key,
+            shown: task.assignedTo,
+            allowBlank: false,
+            label: task.label,
+            write: (name) => reassignTask(task.id, name),
+          })}
           {task.time ? <span className="notes-task-time">{task.time}</span> : null}
-          {/* Who it is on. The strip is read by whoever picked the tablet up,
-              and half of what it has to answer is whether the job is theirs. */}
-          {task.assignedTo ? <span className="notes-task-who">{task.assignedTo}</span> : null}
-        </span>
-      </span>
-    </label>
+        </div>
+      </div>
+    </article>
   );
 
   return (
@@ -635,46 +862,10 @@ const NotesBubble = () => {
           {actionError ? <p className="notes-alert">{actionError}</p> : null}
           {tasksError ? <p className="notes-alert">Could not load today's tasks — {tasksError}</p> : null}
 
-          {/* Today's cadence, above the board rather than inside it. Two
-              separate things kept visibly separate: a task comes back every
-              week whether or not anyone types it, and a note is gone once it
-              is deleted, so mixing them into one list would make the tick
-              boxes mean two different things.
-
-              Nothing at all on a day with no tasks in it — an empty strip
-              saying so would be a permanent line on Sundays. */}
-          {tasks.length > 0 ? (
-            <section className={`notes-tasks${tasksShown ? '' : ' is-collapsed'}`}>
-              <button
-                type="button"
-                className="notes-tasks-head"
-                aria-expanded={tasksShown}
-                onClick={() => setTasksShown((shown) => !shown)}
-              >
-                <span className="notes-tasks-title">Today · {today}</span>
-                <span className={`notes-tasks-count${tasksOpen === 0 ? ' is-clear' : ''}`}>{tasksSummary}</span>
-                <span className="notes-tasks-chevron" aria-hidden="true">
-                  {tasksShown ? '▾' : '▸'}
-                </span>
-              </button>
-
-              {/* The whole day, in the order the schedule holds it, ticked
-                  ones included and struck through where they sit.
-
-                  All of it rather than only what is left: a list that drops a
-                  row the moment it is ticked cannot show you that you ticked
-                  the wrong one, and by evening it reads as a day with nothing
-                  in it. The header count is what says how much is left. */}
-              {tasksShown ? (
-                <div className="notes-tasks-list">{tasks.map((task) => renderTask(task))}</div>
-              ) : null}
-            </section>
-          ) : null}
-
           {/* Only once there is something to search. On an empty board the row
               would be a control that cannot do anything, sitting where the
               "nothing here yet" line should be. */}
-          {total > 0 ? (
+          {total > 0 || tasks.length > 0 ? (
             <div className="notes-search">
               <span className="notes-search-icon" aria-hidden="true">
                 🔍
@@ -682,8 +873,8 @@ const NotesBubble = () => {
               <input
                 type="search"
                 value={term}
-                placeholder="Search notes and names…"
-                aria-label="Search notes"
+                placeholder="Search the board…"
+                aria-label="Search notes, tasks and names"
                 onChange={(event) => setTerm(event.target.value)}
               />
               {term ? (
@@ -694,19 +885,19 @@ const NotesBubble = () => {
             </div>
           ) : null}
 
-          {/* Whose notes to show. Chips rather than a dropdown because on a
-              board with three people on it this is a one-tap question — "what
-              did Sowmya leave me" — and a select costs two taps and a list
-              that covers the notes while it is open.
+          {/* Whose rows to show — notes they wrote and jobs they are on, since
+              the list no longer separates the two. Chips rather than a
+              dropdown because on a board with three people this is a one-tap
+              question — "what is mine" — and a select costs two taps and a
+              list that covers the board while it is open.
 
-              Only once more than one person has posted: a board with a single
+              Only once more than one name is in play: a board with a single
               name on it can only be filtered to the whole board.
 
-              The names come from the same roster the composer's picker uses,
-              so this is whoever has actually written something rather than a
-              staff list nothing maintains. */}
-          {authors.length > 1 ? (
-            <div className="notes-people" role="group" aria-label="Show notes from">
+              The names are whoever has actually posted or been given a job
+              today, rather than a staff list nothing maintains. */}
+          {people.length > 1 ? (
+            <div className="notes-people" role="group" aria-label="Show rows for">
               <button
                 type="button"
                 className={`notes-person${only ? '' : ' is-on'}`}
@@ -715,7 +906,7 @@ const NotesBubble = () => {
               >
                 Everyone
               </button>
-              {authors.map((name) => (
+              {people.map((name) => (
                 <button
                   key={name}
                   type="button"
@@ -734,21 +925,21 @@ const NotesBubble = () => {
 
           <div className="notes-scroll" ref={scrollRef}>
             {loading ? <p className="notes-empty">Loading…</p> : null}
-            {!loading && notes.length === 0 && !filtering ? (
+            {!loading && boardEmpty && !filtering ? (
               <p className="notes-empty">
                 Nothing on the board. Type below and it becomes a to-do with a tick box, on every phone and tablet
                 signed in to the dashboard.
               </p>
             ) : null}
-            {!loading && notes.length === 0 && filtering ? (
+            {!loading && boardEmpty && filtering ? (
               <p className="notes-empty">
-                Nothing {filterLabel}. Both the search and the name look at every note on the board, not just the ones
+                Nothing {filterLabel}. Both the search and the name look at every row on the board, not just the ones
                 on screen.
               </p>
             ) : null}
-            {filtering && notes.length > 0 ? (
+            {filtering && !boardEmpty ? (
               <p className="notes-truncated">
-                {matched} {matched === 1 ? 'note' : 'notes'} {filterLabel}
+                {matchedTotal} {matchedTotal === 1 ? 'row' : 'rows'} {filterLabel}
                 {truncated ? `, showing the most recent ${notes.length}` : ''}
               </p>
             ) : null}
@@ -761,173 +952,94 @@ const NotesBubble = () => {
             {groups.map((group) => (
               <section key={group.key} className="notes-day">
                 <h3 className="notes-day-label">{group.label}</h3>
-                {group.notes.map((note) => (
-                  <article key={note.id} className={`notes-item${note.done ? ' is-done' : ''}`}>
-                    {/* A real checkbox, not a styled button: it is a to-do, so
-                        a screen reader should hear a checkbox and the space
-                        bar should tick it. */}
-                    <input
-                      type="checkbox"
-                      className="notes-check"
-                      checked={note.done}
-                      disabled={ticking.includes(note.id)}
-                      aria-label={`Mark "${note.body.slice(0, 60)}" as ${note.done ? 'not done' : 'done'}`}
-                      onChange={() => void tick(note)}
-                    />
-
-                    <div className="notes-item-main">
-                      <p className="notes-item-body">{highlight(note.body, query)}</p>
-                      <div className="notes-item-meta">
-                        {/* The name is highlighted too: searching a person's
-                            name is how you find what they left you, and a hit
-                            with nothing marked up looks like a mistake. */}
-                        <span className="notes-item-author">{highlight(note.author || 'Someone', query)}</span>
-                        <span className="notes-item-time">{formatWhen(note.createdAt)}</span>
-                        {/* Who ticked it. The point of a shared board is that
-                            "already handled" is only useful if you can tell
-                            who handled it — otherwise two people both go and
-                            order the gas. */}
-                        {note.done && note.doneBy ? (
-                          <span className="notes-item-doneby">✓ {note.doneBy}</span>
-                        ) : null}
-
-                        {confirmingId === note.id ? (
-                          <span className="notes-item-confirm">
-                            <button type="button" className="notes-confirm-yes" onClick={() => void remove(note.id)}>
-                              Delete
-                            </button>
-                            <button type="button" className="notes-confirm-no" onClick={() => setConfirmingId(null)}>
-                              Keep
-                            </button>
-                          </span>
-                        ) : (
-                          // Two taps to delete. One is too few for a control
-                          // sitting next to the text on a phone screen, and a
-                          // deleted note has nowhere to come back from.
-                          <button
-                            type="button"
-                            className="notes-item-delete"
-                            aria-label={`Delete note from ${note.author || 'someone'}`}
-                            onClick={() => setConfirmingId(note.id)}
-                          >
-                            <span aria-hidden="true">✕</span>
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                  </article>
-                ))}
+                {group.items.map((item) =>
+                  item.kind === 'task' ? renderTask(item.task, item.key) : renderNote(item.note, item.key),
+                )}
               </section>
             ))}
           </div>
-
           <form
             className="notes-composer"
             onSubmit={(event) => {
               event.preventDefault();
-              if (composerMode === 'task') void submitTask();
+              if (repeatWeekly) void submitTask();
               else void submit();
             }}
           >
-            {/* Note or task. Two tabs rather than one clever box that guesses:
-                a note is a remark that lives until someone deletes it, a task
-                is a row of the weekly cadence that comes back every week, and
-                getting that wrong in either direction is a nuisance to undo
-                on a different screen. */}
-            <div className="notes-mode" role="group" aria-label="What to add">
+            <label className="notes-author">
+              <span>Posting as</span>
+              {/* A fixed dropdown of the two people on the board. */}
+              <select value={author} onChange={(event) => rememberAuthor(event.target.value)}>
+                {author ? null : (
+                  <option value="" disabled>
+                    Pick your name
+                  </option>
+                )}
+                {teamWith(author).map((name) => (
+                  <option key={name} value={name}>
+                    {name}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <div className="notes-composer-row">
+              {/* One box for both. The list above no longer separates a note
+                  from a scheduled job, and neither should the thing that adds
+                  to it: what is typed is a to-do either way, and the only
+                  question left is the tick box underneath. */}
+              <textarea
+                ref={inputRef}
+                value={draft}
+                rows={2}
+                maxLength={repeatWeekly ? 140 : 2000}
+                placeholder={repeatWeekly ? `New ${taskCategory.toLowerCase()} task for ${today}…` : 'Add a to-do…'}
+                aria-label={repeatWeekly ? `New ${taskCategory.toLowerCase()} task for ${today}` : 'Add a to-do'}
+                onChange={(event) => {
+                  setDraft(event.target.value);
+                  // The "added" line is about the last one, and it stops being
+                  // about anything the moment the next is typed.
+                  if (taskAdded) setTaskAdded('');
+                }}
+                onKeyDown={(event) => {
+                  // Enter sends, Shift+Enter breaks the line — the chat
+                  // convention, and the one muscle memory everyone already
+                  // has. Left alone on a touch keyboard, where Enter is a
+                  // newline and the button is what sends.
+                  if (event.key === 'Enter' && !event.shiftKey) {
+                    event.preventDefault();
+                    if (repeatWeekly) void submitTask();
+                    else void submit();
+                  }
+                }}
+              />
               <button
-                type="button"
-                className={`notes-mode-tab${composerMode === 'note' ? ' is-on' : ''}`}
-                aria-pressed={composerMode === 'note'}
-                onClick={() => setComposerMode('note')}
+                type="submit"
+                className="notes-send"
+                disabled={!draft.trim() || posting || addingTask}
               >
-                Note
-              </button>
-              <button
-                type="button"
-                className={`notes-mode-tab${composerMode === 'task' ? ' is-on' : ''}`}
-                aria-pressed={composerMode === 'task'}
-                onClick={() => setComposerMode('task')}
-              >
-                Task
+                {posting || addingTask ? 'Saving…' : 'Add'}
               </button>
             </div>
 
-            {/* Shared by both composers: the note's "posting as" and the
-                task's assignee are the same handful of people, and two
-                separate lists of them would drift the first time someone new
-                turned up. */}
-            <datalist id="notes-authors">
-              {authors.map((name) => (
-                <option key={name} value={name} />
-              ))}
-            </datalist>
+            {/* The one real difference between the two things this box can
+                write, asked as one question instead of a pair of mode tabs:
+                does it come back next week. Off by default, because most of
+                what gets typed here came up ten seconds ago. */}
+            <label className="notes-repeat">
+              <input
+                type="checkbox"
+                checked={repeatWeekly}
+                onChange={(event) => {
+                  setRepeatWeekly(event.target.checked);
+                  if (!event.target.checked) setTaskAdded('');
+                }}
+              />
+              <span>Repeats every {today}</span>
+            </label>
 
-            {composerMode === 'note' ? (
+            {repeatWeekly ? (
               <>
-                <label className="notes-author">
-                  <span>Posting as</span>
-                  {/* A free-text box with suggestions, not a fixed dropdown.
-                      There is no roster anywhere in this app — Daily View
-                      builds its assignee list off the schedule the same way —
-                      so the names on offer are whoever has actually posted,
-                      and a new one is just typed in. */}
-                  <input
-                    type="text"
-                    value={author}
-                    list="notes-authors"
-                    placeholder="your name"
-                    maxLength={40}
-                    onChange={(event) => rememberAuthor(event.target.value)}
-                  />
-                </label>
-
-                <div className="notes-composer-row">
-                  <textarea
-                    ref={inputRef}
-                    value={draft}
-                    rows={2}
-                    maxLength={2000}
-                    placeholder="Add a to-do…"
-                    onChange={(event) => setDraft(event.target.value)}
-                    onKeyDown={(event) => {
-                      // Enter sends, Shift+Enter breaks the line — the chat
-                      // convention, and the one muscle memory everyone
-                      // already has. Left alone on a touch keyboard, where
-                      // Enter is a newline and the button is what sends.
-                      if (event.key === 'Enter' && !event.shiftKey) {
-                        event.preventDefault();
-                        void submit();
-                      }
-                    }}
-                  />
-                  <button type="submit" className="notes-send" disabled={!draft.trim() || posting}>
-                    {posting ? 'Saving…' : 'Add'}
-                  </button>
-                </div>
-              </>
-            ) : (
-              <>
-                <div className="notes-composer-row">
-                  <input
-                    ref={taskInputRef}
-                    type="text"
-                    value={taskDraft}
-                    maxLength={140}
-                    placeholder={`New ${taskCategory.toLowerCase()} task for ${today}…`}
-                    aria-label={`New ${taskCategory.toLowerCase()} task for ${today}`}
-                    onChange={(event) => {
-                      setTaskDraft(event.target.value);
-                      // The "added" line is about the last one, and it stops
-                      // being about anything the moment the next is typed.
-                      if (taskAdded) setTaskAdded('');
-                    }}
-                  />
-                  <button type="submit" className="notes-send" disabled={!taskDraft.trim() || addingTask}>
-                    {addingTask ? 'Adding…' : 'Add'}
-                  </button>
-                </div>
-
                 {/* Category, time and who, on one row under the box. A select
                     rather than a row of chips: the categories are a closed
                     set, only one can be on, and a whole line of buttons for a
@@ -953,27 +1065,30 @@ const NotesBubble = () => {
                     aria-label="Time of day, optional"
                     onChange={(event) => setTaskTime(event.target.value)}
                   />
-                  <input
-                    type="text"
-                    value={taskWho}
-                    list="notes-authors"
-                    maxLength={40}
-                    placeholder="Adarsh"
-                    aria-label="Assigned to, optional"
+                  <select
+                    value={taskWho || TEAM[0]}
+                    aria-label="Assigned to"
                     onChange={(event) => setTaskWho(event.target.value)}
-                  />
+                  >
+                    {TEAM.map((name) => (
+                      <option key={name} value={name}>
+                        {name}
+                      </option>
+                    ))}
+                  </select>
                 </div>
 
-                {/* Says out loud that this is the cadence and not a one-off,
-                    because nothing else on screen could tell you: the strip
-                    it lands in is headed "Today". */}
+                {/* Says out loud that this is the cadence and not a one-off.
+                    The row it lands in sits under "Today" like everything
+                    else, so nothing on screen would otherwise say that it is
+                    also there next week. */}
                 <p className={`notes-task-hint${taskAdded ? ' is-added' : ''}`} role="status">
                   {taskAdded
                     ? `Added “${taskAdded}” to every ${today}.`
                     : `Joins the weekly cadence — it comes back every ${today}. Change or remove it in Daily View.`}
                 </p>
               </>
-            )}
+            ) : null}
           </form>
         </div>
       ) : null}

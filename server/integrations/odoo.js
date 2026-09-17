@@ -310,6 +310,12 @@ function describeMissingSlot(order) {
 const CONFIRMED_STATES = ['sale', 'done'];
 const QUOTATION_STATES = ['draft', 'sent'];
 
+// A negative-price line is money off the order — the Discount product, a
+// coupon, a "Delivery credit Rs 30" — not something the kitchen cooks. Same
+// test fetchSoldItems uses for isDiscountLine. Skipped before product
+// matching, so it never lands in `unmatched` asking for a fix that isn't one.
+const isMoneyOffLine = (line) => Number(line.price_unit) < 0;
+
 // Confirmed (sale/done), B2C orders whose PROMISED time falls in the IST day
 // range — plus, so nothing silently vanishes, orders with no promised time at
 // all whose date_order falls in range (those fall back to their slot tag, or
@@ -326,6 +332,22 @@ function weekendOrderDomain(fromDate, toDate, { isCompany = false, states = CONF
     // false = B2C (individuals), true = B2B (companies). Same boolean the
     // Smoking module's order picker uses — see fetchRecentOrders.
     ['partner_id.is_company', '=', Boolean(isCompany)],
+    '|',
+    '&', ['commitment_date', '>=', fromUtc], ['commitment_date', '<', toUtc],
+    '&', ['commitment_date', '=', false],
+    '&', ['date_order', '>=', fromUtc], ['date_order', '<', toUtc],
+  ];
+}
+
+// Orders whose promised time (Expected Date) falls in the IST day range, plus
+// orders with no promised time whose date_order does — the same fallback
+// weekendOrderDomain uses, so an order nobody set a slot on still counts
+// somewhere. How the money screens date B2C sales: by the weekend slot the
+// order is for, since the site takes orders upfront for later weekends.
+function promisedDayDomain(fromDate, toDate) {
+  const fromUtc = istDayStartAsOdooUtc(fromDate);
+  const toUtc = istDayStartAsOdooUtc(toDate, 1);
+  return [
     '|',
     '&', ['commitment_date', '>=', fromUtc], ['commitment_date', '<', toUtc],
     '&', ['commitment_date', '=', false],
@@ -386,7 +408,7 @@ async function fetchWeekendOrders({ fromDate, toDate, includeQuotations = true }
       ['order_id', 'in', orderIds],
       ['display_type', '=', false], // skip section/note lines, which have no real product
     ],
-    ['order_id', 'product_id', 'product_uom_qty', 'name'],
+    ['order_id', 'product_id', 'product_uom_qty', 'price_unit', 'name'],
   ]);
 
   const tally = new Map(); // `${itemId}|${slotId}` -> quantity, confirmed orders only
@@ -403,6 +425,7 @@ async function fetchWeekendOrders({ fromDate, toDate, includeQuotations = true }
     // per line. A quotation with no slot still gets listed (with its own
     // slot warning) — you can confirm it and then fix its Expected Date.
     if (!slotId && !isQuotation(order)) continue;
+    if (isMoneyOffLine(line)) continue;
 
     const productName = line.product_id ? line.product_id[1] : line.name;
     const qty = Math.round(line.product_uom_qty || 0);
@@ -772,7 +795,7 @@ async function fetchOrderPackingList({ fromDate, toDate, channel }) {
         ['order_id', 'in', orderIds],
         ['display_type', '=', false],
       ],
-      ['order_id', 'product_id', 'product_uom_qty', 'name'],
+      ['order_id', 'product_id', 'product_uom_qty', 'price_unit', 'name'],
     ]),
     // Never fatal: a board with no phone numbers on it is still the board,
     // whereas one that refuses to load because res.partner was unreadable is
@@ -795,6 +818,7 @@ async function fetchOrderPackingList({ fromDate, toDate, channel }) {
 
     const slotId = slotByOrderId.get(orderId);
     if (!slotId) continue; // reported once per order below, not per line
+    if (isMoneyOffLine(line)) continue;
 
     const productName = line.product_id ? line.product_id[1] : line.name;
     const qty = Math.round(line.product_uom_qty || 0);
@@ -1046,13 +1070,13 @@ async function fetchCustomerLocations({ fromDate, toDate }) {
 // with none of the weekend-slot machinery: this asks what sold over months,
 // not what to cook on Saturday.
 //
-// Dated by date_order — the day the customer placed the order — and NOT by
-// commitment_date, which is what the packing board and the prep planner use.
-// The difference is deliberate and it is the difference between the two
-// questions: the board asks "what am I handing over on Saturday", so it dates
-// an order by when it is promised; this asks "what were people ordering in
-// week N", which is the day they chose the dish. Spending vs Sales dates its
-// B2C revenue by date_order too, so the two money screens agree week for week.
+// Dated by commitment_date — the weekend slot the order is for — falling back
+// to date_order only when no Expected Date was set (see promisedDayDomain).
+// It used to be date_order, but the site now takes orders upfront for later
+// weekend slots, so the day an order was placed says nothing about which
+// weekend's sales it is. Spending vs Sales dates its B2C revenue the same way,
+// so the money screens agree week for week with each other and with the
+// packing board.
 //
 // Company orders are read and then dropped rather than never fetched, because
 // the count of what was dropped is worth reporting: the wholesale half of that
@@ -1066,10 +1090,9 @@ async function fetchSoldItems({ fromDate, toDate }) {
   const orders = await execute('sale.order', 'search_read', [
     [
       ['state', 'in', CONFIRMED_STATES],
-      ['date_order', '>=', istDayStartAsOdooUtc(fromDate)],
-      ['date_order', '<', istDayStartAsOdooUtc(toDate, 1)],
+      ...promisedDayDomain(fromDate, toDate),
     ],
-    ['id', 'name', 'date_order', 'partner_id', 'state'],
+    ['id', 'name', 'date_order', 'commitment_date', 'partner_id', 'state'],
   ]);
   if (!orders.length) return { lines: [], ordersFound: 0, companyOrdersSkipped: 0 };
 
@@ -1095,7 +1118,7 @@ async function fetchSoldItems({ fromDate, toDate }) {
       ['order_id', 'in', b2cOrders.map((order) => order.id)],
       ['display_type', '=', false], // section and note lines carry no product
     ],
-    ['order_id', 'product_id', 'product_uom_qty', 'price_total', 'name'],
+    ['order_id', 'product_id', 'product_uom_qty', 'price_unit', 'discount', 'price_total', 'name'],
   ]);
 
   const sold = [];
@@ -1111,10 +1134,32 @@ async function fetchSoldItems({ fromDate, toDate }) {
     if (quantity <= 0) continue;
 
     const productName = (line.product_id ? line.product_id[1] : line.name) || 'Unnamed line';
+    const revenue = Number(line.price_total) || 0;
+    // Odoo takes money off an order two ways, and Sales by Item totals both:
+    //   - a Discount (%) typed on a dish line. price_total is already net of
+    //     it, so the rupees off are worked back from the percentage — off the
+    //     tax-inclusive total, to stay in the same money as `revenue`.
+    //   - a line of its own with a negative price: the "Discount" product, or
+    //     a coupon code booked against a delivery-credit product. That line is
+    //     money off the order, not a dish, and `isDiscountLine` says so.
+    const discountPct = Number(line.discount) || 0;
+    const discount =
+      discountPct <= 0
+        ? 0
+        : discountPct >= 100
+          ? (Number(line.price_unit) || 0) * quantity
+          : revenue / (1 - discountPct / 100) - revenue;
     sold.push({
       orderId,
       orderName: order.name,
-      day: istDayOf(order.date_order),
+      customer: Array.isArray(order.partner_id) ? order.partner_id[1] : 'Unknown customer',
+      // The weekend the order is FOR, not the day it was placed: the site
+      // takes orders upfront for later weekend slots, so an order placed this
+      // week for a slot three weeks out is that later week's sales. Falls back
+      // to the ordering day for an order nobody set an Expected Date on.
+      day: istDayOf(order.commitment_date || order.date_order),
+      promisedDay: istDayOf(order.commitment_date || order.date_order),
+      orderedDay: istDayOf(order.date_order),
       productId: line.product_id ? line.product_id[0] : null,
       productName,
       // null when nothing in the menu table matches — the caller keeps the
@@ -1125,7 +1170,10 @@ async function fetchSoldItems({ fromDate, toDate }) {
       // price_total, not price_subtotal: the tax-inclusive figure, so revenue
       // here adds up to the same money Spending vs Sales reads off
       // amount_total rather than being quietly short by the tax.
-      revenue: Number(line.price_total) || 0,
+      revenue,
+      discountPct,
+      discount,
+      isDiscountLine: revenue < 0,
     });
   }
 
@@ -1249,6 +1297,18 @@ async function setFulfilmentStatus({ orderId, status }) {
   return value;
 }
 
+// The Studio text field the courier's tracking link lives in. The website's
+// public order tracker reads it (smokey-rings api/lib/delivery_tracking.php).
+const DELIVERY_TRACKING_FIELD = 'x_delivery_tracking_url';
+
+// Writes the tracking value onto the sale order. The caller decides the value
+// — for Porter just the path, see odooTrackingValue in
+// server/ops/shared/orderPackingStatus.js.
+async function setDeliveryTrackingUrl({ orderId, value }) {
+  if (!orderId) return;
+  await execute('sale.order', 'write', [[Number(orderId)], { [DELIVERY_TRACKING_FIELD]: value || false }]);
+}
+
 // Creates (if one doesn't already exist for this order) and posts a customer
 // invoice via Odoo's own sale.order._create_invoices — the same call Odoo's
 // "Create Invoice" button makes, so it respects whatever invoicing policy,
@@ -1333,13 +1393,13 @@ async function findOrCreatePartner(vendorName, extraFields = {}) {
   return { id, created: true };
 }
 
-async function findOrCreateProduct(itemName) {
+async function findOrCreateProduct(itemName, { type = 'consu' } = {}) {
   const found = await execute('product.product', 'search_read', [[['name', '=', itemName]], ['id', 'name']], {
     limit: 1,
   });
   if (found.length) return { id: found[0].id, created: false };
   const templateId = await execute('product.template', 'create', [
-    { name: itemName, type: 'consu', purchase_ok: true, sale_ok: false },
+    { name: itemName, type, purchase_ok: true, sale_ok: false },
   ]);
   const variants = await execute('product.product', 'search_read', [
     [['product_tmpl_id', '=', templateId]],
@@ -1446,7 +1506,13 @@ async function createPurchaseOrder({ vendorName, lines }) {
 
   const orderLines = [];
   for (const line of lines) {
-    const productId = await resolveProductId({ materialId: line.materialId, itemName: line.itemName });
+    // A labour or misc line names a shared service product ("Labour") rather
+    // than getting a product of its own — "Porter from Bread Time Stories" is
+    // a description, not something to put in Odoo's product list. The
+    // description still rides on the line's name below.
+    const productId = line.serviceProduct
+      ? (await findOrCreateProduct(line.serviceProduct, { type: 'service' })).id
+      : await resolveProductId({ materialId: line.materialId, itemName: line.itemName });
     const unitSuffix = line.unit ? ` (${line.unit})` : '';
     orderLines.push([
       0,
@@ -1975,6 +2041,10 @@ export {
   // plain strings and needs the same flattening the contact fields get.
   htmlToText,
   getConfig,
+  // The promised-day range filter and IST day reader, for orderAttribution.js
+  // when a money screen asks for orders by the weekend they are for.
+  promisedDayDomain,
+  istDayOf,
   fetchWeekendOrders,
   confirmSaleOrder,
   fetchOrderPackingList,
@@ -1990,6 +2060,7 @@ export {
   syncRawMaterialsToOdoo,
   tagSaleOrderStatus,
   setFulfilmentStatus,
+  setDeliveryTrackingUrl,
   resolveFulfilmentField,
   createAndPostInvoice,
   addStockOnHand,

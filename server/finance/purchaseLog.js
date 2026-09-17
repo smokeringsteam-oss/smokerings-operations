@@ -46,7 +46,7 @@ import {
   DEFAULT_MATERIAL_CATEGORY,
   normaliseExpenseCategory,
 } from '../core/expenseCategories.js';
-import { PURCHASE_CHANNELS, recordPurchases } from '../ops/shared/purchasing.js';
+import { PURCHASE_CHANNELS, recordPurchases, mirrorPurchasingCsv } from '../ops/shared/purchasing.js';
 
 const badRequest = (message) => {
   const err = new Error(message);
@@ -359,6 +359,7 @@ function categorisePurchases({ purchaseIds, expenseCategory }) {
   transaction(() => {
     ids.forEach((id) => update('purchase', { purchase_id: id }, { expense_category: category }));
   });
+  mirrorPurchasingCsv();
 
   const after = new Map(readPurchases().map((row) => [row.purchase_id, row]));
   return {

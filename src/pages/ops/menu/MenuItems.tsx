@@ -51,7 +51,11 @@ export type MenuItem = {
   // no recipe the prep planner can see.
   menuId: string | null;
 };
-type MenuItemsResponse = { items: MenuItem[]; editable: boolean; error?: string };
+type MenuItemsResponse = {
+  items: MenuItem[];
+  editable: boolean;
+  error?: string;
+};
 // Outcome of the knowledge-base menu.csv mirror. Absent on the picture write,
 // which has no column in that file.
 type CsvMirror = { mirrored: boolean; reason?: string };
@@ -66,6 +70,8 @@ const inrFormat = (n: number) => `₹${n.toLocaleString('en-IN', { maximumFracti
 // Mirrors the server's cap (menuItems.js MAX_IMAGE_BYTES) so an oversized
 // photo is caught before spending a slow upload on it.
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
+
+const categoryAnchor = (category: string) => `menu-cat-${category.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
 
 const readFileAsDataUri = (file: File) =>
   new Promise<string>((resolve, reject) => {
@@ -220,7 +226,11 @@ const MenuItems: React.FC<{ channel?: MenuChannel }> = ({ channel = 'b2c' }) => 
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id: item.id, ...body }),
       });
-      const json = await readJson<{ item?: MenuItem; csv?: CsvMirror; error?: string }>(resp, failMessage);
+      const json = await readJson<{
+        item?: MenuItem;
+        csv?: CsvMirror;
+        error?: string;
+      }>(resp, failMessage);
       if (!json.item) throw new Error(failMessage);
       // Only touched when this write had a menu.csv side — so the note from
       // saving the text fields survives the picture write that follows it.
@@ -275,6 +285,23 @@ const MenuItems: React.FC<{ channel?: MenuChannel }> = ({ channel = 'b2c' }) => 
     setSaveNote(`Saved ${draftName.trim()}.`);
   };
 
+  // Opening a card lower down the list leaves its header wherever the
+  // previous card's collapse put it — often off the top of a phone screen.
+  // Bring the opened row's header back into view once it has rendered.
+  useEffect(() => {
+    if (openId === null) return;
+    const row = document.getElementById(`menu-item-${openId}`);
+    if (!row) return;
+    const top = row.getBoundingClientRect().top;
+    if (top < 0 || top > window.innerHeight * 0.6) {
+      row.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  }, [openId]);
+
+  const jumpToCategory = (category: string) => {
+    document.getElementById(categoryAnchor(category))?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+
   const dishDirty = (item: MenuItem) =>
     draftName !== item.name ||
     draftPrice !== String(item.price) ||
@@ -283,27 +310,68 @@ const MenuItems: React.FC<{ channel?: MenuChannel }> = ({ channel = 'b2c' }) => 
 
   return (
     <section className="menu-items-panel">
-      <div className="svc-week-panel-head">
-        <div>
-          <h3 className="inv-section-title">{title}</h3>
-          <p className="inv-section-hint">
-            Pick a dish to edit it — the picture, name, price and blurb the customer sees, and the recipe the kitchen
-            makes for one order.
-          </p>
+      <div className="menu-items-head">
+        <div className="menu-items-head-text">
+          <h3 className="inv-section-title">
+            {title}
+            {items.length > 0 && <span className="menu-items-count">{items.length} dishes</span>}
+          </h3>
+          <p className="inv-section-hint">Tap a dish to edit its picture, name, price, blurb and recipe.</p>
         </div>
-        <div className="svc-week-head-actions">
+        <button
+          type="button"
+          className="secondary-button small menu-items-refresh"
+          onClick={load}
+          disabled={isLoading}
+          aria-label="Refresh from Odoo"
+          title="Refresh from Odoo"
+        >
+          <span
+            className={isLoading ? 'menu-items-refresh-icon is-spinning' : 'menu-items-refresh-icon'}
+            aria-hidden="true"
+          >
+            ↻
+          </span>
+          <span className="menu-items-refresh-label">{isLoading ? 'Refreshing…' : 'Refresh'}</span>
+        </button>
+      </div>
+
+      {/* Search and category jumps stay pinned while the list scrolls, since
+          on a phone the list is several screens long. */}
+      <div className="menu-items-toolbar">
+        <div className="menu-items-search-wrap">
+          <span className="menu-items-search-icon" aria-hidden="true">
+            ⌕
+          </span>
           <input
             type="search"
             className="menu-items-search"
-            placeholder="Search dishes…"
+            placeholder="Search dishes, codes, blurbs…"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             aria-label="Search dishes"
           />
-          <button type="button" className="secondary-button small" onClick={load} disabled={isLoading}>
-            {isLoading ? 'Refreshing…' : 'Refresh'}
-          </button>
+          {search && (
+            <button
+              type="button"
+              className="menu-items-search-clear"
+              onClick={() => setSearch('')}
+              aria-label="Clear search"
+            >
+              ×
+            </button>
+          )}
         </div>
+        {grouped.length > 1 && (
+          <nav className="menu-items-chips" aria-label="Jump to category">
+            {grouped.map(([category, categoryItems]) => (
+              <button key={category} type="button" className="menu-items-chip" onClick={() => jumpToCategory(category)}>
+                {category}
+                <span className="menu-items-chip-count">{categoryItems.length}</span>
+              </button>
+            ))}
+          </nav>
+        )}
       </div>
 
       {error && <p className="chat-error">{error}</p>}
@@ -324,8 +392,11 @@ const MenuItems: React.FC<{ channel?: MenuChannel }> = ({ channel = 'b2c' }) => 
         <p className="status-message">Nothing matches “{search.trim()}”.</p>
       ) : (
         grouped.map(([category, categoryItems]) => (
-          <div key={category} className="menu-item-group">
-            <span className="menu-item-group-title">{category}</span>
+          <div key={category} id={categoryAnchor(category)} className="menu-item-group">
+            <span className="menu-item-group-title">
+              {category}
+              <span className="menu-item-group-count">{categoryItems.length}</span>
+            </span>
             {categoryItems.map((item) => {
               const busy = savingId === item.id;
               const isOpen = openId === item.id;
@@ -333,7 +404,11 @@ const MenuItems: React.FC<{ channel?: MenuChannel }> = ({ channel = 'b2c' }) => 
               // keeps showing what Odoo actually has.
               const shownImage = isOpen && draftImage !== undefined ? draftImage : item.image;
               return (
-                <article key={item.id} className={`menu-item-row${isOpen ? ' is-open' : ''}`}>
+                <article
+                  key={item.id}
+                  id={`menu-item-${item.id}`}
+                  className={`menu-item-row${isOpen ? ' is-open' : ''}`}
+                >
                   <button
                     type="button"
                     className="menu-item-open"
@@ -349,21 +424,32 @@ const MenuItems: React.FC<{ channel?: MenuChannel }> = ({ channel = 'b2c' }) => 
                     )}
 
                     <span className="menu-item-main">
-                      <span className="menu-item-name">
-                        {item.name}
-                        {item.code && <em className="menu-item-code">{item.code}</em>}
-                        {!item.menuId && (
-                          <em className="menu-item-tag" title="No knowledge-base menu.csv row, so it has no recipe">
-                            no recipe
-                          </em>
-                        )}
-                      </span>
+                      <span className="menu-item-name">{item.name}</span>
+                      {(item.code || !item.menuId) && (
+                        <span className="menu-item-meta">
+                          {item.code && <em className="menu-item-code">{item.code}</em>}
+                          {!item.menuId && (
+                            <em className="menu-item-tag" title="No knowledge-base menu.csv row, so it has no recipe">
+                              no recipe
+                            </em>
+                          )}
+                        </span>
+                      )}
                       {item.description && <span className="menu-item-desc">{item.description}</span>}
                     </span>
 
-                    <span className="menu-item-price">{inrFormat(item.price)}</span>
-                    <span className="menu-item-chevron" aria-hidden="true">
-                      {isOpen ? '▾' : '▸'}
+                    <span className="menu-item-side">
+                      <span className="menu-item-price">{inrFormat(item.price)}</span>
+                      <svg className="menu-item-chevron" viewBox="0 0 20 20" width="18" height="18" aria-hidden="true">
+                        <path
+                          d="M7 4l6 6-6 6"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="2"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        />
+                      </svg>
                     </span>
                   </button>
 
@@ -418,10 +504,11 @@ const MenuItems: React.FC<{ channel?: MenuChannel }> = ({ channel = 'b2c' }) => 
                                 disabled={!editable || busy}
                               />
                             </label>
-                            <label className="svc-week-field">
+                            <label className="svc-week-field menu-item-price-field">
                               <span>Price (₹)</span>
                               <input
                                 type="number"
+                                inputMode="decimal"
                                 min="0"
                                 step="1"
                                 value={draftPrice}
@@ -441,7 +528,7 @@ const MenuItems: React.FC<{ channel?: MenuChannel }> = ({ channel = 'b2c' }) => 
                           </div>
                         </div>
 
-                        <div className="svc-week-form-actions">
+                        <div className={`svc-week-form-actions menu-item-actions${dishDirty(item) ? ' is-dirty' : ''}`}>
                           <button
                             type="button"
                             className="primary-button small"

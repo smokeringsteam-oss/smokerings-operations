@@ -129,7 +129,7 @@ test('a cart that has been logged does not come back', async () => {
   await addALine(first.container);
   await waitFor(() => expect(cartNames(first.container)).toEqual(['Pork Shoulder']));
 
-  fireEvent.click(screen.getByRole('button', { name: /Log purchase to CSV and Odoo/i }));
+  fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
   await waitFor(() => expect(cartNames(first.container)).toEqual([]));
   first.unmount();
 

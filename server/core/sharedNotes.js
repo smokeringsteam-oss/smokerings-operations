@@ -44,6 +44,7 @@ function toNote(row) {
     done: !!row.done,
     doneAt: row.done_at || null,
     doneBy: row.done_by || '',
+    assignedTo: row.assigned_to || '',
   };
 }
 
@@ -99,8 +100,10 @@ function listNotes({ q, author } = {}) {
     // ifnull, because a note posted before anyone picked a name has a NULL
     // author, and NULL LIKE anything is NULL — which would drop those notes
     // from every search rather than just failing to match on their author.
-    clauses.push(`(body LIKE ? ESCAPE '\\' OR ifnull(author, '') LIKE ? ESCAPE '\\')`);
-    filter.push(likePattern(term), likePattern(term));
+    clauses.push(
+      `(body LIKE ? ESCAPE '\\' OR ifnull(author, '') LIKE ? ESCAPE '\\' OR ifnull(assigned_to, '') LIKE ? ESCAPE '\\')`,
+    );
+    filter.push(likePattern(term), likePattern(term), likePattern(term));
   }
   if (who) {
     // Whole name, not a substring: this is a chip picked off the roster, so
@@ -108,13 +111,15 @@ function listNotes({ q, author } = {}) {
     // sides because the name is retyped by hand on every device — the same
     // person is "adarsh" on the phone and "Adarsh" on the tablet, and the
     // roster below would list those as two people if they ever diverged.
-    clauses.push(`lower(ifnull(author, '')) = lower(?)`);
-    filter.push(who);
+    // Or assigned to them: the chip answers "what is mine", and a note handed
+    // to Sowmya is hers whoever typed it.
+    clauses.push(`(lower(ifnull(author, '')) = lower(?) OR lower(ifnull(assigned_to, '')) = lower(?))`);
+    filter.push(who, who);
   }
   const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
   const rows = all(
     `SELECT * FROM (
-       SELECT note_id, author, body, created_at, done, done_at, done_by FROM shared_note
+       SELECT note_id, author, body, created_at, done, done_at, done_by, assigned_to FROM shared_note
         ${where}
         ORDER BY note_id DESC LIMIT ?
      ) ORDER BY note_id ASC`,
@@ -214,6 +219,25 @@ function setNoteDone({ id, done, by } = {}) {
   return toNote(select('shared_note', { note_id: noteId })[0]);
 }
 
+// Hands a note to someone, or back to nobody with a blank name. A column
+// update rather than a rewrite, like the tick — the body is still never
+// edited, so two devices cannot clobber each other's text.
+function assignNote({ id, assignedTo } = {}) {
+  const noteId = Number(id);
+  if (!Number.isInteger(noteId) || noteId <= 0) throw bad('A note id is required.');
+  if (assignedTo !== undefined && assignedTo !== null && typeof assignedTo !== 'string') {
+    throw bad('assignedTo must be a name.');
+  }
+  const existing = select('shared_note', { note_id: noteId })[0];
+  if (!existing) {
+    const err = new Error('That note no longer exists.');
+    err.status = 404;
+    throw err;
+  }
+  update('shared_note', { note_id: noteId }, { assigned_to: clean(assignedTo, MAX_AUTHOR) });
+  return toNote(select('shared_note', { note_id: noteId })[0]);
+}
+
 // Deletes one. A note that is already gone is not an error worth surfacing —
 // two devices tapping the same ✕ within a second of each other is an ordinary
 // thing to happen, and the second one should see the note gone, which it
@@ -225,4 +249,4 @@ function deleteNote({ id } = {}) {
   return { deleted: changes > 0, id: noteId };
 }
 
-export { listNotes, addNote, setNoteDone, deleteNote, MAX_BODY, MAX_AUTHOR, PAGE_SIZE };
+export { listNotes, addNote, setNoteDone, assignNote, deleteNote, MAX_BODY, MAX_AUTHOR, PAGE_SIZE };

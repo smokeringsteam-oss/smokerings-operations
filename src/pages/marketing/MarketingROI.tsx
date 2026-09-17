@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { REPORT_START } from '../reportRange';
+import { defaultWeekendRange, formatDateInput } from '../ops/shared/packing';
 
 // Marketing ROI — what marketing cost, next to what it brought in.
 //
@@ -248,9 +249,18 @@ const percent = (value: number | null) => (value === null ? '—' : `${value.toF
 // four-figure session count and a four-figure rupee total line up.
 const count = (value: number) => rupees.format(Math.round(value));
 
+// Local-date arithmetic on a YYYY-MM-DD string. Not iso(): toISOString is UTC,
+// and in IST a local midnight is the previous day in UTC.
+const shiftDays = (value: string, n: number) => {
+  const [y, m, d] = value.split('-').map(Number);
+  return formatDateInput(new Date(y, m - 1, d + n));
+};
+
 const MarketingROI = () => {
-  const [from, setFrom] = useState(REPORT_START);
-  const [to, setTo] = useState(iso(new Date()));
+  // Opens on the same Mon→Sun service week as B2C Order Management, so the
+  // money here lines up with the weekend the kitchen just cooked.
+  const [from, setFrom] = useState(() => defaultWeekendRange().from);
+  const [to, setTo] = useState(() => defaultWeekendRange().to);
   const [tab, setTab] = useState<'overview' | 'traffic'>('overview');
 
   const [report, setReport] = useState<RoiReport | null>(null);
@@ -306,6 +316,32 @@ const MarketingROI = () => {
             <input type="date" value={to} min={from} onChange={(event) => setTo(event.target.value)} />
           </label>
           <div className="mkt-presets">
+            <button
+              type="button"
+              className="mkt-chip"
+              aria-label="Previous week"
+              onClick={() => preset(shiftDays(from, -7), shiftDays(to, -7))}
+            >
+              ‹ Week
+            </button>
+            <button
+              type="button"
+              className="mkt-chip"
+              onClick={() => {
+                const week = defaultWeekendRange();
+                preset(week.from, week.to);
+              }}
+            >
+              This week
+            </button>
+            <button
+              type="button"
+              className="mkt-chip"
+              aria-label="Next week"
+              onClick={() => preset(shiftDays(from, 7), shiftDays(to, 7))}
+            >
+              Week ›
+            </button>
             <button type="button" className="mkt-chip" onClick={() => preset(daysAgo(6), iso(new Date()))}>
               Last 7 days
             </button>
@@ -317,6 +353,9 @@ const MarketingROI = () => {
             </button>
             <button type="button" className="mkt-chip" onClick={() => preset(daysAgo(90), iso(new Date()))}>
               Last 90 days
+            </button>
+            <button type="button" className="mkt-chip" onClick={() => preset(REPORT_START, iso(new Date()))}>
+              All time
             </button>
           </div>
         </div>

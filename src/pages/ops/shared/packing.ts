@@ -35,6 +35,12 @@ export type PackOrder = {
   phone: string;
   address: string;
   addressName: string;
+  // Straight-line km from the kitchen, off the geocode cache
+  // (server/ops/shared/deliveryDistance.js). null unless distanceStatus is
+  // 'ok'; optional because older responses and tests don't carry them.
+  distanceKm?: number | null;
+  distanceStatus?: 'ok' | 'pending' | 'not_found' | 'no_address' | 'no_origin';
+  locality?: string;
   itemCount: number;
   items: PackOrderItem[];
 };
@@ -60,6 +66,8 @@ export type PackingResponse = {
   slots: Record<PackSlotId, PackOrder[]>;
   unmatched: string[];
   ordersFound: number;
+  // False when KITCHEN_LAT / KITCHEN_LON aren't set, so no distances exist.
+  kitchenLocated?: boolean;
 };
 
 // What Gemini made of one order's note (POST /api/orders/time-preferences,
@@ -78,8 +86,91 @@ export type OrderTimePreference = {
   // than trust a paraphrase.
   quote: string;
   confidence: 'high' | 'medium' | 'low';
+  // What sort of timing ask it is. Only by/around/asap pull an order up the
+  // board — "after 8pm" is a reason to send it later, not sooner. Optional
+  // because notes read before this field existed don't carry it.
+  kind?: OrderTimeKind;
+  // Short tags for anything else in the note the packer must not miss —
+  // "Party at 1 PM", "Call before arriving". Empty when there are none.
+  urgencyFlags?: string[];
+  // One line of what the customer asked of the kitchen ("No onions, extra
+  // sauce"), separated from the delivery asks. Empty when there is none.
+  kitchenInstructions?: string;
 };
+export type OrderTimeKind = 'by' | 'around' | 'asap' | 'after' | 'other';
 export type OrderTimePreferences = Record<string, OrderTimePreference>;
+
+// ---- Dispatch priority ----------------------------------------------------
+// A customer who asked for a time goes ahead of one who didn't, and distance
+// decides the rest. The two are combined rather than stacked: what matters is
+// when the rider has to LEAVE, so a 1:00 PM drop 15 km out is ahead of a
+// 12:45 PM drop round the corner. Ride time is a rough straight-line estimate
+// (Bengaluru traffic, ~15 km/h), good enough to order a board, not to promise.
+export const RIDE_MINUTES_PER_KM = 4;
+
+const PRIORITY_KINDS: OrderTimeKind[] = ['by', 'around', 'asap'];
+
+// Whether this order's note is a timing ask the board should act on. A
+// low-confidence read still shows its callout but doesn't reorder anything.
+export const hasDeadline = (
+  preference: OrderTimePreference | undefined,
+): preference is OrderTimePreference & { kind: OrderTimeKind } =>
+  Boolean(
+    preference?.hasPreference &&
+      preference.confidence !== 'low' &&
+      preference.kind &&
+      PRIORITY_KINDS.includes(preference.kind),
+  );
+
+const clockMinutes = (hhmm: string): number | null => {
+  const match = /^([01]\d|2[0-3]):([0-5]\d)$/.exec(hhmm);
+  return match ? Number(match[1]) * 60 + Number(match[2]) : null;
+};
+
+// Minutes after midnight the rider should leave by, or null when the ask has
+// no clock time (ASAP, "early in the slot") or isn't a deadline at all.
+export const leaveByMinutes = (order: PackOrder, preference: OrderTimePreference | undefined): number | null => {
+  if (!hasDeadline(preference) || preference.kind === 'asap') return null;
+  const deadline = clockMinutes(preference.preferredTime);
+  if (deadline == null) return null;
+  return deadline - Math.round((order.distanceKm ?? 0) * RIDE_MINUTES_PER_KM);
+};
+
+export const formatClockMinutes = (minutes: number): string => {
+  const m = ((minutes % 1440) + 1440) % 1440;
+  const h = Math.floor(m / 60);
+  return `${h % 12 || 12}:${String(m % 60).padStart(2, '0')} ${h < 12 ? 'AM' : 'PM'}`;
+};
+
+// Farthest first, unmeasured after — ties keep the server's time order
+// because Array.prototype.sort is stable.
+const byDistance = (a: PackOrder, b: PackOrder): number => {
+  const da = a.distanceKm ?? null;
+  const db = b.distanceKm ?? null;
+  if (da == null && db == null) return 0;
+  if (da == null) return 1;
+  if (db == null) return -1;
+  return db - da;
+};
+
+export const sortByDistance = (orders: PackOrder[]): PackOrder[] => [...orders].sort(byDistance);
+
+// The board's default order:
+//   0. ASAP asks
+//   1. timed asks, earliest leave-by first
+//   2. timing asks with no clock time ("early in the slot")
+//   3. everyone else
+// with distance (farthest first) breaking every tie.
+export const prioritiseOrders = (orders: PackOrder[], preferences: OrderTimePreferences): PackOrder[] => {
+  const ranked = orders.map((order) => {
+    const preference = preferences[String(order.orderId)];
+    const leaveBy = leaveByMinutes(order, preference);
+    const tier = !hasDeadline(preference) ? 3 : preference.kind === 'asap' ? 0 : leaveBy == null ? 2 : 1;
+    return { order, tier, leaveBy: leaveBy ?? 0 };
+  });
+  ranked.sort((a, b) => a.tier - b.tier || a.leaveBy - b.leaveBy || byDistance(a.order, b.order));
+  return ranked.map((entry) => entry.order);
+};
 
 // The box a side is packed in — material_id/name straight out of
 // materials.csv. Sized one of two ways (server/core/packagingConfig.js):
@@ -209,6 +300,18 @@ export const describePacking = (portions: number, boxes: number, container: Side
   if (container?.portionCapacity === 1) return portions > 1 ? `${label} — one portion each` : label;
   const split = portionSplit(portions, container);
   if (split.length > 1) return `${label} — ${split.join(' + ')} portions`;
+  return label;
+};
+
+// The same line for a total summed across many orders. No "6 + 6" split here:
+// boxes are counted order by order and customers never share a sheet, so a
+// split of the weekend's pooled portions (12 chips → "6 + 6") contradicts the
+// box count beside it (8 sheets across 8 orders). Only the capacity is stated.
+export const describeTotalPacking = (portions: number, boxes: number, container: SideContainer): string => {
+  const label = describeBoxes(boxes, container);
+  const per = container?.portionCapacity || 0;
+  if (per === 1) return portions > 1 ? `${label} — one portion each` : label;
+  if (per > 1 && portions > boxes) return `${label} — up to ${per} portions each`;
   return label;
 };
 

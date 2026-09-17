@@ -33,7 +33,7 @@
 //
 // Talks to Odoo through odoo.js's `execute` rather than reaching for
 // credentials itself, the way server/ops/b2c/serviceWeeks.js does.
-import { execute } from '../integrations/odoo.js';
+import { execute, promisedDayDomain, istDayOf } from '../integrations/odoo.js';
 
 // The channels this business sells through, and how each one maps onto Odoo's
 // UTM vocabulary and onto what Google Analytics calls the same traffic.
@@ -203,6 +203,9 @@ function shapeOrder(order, channelField) {
     id: order.id,
     name: order.name,
     orderedOn: order.date_order || '',
+    // The IST day of the weekend slot the order is for (Expected Date), or the
+    // ordering day when none was set. Spending vs Sales buckets by this.
+    promisedDay: istDayOf(order.commitment_date || order.date_order) || '',
     state: order.state,
     // Whether this order's money counts toward a channel's return. Carried
     // per-order rather than filtered out here, because the tagging list wants
@@ -233,7 +236,11 @@ function shapeOrder(order, channelField) {
   };
 }
 
-async function fetchAttributedOrders({ fromDate, toDate }) {
+// `dateBy: 'promised'` ranges on the weekend slot the order is for instead of
+// the day it was placed — what Spending vs Sales wants, now that orders are
+// taken upfront for later weekends. Marketing ROI keeps the default: a
+// campaign is judged by the orders it prompted that week, whenever they eat.
+async function fetchAttributedOrders({ fromDate, toDate, dateBy = 'ordered' }) {
   if (!fromDate || !toDate) {
     const err = new Error('A from and to date are both required.');
     err.status = 400;
@@ -246,6 +253,7 @@ async function fetchAttributedOrders({ fromDate, toDate }) {
   const fields = [
     'name',
     'date_order',
+    'commitment_date',
     'state',
     'amount_total',
     'partner_id',
@@ -264,11 +272,13 @@ async function fetchAttributedOrders({ fromDate, toDate }) {
   toBound.setUTCDate(toBound.getUTCDate() + 1);
 
   const orders = await execute('sale.order', 'search_read', [
-    [
-      ['date_order', '>=', `${fromDate} 00:00:00`],
-      ['date_order', '<', `${toBound.toISOString().slice(0, 10)} 00:00:00`],
-      ['state', '!=', 'cancel'],
-    ],
+    dateBy === 'promised'
+      ? [['state', '!=', 'cancel'], ...promisedDayDomain(fromDate, toDate)]
+      : [
+          ['date_order', '>=', `${fromDate} 00:00:00`],
+          ['date_order', '<', `${toBound.toISOString().slice(0, 10)} 00:00:00`],
+          ['state', '!=', 'cancel'],
+        ],
     fields,
   ]);
 

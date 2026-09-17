@@ -310,6 +310,25 @@ function purchasePieceWeight(db) {
   return 'purchase: weight_per_unit_kg added';
 }
 
+// Order vs Practice on a buy. Every row already on file was logged before the
+// question existed, so the default ('Order') is the honest answer for them.
+function purchasePurpose(db) {
+  if (hasColumn(db, 'purchase', 'purpose')) return null;
+  db.exec(
+    "ALTER TABLE purchase ADD COLUMN purpose TEXT NOT NULL DEFAULT 'Order' " +
+      "CHECK (purpose IN ('Order','Practice'))",
+  );
+  return 'purchase: purpose added';
+}
+
+// The Porter tracking link on an order, which replaced typing the delivery
+// partner's name. delivery_person stays for the rows that already have one.
+function salesOrderTrackingUrl(db) {
+  if (!hasTable(db, 'sales_order') || hasColumn(db, 'sales_order', 'tracking_url')) return null;
+  db.exec('ALTER TABLE sales_order ADD COLUMN tracking_url TEXT');
+  return 'sales_order: tracking_url added';
+}
+
 // The AI SEO tracker, removed. Its two tables came out of schema.sql with it,
 // so a database that still has them is no longer the shape a fresh install
 // builds — which is the one thing this file exists to prevent. Dropped rather
@@ -847,7 +866,10 @@ function sharedNotes(db) {
           created_at TEXT NOT NULL DEFAULT (datetime('now')),
           done       INTEGER NOT NULL DEFAULT 0 CHECK (done IN (0, 1)),
           done_at    TEXT,
-          done_by    TEXT
+          done_by    TEXT,
+          assigned_to TEXT,
+          github_issue    INTEGER,
+          github_category INTEGER
       )
     `);
     return 'shared_note: created';
@@ -867,7 +889,108 @@ function sharedNotes(db) {
     db.exec('ALTER TABLE shared_note ADD COLUMN done_by TEXT');
     added.push('done_by');
   }
+  if (!hasColumn(db, 'shared_note', 'assigned_to')) {
+    db.exec('ALTER TABLE shared_note ADD COLUMN assigned_to TEXT');
+    added.push('assigned_to');
+  }
+  if (!hasColumn(db, 'shared_note', 'github_issue')) {
+    db.exec('ALTER TABLE shared_note ADD COLUMN github_issue INTEGER');
+    added.push('github_issue');
+  }
+  if (!hasColumn(db, 'shared_note', 'github_category')) {
+    db.exec('ALTER TABLE shared_note ADD COLUMN github_category INTEGER');
+    added.push('github_category');
+  }
   return added.length ? `shared_note: ${added.join(', ')} added` : null;
+}
+
+// Labour and miscellaneous spend had a table of its own for two days
+// (weekly_expense, filed per Monday). It now lives in `purchase` with
+// everything else: a service line, quantity 1, under a vendor called "Labour"
+// or "Miscellaneous" — see recordExpense in server/ops/shared/purchasing.js.
+//
+// Each entry is moved to one purchase row dated the day it was entered
+// (created_at, in IST), held inside the week it was filed against so no week's
+// total changes. Then the table goes. One transaction, so a failure leaves the
+// old table exactly as it was.
+//
+// Also renames the "Other" expense category to "Miscellaneous" — the list in
+// server/core/expenseCategories.js did the same — so the two are one bucket.
+function weeklyExpensesIntoPurchases(db) {
+  const changes = [];
+  const renamed = db
+    .prepare("UPDATE purchase SET expense_category = 'Miscellaneous' WHERE expense_category = 'Other'")
+    .run().changes;
+  if (renamed) changes.push(`purchase: ${renamed} "Other" line(s) recategorised as Miscellaneous`);
+  if (!hasTable(db, 'weekly_expense')) return changes.length ? changes.join('; ') : null;
+
+  const pad = (n) => String(n).padStart(2, '0');
+  const isoOf = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  const addDays = (iso, days) => {
+    const [y, m, d] = iso.split('-').map(Number);
+    return isoOf(new Date(y, m - 1, d + days));
+  };
+  // created_at is a UTC ISO stamp; the kitchen's calendar is IST.
+  const istDay = (stamp) => {
+    const t = Date.parse(stamp);
+    return Number.isFinite(t) ? new Date(t + 5.5 * 3600 * 1000).toISOString().slice(0, 10) : null;
+  };
+  const nextNumber = (table, column, prefix) => {
+    const row = db
+      .prepare(
+        `SELECT MAX(CAST(substr(${column}, ${prefix.length + 2}) AS INTEGER)) AS n FROM ${table} WHERE ${column} LIKE ?`,
+      )
+      .get(`${prefix}-%`);
+    return (row?.n || 0) + 1;
+  };
+
+  const rows = db.prepare('SELECT * FROM weekly_expense ORDER BY created_at, expense_id').all();
+
+  db.exec('BEGIN');
+  try {
+    const vendorIds = {};
+    let vendorNumber = nextNumber('vendor', 'vendor_id', 'VEN');
+    const vendorFor = (kind) => {
+      if (vendorIds[kind]) return vendorIds[kind];
+      const found = db.prepare('SELECT vendor_id FROM vendor WHERE lower(trim(vendor_name)) = lower(?)').get(kind);
+      if (found) return (vendorIds[kind] = found.vendor_id);
+      const id = `VEN-${String(vendorNumber++).padStart(3, '0')}`;
+      db.prepare(
+        "INSERT INTO vendor (vendor_id, vendor_name, vendor_type, notes) VALUES (?, ?, 'Expense', 'Weekly Purchasing labour / misc spend.')",
+      ).run(id, kind);
+      return (vendorIds[kind] = id);
+    };
+
+    let purchaseNumber = nextNumber('purchase', 'purchase_id', 'PUR');
+    const insertPurchase = db.prepare(`
+      INSERT INTO purchase (purchase_id, purchase_date, channel, vendor_id, item_type, item_name,
+                            quantity_purchased, unit_price, total_cost, currency, expense_category, notes)
+      VALUES (?, ?, ?, ?, 'service', ?, 1, ?, ?, 'INR', ?, ?)`);
+    rows.forEach((row) => {
+      const weekEnd = addDays(row.week_start, 6);
+      const entered = istDay(row.created_at);
+      const date = entered && entered >= row.week_start && entered <= weekEnd ? entered : row.week_start;
+      const trail = `Moved from weekly expense ${row.expense_id}.`;
+      insertPurchase.run(
+        `PUR-${String(purchaseNumber++).padStart(4, '0')}`,
+        date,
+        row.channel,
+        vendorFor(row.kind),
+        row.description || row.kind,
+        row.amount_inr,
+        row.amount_inr,
+        row.kind,
+        [row.notes, trail].filter(Boolean).join(' '),
+      );
+    });
+    db.exec('DROP TABLE weekly_expense');
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
+  changes.push(`weekly_expense: ${rows.length} row(s) moved into purchase, table dropped`);
+  return changes.join('; ');
 }
 
 const STEPS = [
@@ -887,6 +1010,9 @@ const STEPS = [
   geocodeCache,
   pushNotifications,
   sharedNotes,
+  weeklyExpensesIntoPurchases,
+  purchasePurpose,
+  salesOrderTrackingUrl,
 ];
 
 // Returns only what it actually changed, so the caller can say so once on

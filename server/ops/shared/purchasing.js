@@ -22,10 +22,24 @@
 //     has no nested BEGIN, so the purchase rows are written first and the
 //     stock move follows — the same ordering, and for the same reason, as
 //     addInventoryAdjustment.
+//   * Labour, logistics and miscellaneous spend live here too (see
+//     recordExpense), as service lines under a vendor of the same name. Every
+//     rupee going out of the kitchen is one row in this one table.
+//   * Both tables are mirrored back out to Purchase/purchase_log.csv and
+//     Purchase/vendors.csv after every write — a mirror, never an input. See
+//     server/core/csvMirror.js.
 import { all, getDbConfig } from '../../core/db.js';
 import { insert, nextId, remove, selectOne, transaction, update } from '../../core/repo.js';
 import { readPurchases, readVendors } from '../../core/kbViews.js';
-import { DEFAULT_MATERIAL_CATEGORY, normaliseExpenseCategory } from '../../core/expenseCategories.js';
+import { mirrorCsv } from '../../core/csvMirror.js';
+import {
+  DEFAULT_MATERIAL_CATEGORY,
+  INVESTMENT_CATEGORY,
+  LABOUR_CATEGORY,
+  LOGISTICS_CATEGORY,
+  MISC_CATEGORY,
+  normaliseExpenseCategory,
+} from '../../core/expenseCategories.js';
 import {
   getRawMaterials,
   addRawMaterial,
@@ -44,6 +58,10 @@ import {
 // makes cost attribution per side of the book possible; it is deliberately
 // NOT a separate stock bucket.
 const PURCHASE_CHANNELS = ['B2C', 'B2B'];
+
+// Whether a line was bought for a real order on that channel or for a
+// practice cook. Per line, like the client tag: one butcher run can cover both.
+const PURCHASE_PURPOSES = ['Order', 'Practice'];
 
 // What each of the attribution columns records:
 //   client_id / client_name  — which B2B account this spend is FOR, so the
@@ -83,6 +101,56 @@ function getVendors() {
   return readVendors();
 }
 
+const PURCHASE_CSV_PATH = 'Purchase/purchase_log.csv';
+const PURCHASE_CSV_HEADER = [
+  'purchase_id',
+  'purchase_date',
+  'channel',
+  'purpose',
+  'client_id',
+  'client_name',
+  'smoking_session_id',
+  'vendor_id',
+  'vendor_name',
+  'item_type',
+  'material_id',
+  'item_name',
+  'quantity_purchased',
+  'weight_per_unit_kg',
+  'total_weight_kg',
+  'unit_price',
+  'total_cost',
+  'currency',
+  'expense_category',
+  'odoo_po_id',
+  'odoo_po_line_id',
+  'notes',
+];
+const VENDOR_CSV_PATH = 'Purchase/vendors.csv';
+const VENDOR_CSV_HEADER = [
+  'vendor_id',
+  'vendor_name',
+  'vendor_type',
+  'supplies_category',
+  'contact_person',
+  'phone',
+  'email',
+  'address',
+  'lead_time_days',
+  'payment_terms',
+  'account_owner',
+  'is_active',
+  'notes',
+];
+
+// Both files, whole, after any write to either table. Oldest purchase first so
+// the file reads as a log. Returns the purchase log's result, which is the one
+// the screen reports on.
+function mirrorPurchasingCsv() {
+  mirrorCsv(VENDOR_CSV_PATH, VENDOR_CSV_HEADER, readVendors());
+  return mirrorCsv(PURCHASE_CSV_PATH, PURCHASE_CSV_HEADER, readPurchases().reverse());
+}
+
 // Adds a vendor to the book. Rejects an exact case-insensitive name match
 // rather than creating a near-duplicate — two rows called "Karnataka Pork
 // Shop" would split that vendor's spend in half for every report that groups
@@ -114,11 +182,92 @@ function addVendor({ vendorName, vendorType, suppliesCategory, contactPerson, ph
     notes: notes || null,
   };
   insert('vendor', row);
+  mirrorPurchasingCsv();
 
   // Read back through the projection rather than returning the row as
   // written: the caller gets the same blank-not-null shape every other read
   // hands it, including the is_active the schema defaulted in.
   return { vendor: getVendors().find((v) => v.vendor_id === row.vendor_id) };
+}
+
+// ---- Labour, logistics and miscellaneous ----------------------------------
+//
+// The spend that comes off no vendor bill, logged into the purchase table like
+// everything else rather than into a ledger of its own. Each kind gets a
+// vendor of the same name, created on first use, so the foreign key holds and
+// every vendor rollup shows "Labour" as one line instead of one line per
+// helper. vendor_type 'Expense' is what keeps them out of the purchase form's
+// vendor dropdown.
+const EXPENSE_KINDS = [LABOUR_CATEGORY, LOGISTICS_CATEGORY, INVESTMENT_CATEGORY, MISC_CATEGORY];
+const EXPENSE_VENDOR_TYPE = 'Expense';
+
+function ensureExpenseVendor(kind) {
+  const existing = getVendors().find((v) => v.vendor_name.trim().toLowerCase() === kind.toLowerCase());
+  if (existing) return existing;
+  return addVendor({
+    vendorName: kind,
+    vendorType: EXPENSE_VENDOR_TYPE,
+    notes: 'Weekly Purchasing labour / logistics / investment / misc spend.',
+  })
+    .vendor;
+}
+
+// One labour, logistics or miscellaneous line: a service, quantity 1, priced
+// at the amount paid. A miscellaneous entry has to say what it was — "₹600,
+// misc" is a figure nobody can check a month later; labour and logistics can
+// stand on their own.
+//
+// Investment is the one kind with line detail: an item, a quantity and a unit
+// price, because "2 × chest freezer at ₹18,000" is what a later reader needs
+// and an amount alone would not say. It takes `quantity` and `unitPrice`
+// instead of `amount`.
+function recordExpense({ kind, purchaseDate, channel, description, amount, quantity, unitPrice, notes }) {
+  if (!EXPENSE_KINDS.includes(kind)) {
+    const err = new Error(`kind must be one of: ${EXPENSE_KINDS.join(', ')}.`);
+    err.status = 400;
+    throw err;
+  }
+  const text = typeof description === 'string' ? description.trim().slice(0, 200) : '';
+  const isInvestment = kind === INVESTMENT_CATEGORY;
+  if (isInvestment && !text) {
+    const err = new Error('Say what the investment item was.');
+    err.status = 400;
+    throw err;
+  }
+  const qty = isInvestment ? Number(quantity) : 1;
+  if (!Number.isFinite(qty) || qty <= 0) {
+    const err = new Error('Enter a quantity greater than 0.');
+    err.status = 400;
+    throw err;
+  }
+  const value = Number(isInvestment ? unitPrice : amount);
+  if (!Number.isFinite(value) || value <= 0) {
+    const err = new Error(isInvestment ? 'Enter a unit price greater than 0.' : 'Enter an amount greater than 0.');
+    err.status = 400;
+    throw err;
+  }
+  if (kind === MISC_CATEGORY && !text) {
+    const err = new Error('Say what the miscellaneous expense was for.');
+    err.status = 400;
+    throw err;
+  }
+
+  const vendor = ensureExpenseVendor(kind);
+  return recordPurchases({
+    vendorName: vendor.vendor_name,
+    purchaseDate,
+    channel,
+    expenseCategory: kind,
+    lines: [
+      {
+        itemType: 'service',
+        itemName: text || kind,
+        quantity: qty,
+        unitPrice: Math.round(value * 100) / 100,
+        notes,
+      },
+    ],
+  });
 }
 
 // Newest first, which is how the screen lists them. `from`/`to` bound the
@@ -205,6 +354,13 @@ function recordPurchases({ vendorName, purchaseDate, channel, expenseCategory, l
     throw err;
   }
 
+  const badPurpose = usable.find((line) => line.purpose && !PURCHASE_PURPOSES.includes(line.purpose));
+  if (badPurpose) {
+    const err = new Error(`purpose must be one of: ${PURCHASE_PURPOSES.join(', ')}.`);
+    err.status = 400;
+    throw err;
+  }
+
   // What each line was FOR. Validated here, before anything is written, for
   // the same reason the weight is: a typo on line three must not leave lines
   // one and two behind under a category nobody meant. The rollback would
@@ -251,6 +407,7 @@ function recordPurchases({ vendorName, purchaseDate, channel, expenseCategory, l
         purchase_id: purchaseId,
         purchase_date: date,
         channel: buyingFor,
+        purpose: line.purpose || 'Order',
         // B2C has no account book to attribute to, so the tag is ignored
         // there rather than quietly stored on a row nothing will ever total
         // by client.
@@ -260,7 +417,7 @@ function recordPurchases({ vendorName, purchaseDate, channel, expenseCategory, l
         // tagPurchasesToSession.
         smoking_session_id: null,
         vendor_id: vendor.vendor_id,
-        item_type: line.materialId ? 'material' : null,
+        item_type: line.materialId ? 'material' : line.itemType === 'service' ? 'service' : null,
         material_id: line.materialId || null,
         item_name: line.itemName,
         quantity_purchased: quantity,
@@ -301,9 +458,11 @@ function recordPurchases({ vendorName, purchaseDate, channel, expenseCategory, l
   // it isn't in the catalogue, which has no material row to move. That is a
   // legitimate thing to buy, so it isn't rejected; it comes back here as
   // something to finish, and catalogPurchaseItem below is how it's finished.
+  // A service — labour, a subscription — has no stock to move, so it is
+  // not something left unfinished and is left off this list.
   const inventorySkipped = [
     ...purchases
-      .filter((row) => !row.material_id)
+      .filter((row) => !row.material_id && row.item_type !== 'service')
       .map((row) => ({
         purchase_id: row.purchase_id,
         item_name: row.item_name,
@@ -321,7 +480,8 @@ function recordPurchases({ vendorName, purchaseDate, channel, expenseCategory, l
     })),
   ];
 
-  return { purchases, inventoryUpdated, inventorySkipped };
+  const csv = mirrorPurchasingCsv();
+  return { purchases, inventoryUpdated, inventorySkipped, csv };
 }
 
 // Gives an ad hoc purchase line the catalogue row it never had, and then
@@ -397,6 +557,7 @@ function catalogPurchaseItem({ purchaseId, category, reorderLevel, standardCostI
     ],
     purchase.purchase_date || new Date().toISOString().slice(0, 10),
   );
+  mirrorPurchasingCsv();
 
   return {
     material,
@@ -494,6 +655,7 @@ function linkPurchaseToMaterial({ purchaseId, materialId }) {
     ],
     purchase.purchase_date || new Date().toISOString().slice(0, 10),
   );
+  mirrorPurchasingCsv();
 
   return {
     material: getRawMaterials().find((m) => m.material_id === material.material_id),
@@ -513,7 +675,7 @@ function linkPurchaseToMaterial({ purchaseId, materialId }) {
 function linkPurchasesToOdoo({ purchaseIds, poId, lineIds }) {
   if (!Array.isArray(purchaseIds) || !purchaseIds.length || !poId) return { linked: [] };
 
-  return transaction(() => {
+  const result = transaction(() => {
     const linked = [];
     purchaseIds.forEach((purchaseId, idx) => {
       // required: false — a purchase id that no longer resolves is a stale
@@ -529,6 +691,8 @@ function linkPurchasesToOdoo({ purchaseIds, poId, lineIds }) {
     });
     return { linked };
   });
+  mirrorPurchasingCsv();
+  return result;
 }
 
 // Removes a purchase row entirely and reverses its effect on stock (the
@@ -578,7 +742,8 @@ function deletePurchase(purchaseId) {
     inventoryReversal = applied[0] || null;
   }
 
-  return { deleted, inventoryReversal };
+  const csv = mirrorPurchasingCsv();
+  return { deleted, inventoryReversal, csv };
 }
 
 // Records which cook a set of purchase lines was bought for. Called at Start
@@ -646,6 +811,7 @@ function tagPurchasesToSession({ sessionId, purchaseIds, clientId, clientName })
       }
     });
   });
+  if (tagged.length || untagged.length) mirrorPurchasingCsv();
 
   return { tagged, untagged, skipped };
 }
@@ -668,6 +834,9 @@ export {
   getLowStock,
   getPurchases,
   recordPurchases,
+  EXPENSE_KINDS,
+  recordExpense,
+  mirrorPurchasingCsv,
   catalogPurchaseItem,
   linkPurchaseToMaterial,
   linkPurchasesToOdoo,

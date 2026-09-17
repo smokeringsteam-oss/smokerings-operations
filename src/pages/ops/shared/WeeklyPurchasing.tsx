@@ -8,6 +8,7 @@ import {
   reconcileDraftLines,
   restorePurchaseDraft,
   writeStoredPurchaseDraft,
+  type LinePurpose,
 } from './purchaseDraft';
 
 // Weekly Purchasing — logs purchases from all three vendor types (meat
@@ -48,6 +49,8 @@ type PurchaseRecord = {
   // and `channel` is which side of the business the buy was made for.
   vendor_name: string;
   channel: string;
+  // 'Order' or 'Practice' — blank on rows logged before the column existed.
+  purpose?: string;
   // Cost attribution, both optional. `client_name` is which B2B account the
   // spend was for (set here, per line); `smoking_session_id` is which cook it
   // was bought for (set later, at Start Smoking — see server/ops/shared/smoking.js
@@ -57,6 +60,10 @@ type PurchaseRecord = {
   smoking_session_id?: string;
   odoo_po_id?: string;
   odoo_po_line_id?: string;
+  // 'material', 'service' (labour, subscriptions — nothing to stock) or blank
+  // for an ad hoc line; and what the money was for.
+  item_type?: string;
+  expense_category?: string;
 };
 
 // One catalogue item the server thinks an ad hoc purchase line probably was,
@@ -96,6 +103,8 @@ type CartLine = {
   // optional: an untagged line is general overhead, which is a real answer.
   clientId: string;
   clientName: string;
+  // Order or Practice, per line for the same reason as the client tag.
+  purpose: LinePurpose;
   // Set only on lines a bill scan produced (see handleScanBill). `billText`
   // is the vendor's own wording for the item, kept beside the catalog name so
   // the review can be done against the paper without translating; `matched`
@@ -105,6 +114,9 @@ type CartLine = {
   // to mark the lines worth a second look — they are display only and never
   // sent to the server.
   billText?: string;
+  // What the bill priced by ("kg", "pc"), so the cart can say "₹560 / kg"
+  // instead of leaving the rate unitless. Display only, like the rest.
+  unit?: string;
   matched?: boolean;
   derivedPrice?: boolean;
   derivedQuantity?: boolean;
@@ -176,30 +188,66 @@ const SUPPLIES_CATEGORY_RULES: Record<string, { categories: string[]; nameFilter
   'Packaging & Supplies': { categories: ['Packaging & Supplies'] },
 };
 
-type InventoryAdjustment = {
-  adjustment_id: string;
-  adjustment_date: string;
-  material_id: string;
-  item_name: string;
-  quantity: string;
-  reason: string;
-};
+// Labour, logistics and miscellaneous spend are purchase lines too — a service
+// under a vendor and category of the same name (see recordExpense in
+// server/ops/shared/purchasing.js). The category is what tells them apart
+// from a buy.
+// Investment is kept out of spend on Spending vs Sales and counted only in its
+// Total investment tile (see server/finance/weeklyLedger.js).
+const EXPENSE_KINDS = ['Labour', 'Logistics', 'Investment', 'Miscellaneous'] as const;
+type ExpenseKind = (typeof EXPENSE_KINDS)[number];
+const EXPENSE_VENDOR_TYPE = 'Expense';const expenseKindOf = (p: PurchaseRecord): ExpenseKind | null =>
+  (EXPENSE_KINDS as readonly string[]).includes(p.expense_category ?? '') ? (p.expense_category as ExpenseKind) : null;
 
 const inrFormat = (n: number) => `₹${n.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
 
 const formatDateInput = (d: Date) =>
   `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 
-const getThisWeekRange = () => {
-  const today = new Date();
-  const daysSinceMonday = (today.getDay() + 6) % 7;
-  const monday = new Date(today);
-  monday.setDate(today.getDate() - daysSinceMonday);
+// The Monday-to-Sunday week a date falls in — the same week boundary the
+// spend reports use (see server/finance/weeklyLedger.js for why Monday).
+const weekRangeOf = (date: Date) => {
+  const daysSinceMonday = (date.getDay() + 6) % 7;
+  const monday = new Date(date);
+  monday.setDate(date.getDate() - daysSinceMonday);
   const sunday = new Date(monday);
   sunday.setDate(monday.getDate() + 6);
   return { from: formatDateInput(monday), to: formatDateInput(sunday) };
 };
+
+const parseDateInput = (iso: string) => {
+  const [y, m, d] = iso.split('-').map(Number);
+  return new Date(y, m - 1, d);
+};
+
+const getThisWeekRange = () => weekRangeOf(new Date());
 const DEFAULT_RANGE = getThisWeekRange();
+
+// Every purchase is filed in the current Monday–Sunday week — the one this
+// screen opens on — whatever date a restored draft or a scanned bill carries.
+// A date inside this week is kept; anything else becomes today. A bill dated
+// last Sunday and logged on Monday used to land in last week, out of sight of
+// the table below, and got logged again (the Swiggy bill, three times).
+const inThisWeek = (iso: string | undefined) => {
+  const week = getThisWeekRange();
+  return Boolean(iso) && (iso as string) >= week.from && (iso as string) <= week.to;
+};
+const thisWeekDate = (iso: string | undefined) => (inThisWeek(iso) ? (iso as string) : formatDateInput(new Date()));
+
+// "6 Sep" — one date, spelled the way the week labels below are.
+const dayLabel = (iso: string) => {
+  const [y, m, d] = iso.split('-').map(Number);
+  return new Date(y, m - 1, d).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
+};
+
+// "7–13 Sep" / "29 Sep – 5 Oct" — the week an expense is filed against.
+const weekLabel = (start: string, end: string) => {
+  const fmt = (iso: string, withMonth: boolean) => {
+    const [y, m, d] = iso.split('-').map(Number);
+    return new Date(y, m - 1, d).toLocaleDateString('en-IN', withMonth ? { day: 'numeric', month: 'short' } : { day: 'numeric' });
+  };
+  return start.slice(5, 7) === end.slice(5, 7) ? `${fmt(start, false)}–${fmt(end, true)}` : `${fmt(start, true)} – ${fmt(end, true)}`;
+};
 
 async function readJson<T>(resp: Response): Promise<T> {
   try {
@@ -228,7 +276,7 @@ const WeeklyPurchasing: React.FC<{ channel?: 'B2C' | 'B2B' }> = ({ channel = 'B2
   const [restored] = useState(() => restorePurchaseDraft(readStoredPurchaseDraft(channel)));
 
   const [vendorName, setVendorName] = useState(restored.vendorName);
-  const [purchaseDate, setPurchaseDate] = useState(restored.purchaseDate || formatDateInput(new Date()));
+  const [purchaseDate, setPurchaseDate] = useState(thisWeekDate(restored.purchaseDate));
   const [cart, setCart] = useState<CartLine[]>(restored.lines);
   // What the restore picked up, said out loud: a cart that reappears on its
   // own is a cart someone can log twice, so the buyer is told how many lines
@@ -240,6 +288,8 @@ const WeeklyPurchasing: React.FC<{ channel?: 'B2C' | 'B2B' }> = ({ channel = 'B2
   // book to attribute spend to.
   const [clients, setClients] = useState<B2BClient[]>([]);
   const [lineClientId, setLineClientId] = useState(restored.entry.lineClientId);
+  // Sticky like the client pick: every line added (or scanned) takes it.
+  const [linePurpose, setLinePurpose] = useState<LinePurpose>(restored.entry.linePurpose);
 
   const [materialChoice, setMaterialChoice] = useState(restored.entry.materialChoice);
   const [customName, setCustomName] = useState(restored.entry.customName);
@@ -259,8 +309,24 @@ const WeeklyPurchasing: React.FC<{ channel?: 'B2C' | 'B2B' }> = ({ channel = 'B2
   const [isScanning, setIsScanning] = useState(false);
   const [scanError, setScanError] = useState('');
   const [scanReview, setScanReview] = useState<
-    { added: number; vendorText: string; vendorMatched: boolean; dateText: string; dateUsed: boolean; notes: string; skipped: ScannedBill['skipped'] } | null
+    {
+      added: number;
+      vendorText: string;
+      vendorMatched: boolean;
+      dateText: string;
+      dateUsed: boolean;
+      notes: string;
+      skipped: ScannedBill['skipped'];
+      billDate?: string;
+      billDateChoice?: 'bill' | 'today' | null;
+    } | null
   >(restored.scanReview);
+
+  // Where the last logged cart landed, when that was not the week on screen.
+  // A flag rather than a jump: the table is meant to be this week's, and a
+  // screen that moves itself is a screen you have to re-read. Cleared on the
+  // next log, and by the button that goes and looks.
+  const [landedElsewhere, setLandedElsewhere] = useState<{ from: string; to: string; lines: number } | null>(null);
 
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitStatus, setSubmitStatus] = useState('');
@@ -272,6 +338,22 @@ const WeeklyPurchasing: React.FC<{ channel?: 'B2C' | 'B2B' }> = ({ channel = 'B2
   const [purchases, setPurchases] = useState<PurchaseRecord[]>([]);
   const [isLoadingPurchases, setIsLoadingPurchases] = useState(false);
   const [purchasesError, setPurchasesError] = useState('');
+
+  const [expensesError, setExpensesError] = useState('');
+  // One entry card for all three kinds of spend. Switching away from Purchase
+  // only hides the cart — it isn't cleared, so a half-built bill survives a
+  // quick labour entry in between.
+  const [entryMode, setEntryMode] = useState<'Purchase' | ExpenseKind>('Purchase');
+  const expenseKind: ExpenseKind = entryMode === 'Purchase' ? 'Labour' : entryMode;
+  const [expenseDate, setExpenseDate] = useState(formatDateInput(new Date()));
+  const [expenseDescription, setExpenseDescription] = useState('');
+  const [expenseAmount, setExpenseAmount] = useState('');
+  // Investment only: it is logged as item × quantity × unit price, not as one amount.
+  const [expenseQuantity, setExpenseQuantity] = useState('');
+  const [expenseUnitPrice, setExpenseUnitPrice] = useState('');
+  const isInvestment = expenseKind === 'Investment';
+  const [isAddingExpense, setIsAddingExpense] = useState(false);
+  const [expenseStatus, setExpenseStatus] = useState('');
 
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [deleteError, setDeleteError] = useState('');
@@ -302,15 +384,6 @@ const WeeklyPurchasing: React.FC<{ channel?: 'B2C' | 'B2B' }> = ({ channel = 'B2
   // having read it.
   const [matchChoice, setMatchChoice] = useState('');
   const [isLinking, setIsLinking] = useState(false);
-
-  const [showAddInventory, setShowAddInventory] = useState(false);
-  const [invMaterialChoice, setInvMaterialChoice] = useState('');
-  const [invQuantity, setInvQuantity] = useState('');
-  const [invReason, setInvReason] = useState('');
-  const [invDate, setInvDate] = useState(formatDateInput(new Date()));
-  const [isAddingInventory, setIsAddingInventory] = useState(false);
-  const [addInventoryStatus, setAddInventoryStatus] = useState('');
-  const [addInventoryError, setAddInventoryError] = useState('');
 
   const [showAddVendor, setShowAddVendor] = useState(false);
   const [newVendorName, setNewVendorName] = useState('');
@@ -378,7 +451,7 @@ const WeeklyPurchasing: React.FC<{ channel?: 'B2C' | 'B2B' }> = ({ channel = 'B2
       purchaseDate,
       lines: cart,
       scanReview,
-      entry: { materialChoice, customName, quantity, unitPrice, weightPerPiece, boughtByPiece, lineClientId },
+      entry: { materialChoice, customName, quantity, unitPrice, weightPerPiece, boughtByPiece, lineClientId, linePurpose },
     };
     // An empty cart with no vendor and nothing half-typed is a screen someone
     // opened, not a draft. Clearing rather than writing one keeps a logged
@@ -398,6 +471,7 @@ const WeeklyPurchasing: React.FC<{ channel?: 'B2C' | 'B2B' }> = ({ channel = 'B2
     weightPerPiece,
     boughtByPiece,
     lineClientId,
+    linePurpose,
   ]);
 
   // A restored line can point at a material that has since been deleted, and
@@ -446,6 +520,15 @@ const WeeklyPurchasing: React.FC<{ channel?: 'B2C' | 'B2B' }> = ({ channel = 'B2
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rangeFrom, rangeTo, channel]);
 
+  // A new expense goes against the week being looked at: someone who has
+  // stepped the range back to last week to fill in last week's labour should
+  // not have to set the date a second time. Today, when today is in range.
+  useEffect(() => {
+    if (!rangeFrom) return;
+    const today = formatDateInput(new Date());
+    setExpenseDate(today >= rangeFrom && (!rangeTo || today <= rangeTo) ? today : rangeFrom);
+  }, [rangeFrom, rangeTo]);
+
   const selectedVendor = vendors.find((v) => v.vendor_name === vendorName);
   const isMeatVendor = selectedVendor?.vendor_type === 'Meat Vendor';
   const categoryRule = selectedVendor ? SUPPLIES_CATEGORY_RULES[selectedVendor.supplies_category] : undefined;
@@ -472,9 +555,7 @@ const WeeklyPurchasing: React.FC<{ channel?: 'B2C' | 'B2B' }> = ({ channel = 'B2
     return Array.from(groups.entries()).sort(([a], [b]) => a.localeCompare(b));
   }, [visibleMaterials]);
 
-  // Full catalog grouped by category, independent of any vendor selection —
-  // used by the manual "Add inventory" form below, which isn't tied to a
-  // vendor the way logging a purchase is.
+  // Full catalog grouped by category, independent of any vendor selection.
   const allMaterialsByCategory = useMemo(() => {
     const groups = new Map<string, RawMaterial[]>();
     materials.forEach((m) => {
@@ -546,6 +627,7 @@ const WeeklyPurchasing: React.FC<{ channel?: 'B2C' | 'B2B' }> = ({ channel = 'B2
         weightPerUnitKg: perPiece,
         clientId: channel === 'B2B' ? lineClientId : '',
         clientName: channel === 'B2B' ? clients.find((c) => c.id === lineClientId)?.name || '' : '',
+        purpose: linePurpose,
       },
     ]);
 
@@ -621,7 +703,9 @@ const WeeklyPurchasing: React.FC<{ channel?: 'B2C' | 'B2B' }> = ({ channel = 'B2
           weightPerUnitKg: 0,
           clientId: channel === 'B2B' ? lineClientId : '',
           clientName: channel === 'B2B' ? clients.find((c) => c.id === lineClientId)?.name || '' : '',
+          purpose: linePurpose,
           billText: line.billText,
+          unit: line.unit,
           matched: line.matched,
           derivedPrice: line.derivedPrice,
           derivedQuantity: line.derivedQuantity,
@@ -633,10 +717,15 @@ const WeeklyPurchasing: React.FC<{ channel?: 'B2C' | 'B2B' }> = ({ channel = 'B2
       // typed against another vendor must not silently move that spend.
       const vendorMatched = Boolean(data.vendorName);
       if (vendorMatched && !vendorName) setVendorName(data.vendorName);
+      // The bill's own date is used only when it falls in this week; a bill
+      // from another week is filed under today, and the review says so.
       const dateUsed = Boolean(data.purchaseDate);
-      if (dateUsed) setPurchaseDate(data.purchaseDate);
+      const billElsewhere = dateUsed && !inThisWeek(data.purchaseDate);
+      if (dateUsed) setPurchaseDate(thisWeekDate(data.purchaseDate));
 
       setScanReview({
+        billDate: billElsewhere ? data.purchaseDate : undefined,
+        billDateChoice: billElsewhere ? 'today' : null,
         added: scanned.length,
         vendorText: data.vendorText || '',
         vendorMatched,
@@ -689,7 +778,7 @@ const WeeklyPurchasing: React.FC<{ channel?: 'B2C' | 'B2B' }> = ({ channel = 'B2
           vendorName,
           purchaseDate,
           channel,
-          lines: cart.map(({ materialId, itemName, quantity: qty, unitPrice: price, weightPerUnitKg, clientId }) => ({
+          lines: cart.map(({ materialId, itemName, quantity: qty, unitPrice: price, weightPerUnitKg, clientId, purpose }) => ({
             materialId,
             itemName,
             quantity: qty,
@@ -701,6 +790,7 @@ const WeeklyPurchasing: React.FC<{ channel?: 'B2C' | 'B2B' }> = ({ channel = 'B2
             // Id only — the server resolves the name off the B2B client book
             // so a renamed account can't leave two spellings in the log.
             clientId,
+            purpose,
           })),
         }),
       });
@@ -740,6 +830,20 @@ const WeeklyPurchasing: React.FC<{ channel?: 'B2C' | 'B2B' }> = ({ channel = 'B2
       // The buy is logged either way — this says so, and then says which of
       // its lines only made it half way, rather than letting a stock count
       // that quietly didn't move read as a clean success.
+      // A bill is dated by the bill, and the table below is showing one week
+      // — usually this one. Log a Sunday bill on the Monday after it and the
+      // lines land outside the range that is on screen, so the table refreshes
+      // to exactly what it showed before and the buy reads as having silently
+      // failed. That is what it reads as, and it is why the same bill has been
+      // logged three times over.
+      //
+      // So the range follows the purchase: the week the lines were actually
+      // written into is the week worth looking at right after writing them,
+      // and the status message says it moved rather than leaving someone to
+      // notice the dates above changed.
+      const landedOutsideView = purchaseDate < rangeFrom || purchaseDate > rangeTo;
+      const landedWeek = weekRangeOf(parseDateInput(purchaseDate));
+
       const skipped = logData.inventorySkipped || [];
       const skippedNote = skipped.length
         ? ` ${skipped.length} line${skipped.length === 1 ? '' : 's'} (${skipped
@@ -751,6 +855,7 @@ const WeeklyPurchasing: React.FC<{ channel?: 'B2C' | 'B2B' }> = ({ channel = 'B2
       setSubmitStatus(
         `Logged ${cart.length} line item${cart.length === 1 ? '' : 's'} from ${vendorName} to the purchase log.${skippedNote}${poNote}`,
       );
+      setLandedElsewhere(landedOutsideView ? { ...landedWeek, lines: cart.length } : null);
       setCart([]);
       // The scan's own review notes go with the cart they were about.
       setScanReview(null);
@@ -948,7 +1053,12 @@ const WeeklyPurchasing: React.FC<{ channel?: 'B2C' | 'B2B' }> = ({ channel = 'B2
   // material row to move. Recomputed from the log rather than remembered from
   // the last submit, so it still shows after a reload and still covers lines
   // logged in an earlier session.
-  const uncatalogued = useMemo(() => purchases.filter((p) => !p.material_id), [purchases]);
+  // A service line (labour, a subscription) has no stock to add, so it is
+  // never "not in stock".
+  const uncatalogued = useMemo(
+    () => purchases.filter((p) => !p.material_id && p.item_type !== 'service'),
+    [purchases],
+  );
 
   // Autocomplete suggestions drawn from existing vendors — vendor_type and
   // supplies_category both matter beyond cosmetics: vendor_type has to read
@@ -1021,64 +1131,105 @@ const WeeklyPurchasing: React.FC<{ channel?: 'B2C' | 'B2B' }> = ({ channel = 'B2
     }
   };
 
-  // Adds stock outside of a vendor purchase (opening stock, a count
-  // correction, a return) — logs to inventory_adjustments.csv and bumps
-  // quantity_on_hand the same way logging a purchase does, just without a
-  // vendor/price attached. See server/core/inventoryStore.js addInventoryAdjustment.
-  const handleAddInventory = async () => {
-    if (!invMaterialChoice || isAddingInventory) return;
-    setIsAddingInventory(true);
-    setAddInventoryError('');
-    setAddInventoryStatus('');
+  // One purchase line, written by the server to the purchase table and
+  // purchase_log.csv, then sent to Odoo as a draft PO. The Odoo half failing
+  // doesn't fail the save — the reason comes back as a note instead. Listed,
+  // deleted and totalled with every other purchase from here on.
+  const handleAddExpense = async () => {
+    if (isAddingExpense) return;
+    setIsAddingExpense(true);
+    setExpensesError('');
+    setExpenseStatus('');
     try {
-      const resp = await fetch('/api/purchasing/inventory/adjustments', {
+      const resp = await fetch('/api/purchasing/expenses', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          materialId: invMaterialChoice,
-          quantity: invQuantity,
-          reason: invReason.trim(),
-          date: invDate,
+          kind: expenseKind,
+          purchaseDate: expenseDate,
+          channel,
+          description: expenseDescription.trim(),
+          ...(isInvestment
+            ? { quantity: expenseQuantity, unitPrice: expenseUnitPrice }
+            : { amount: expenseAmount }),
         }),
       });
       const data = await readJson<{
-        adjustment?: InventoryAdjustment;
-        inventoryUpdated?: { item_name: string; newQuantity: number } | null;
-        odoo?: { applied?: boolean; newQuantity?: number; error?: string } | null;
+        purchases?: PurchaseRecord[];
+        csv?: { mirrored: boolean; reason?: string };
+        odoo?: { name?: string; url?: string | null; error?: string };
         error?: string;
       }>(resp);
-      if (!resp.ok) throw new Error(data.error || 'Failed to add inventory.');
-
-      const updated = data.inventoryUpdated;
-      let odooNote = '';
-      if (data.odoo?.error) odooNote = ` Odoo: failed to sync on-hand stock (${data.odoo.error}).`;
-      else if (data.odoo?.applied !== false) odooNote = ' Also synced to Odoo on-hand stock.';
-
-      setAddInventoryStatus(
-        (updated
-          ? `Added ${data.adjustment?.quantity} of ${data.adjustment?.item_name} — now ${updated.newQuantity} on hand.`
-          : `Logged the adjustment, but couldn't find that item in materials.csv to update on-hand quantity.`) + odooNote,
+      if (!resp.ok) throw new Error(data.error || 'Failed to save the expense.');
+      const saved = data.purchases?.[0];
+      const odooNote = data.odoo?.error
+        ? ` Odoo PO failed: ${data.odoo.error}`
+        : data.odoo?.name
+          ? ` Draft PO ${data.odoo.name} created in Odoo.`
+          : '';
+      const csvNote = data.csv && !data.csv.mirrored ? ` ${data.csv.reason || 'The CSV mirror was skipped.'}` : '';
+      setExpenseStatus(
+        (saved
+          ? `Saved ${expenseKind.toLowerCase()} ${inrFormat(Number(saved.total_cost) || 0)} on ${dayLabel(saved.purchase_date)}.`
+          : 'Saved.') +
+          csvNote +
+          odooNote,
       );
-      setInvMaterialChoice('');
-      setInvQuantity('');
-      setInvReason('');
-      await loadCatalog();
+      setExpenseDescription('');
+      setExpenseAmount('');
+      setExpenseQuantity('');
+      setExpenseUnitPrice('');
+      await loadPurchases();
     } catch (err) {
-      setAddInventoryError(String((err as Error).message || err));
+      setExpensesError(String((err as Error).message || err));
     } finally {
-      setIsAddingInventory(false);
+      setIsAddingExpense(false);
     }
   };
 
   const purchasesTotal = useMemo(
-    () => purchases.reduce((sum, p) => sum + (Number(p.total_cost) || 0), 0),
+    () => purchases.filter((p) => !expenseKindOf(p)).reduce((sum, p) => sum + (Number(p.total_cost) || 0), 0),
     [purchases],
   );
+  const labourTotal = useMemo(
+    () => purchases.filter((p) => expenseKindOf(p) === 'Labour').reduce((sum, p) => sum + (Number(p.total_cost) || 0), 0),
+    [purchases],
+  );
+  const logisticsTotal = useMemo(
+    () =>
+      purchases.filter((p) => expenseKindOf(p) === 'Logistics').reduce((sum, p) => sum + (Number(p.total_cost) || 0), 0),
+    [purchases],
+  );
+  const investmentTotal = useMemo(
+    () =>
+      purchases.filter((p) => expenseKindOf(p) === 'Investment').reduce((sum, p) => sum + (Number(p.total_cost) || 0), 0),
+    [purchases],
+  );
+  const miscTotal = useMemo(
+    () =>
+      purchases
+        .filter((p) => expenseKindOf(p) === 'Miscellaneous')
+        .reduce((sum, p) => sum + (Number(p.total_cost) || 0), 0),
+    [purchases],
+  );
+  // The slice of Purchases bought for practice cooks, shown under it.
+  const practiceTotal = useMemo(
+    () =>
+      purchases
+        .filter((p) => !expenseKindOf(p) && p.purpose === 'Practice')
+        .reduce((sum, p) => sum + (Number(p.total_cost) || 0), 0),
+    [purchases],
+  );
+  const expenseTotal = purchasesTotal + labourTotal + logisticsTotal + investmentTotal + miscTotal;
+  // Real suppliers only — labour, logistics and misc already have their own lines in the
+  // totals above.
   const purchasesByVendor = useMemo(() => {
     const totals = new Map<string, number>();
-    purchases.forEach((p) => {
-      totals.set(p.vendor_name, (totals.get(p.vendor_name) || 0) + (Number(p.total_cost) || 0));
-    });
+    purchases
+      .filter((p) => !expenseKindOf(p))
+      .forEach((p) => {
+        totals.set(p.vendor_name, (totals.get(p.vendor_name) || 0) + (Number(p.total_cost) || 0));
+      });
     return Array.from(totals.entries()).sort(([, a], [, b]) => b - a);
   }, [purchases]);
 
@@ -1105,7 +1256,8 @@ const WeeklyPurchasing: React.FC<{ channel?: 'B2C' | 'B2B' }> = ({ channel = 'B2
         <h1>Weekly Purchasing</h1>
         <p>
           Log what's bought from each vendor — meat shops, Bread Time Stories, Swiggy — into the shared
-          inventory catalog, and send the same line items to Odoo as a draft Purchase Order.
+          inventory catalog, and send the same line items to Odoo as a draft Purchase Order. The week's labour,
+          logistics and other extras are logged from the same card — switch the type at the top.
         </p>
       </div>
 
@@ -1127,14 +1279,138 @@ const WeeklyPurchasing: React.FC<{ channel?: 'B2C' | 'B2B' }> = ({ channel = 'B2
 
       <div className="purch-grid">
         <div className="wizard-card">
-          <h2>Log a purchase</h2>
+          <h2>{entryMode === 'Purchase' ? 'Log a purchase' : `Log ${entryMode.toLowerCase()}`}</h2>
 
+          <div className="purch-entry-modes" role="tablist" aria-label="Type of spend">
+            {(['Purchase', ...EXPENSE_KINDS] as const).map((mode) => (
+              <button
+                key={mode}
+                type="button"
+                role="tab"
+                aria-selected={entryMode === mode}
+                className={entryMode === mode ? 'is-active' : ''}
+                onClick={() => setEntryMode(mode)}
+              >
+                {mode === 'Miscellaneous' ? 'Misc' : mode}
+              </button>
+            ))}
+          </div>
+
+          {entryMode !== 'Purchase' && (
+            <>
+              <p className="inv-section-hint">
+                Spend that comes off no vendor bill — wages, delivery runs, and extras like ice. Saved as a purchase
+                line under &ldquo;{expenseKind}&rdquo;, so it lists, totals and deletes with everything else.
+              </p>
+              {cart.length > 0 && (
+                <p className="inv-note">
+                  {cart.length} line{cart.length === 1 ? '' : 's'} still in the purchase cart — switch back to Purchase
+                  to log {cart.length === 1 ? 'it' : 'them'}.
+                </p>
+              )}
+              <div className="purch-expense-form">
+                <label>
+                  Date
+                  <input type="date" value={expenseDate} onChange={(e) => setExpenseDate(e.target.value)} />
+                </label>
+                {isInvestment ? (
+                  <>
+                    <label>
+                      Item
+                      <input
+                        value={expenseDescription}
+                        onChange={(e) => setExpenseDescription(e.target.value)}
+                        maxLength={200}
+                        placeholder="e.g. Chest freezer, offset smoker"
+                      />
+                    </label>
+                    <div className="purch-form-row">
+                      <label>
+                        Quantity
+                        <input
+                          type="number"
+                          min="0"
+                          step="any"
+                          value={expenseQuantity}
+                          onChange={(e) => setExpenseQuantity(e.target.value)}
+                        />
+                      </label>
+                      <label>
+                        Unit price (₹)
+                        <input
+                          type="number"
+                          min="0"
+                          step="any"
+                          value={expenseUnitPrice}
+                          onChange={(e) => setExpenseUnitPrice(e.target.value)}
+                        />
+                      </label>
+                    </div>
+                    {Number(expenseQuantity) > 0 && Number(expenseUnitPrice) > 0 && (
+                      <p className="inv-note">
+                        Total {inrFormat(Math.round(Number(expenseQuantity) * Number(expenseUnitPrice) * 100) / 100)} —
+                        counted in Total investment on Spending vs Sales, not in spending.
+                      </p>
+                    )}
+                  </>
+                ) : (
+                <div className="purch-form-row">
+                  <label>
+                    {expenseKind === 'Miscellaneous' ? 'What was it for' : 'Who / what (optional)'}
+                    <input
+                      value={expenseDescription}
+                      onChange={(e) => setExpenseDescription(e.target.value)}
+                      maxLength={200}
+                      placeholder={
+                        expenseKind === 'Labour'
+                          ? 'e.g. Kitchen helper, Fri–Sun'
+                          : expenseKind === 'Logistics'
+                            ? 'e.g. Porter delivery, courier'
+                            : 'e.g. Ice, auto to the butcher'
+                      }
+                    />
+                  </label>
+                  <label>
+                    Amount (₹)
+                    <input
+                      type="number"
+                      min="0"
+                      step="any"
+                      value={expenseAmount}
+                      onChange={(e) => setExpenseAmount(e.target.value)}
+                    />
+                  </label>
+                </div>
+                )}
+                <button
+                  type="button"
+                  className="primary-button"
+                  onClick={handleAddExpense}
+                  disabled={
+                    isAddingExpense ||
+                    !expenseDate ||
+                    (isInvestment
+                      ? !expenseDescription.trim() || !(Number(expenseQuantity) > 0) || !(Number(expenseUnitPrice) > 0)
+                      : !(Number(expenseAmount) > 0)) ||
+                    (expenseKind === 'Miscellaneous' && !expenseDescription.trim())
+                  }
+                >
+                  {isAddingExpense ? 'Saving…' : 'Save'}
+                </button>
+              </div>
+              {expensesError && <p className="chat-error">{expensesError}</p>}
+              {expenseStatus && !expensesError && <p className="status-message">{expenseStatus}</p>}
+            </>
+          )}
+
+          {entryMode === 'Purchase' && (
+          <>
           <div className="purch-form-row">
             <label>
               Vendor
               <select value={vendorName} onChange={(e) => setVendorName(e.target.value)}>
                 <option value="">Select a vendor…</option>
-                {vendors.map((v) => (
+                {vendors.filter((v) => v.vendor_type !== EXPENSE_VENDOR_TYPE).map((v) => (
                   <option key={v.vendor_id} value={v.vendor_name}>
                     {v.vendor_name} ({v.vendor_type})
                   </option>
@@ -1269,7 +1545,7 @@ const WeeklyPurchasing: React.FC<{ channel?: 'B2C' | 'B2B' }> = ({ channel = 'B2
               <div className="purch-scan-review">
                 <strong>
                   Read {scanReview.added} line{scanReview.added === 1 ? '' : 's'} off the bill — check them against the
-                  paper, then hit Log purchase.
+                  paper, then hit Save.
                 </strong>
                 <ul>
                   {scanReview.vendorText && !scanReview.vendorMatched && (
@@ -1283,6 +1559,13 @@ const WeeklyPurchasing: React.FC<{ channel?: 'B2C' | 'B2B' }> = ({ channel = 'B2
                       Couldn't read the bill date (<em>{scanReview.dateText}</em>) — the date above is unchanged.
                     </li>
                   )}
+                  {/* Said, not asked: the buy always goes into this week. */}
+                  {scanReview.billDate && (
+                    <li>
+                      Bill is dated {dayLabel(scanReview.billDate)} — filed under {dayLabel(purchaseDate)} so it lands in
+                      this week.
+                    </li>
+                  )}
                   {scanReview.notes && <li>{scanReview.notes}</li>}
                   {scanReview.skipped.map((s, idx) => (
                     <li key={`${s.itemName}-${idx}`}>
@@ -1294,7 +1577,27 @@ const WeeklyPurchasing: React.FC<{ channel?: 'B2C' | 'B2B' }> = ({ channel = 'B2
             )}
           </div>
 
-          <div className="purch-add-line">
+          <div className={`purch-add-line${linePurpose === 'Practice' ? ' is-practice' : ''}`}>
+            {/* First, because it frames the rest of the line — and it stays
+                put between lines, so a whole practice run is one tap. */}
+            <div className="purch-purpose">
+              <span className="purch-purpose-label">This buy is for</span>
+              <div className="purch-purpose-modes" role="radiogroup" aria-label="This buy is for">
+                {(['Order', 'Practice'] as const).map((p) => (
+                  <button
+                    key={p}
+                    type="button"
+                    role="radio"
+                    aria-checked={linePurpose === p}
+                    className={`${linePurpose === p ? 'is-active' : ''}${p === 'Practice' ? ' is-practice' : ''}`}
+                    onClick={() => setLinePurpose(p)}
+                  >
+                    {p === 'Order' ? `${channel} orders` : 'Practice cook'}
+                  </button>
+                ))}
+              </div>
+            </div>
+
             <label>
               Item
               <select
@@ -1408,18 +1711,22 @@ const WeeklyPurchasing: React.FC<{ channel?: 'B2C' | 'B2B' }> = ({ channel = 'B2
 
             <button
               type="button"
-              className="secondary-button small"
+              className="secondary-button purch-add-line-btn"
               onClick={handleAddLine}
               disabled={!quantity || (isCustom ? !customName.trim() : !materialChoice)}
             >
-              + Add line
+              {linePurpose === 'Practice' ? '+ Add practice line' : '+ Add line'}
             </button>
             {addLineError && <p className="chat-error">{addLineError}</p>}
           </div>
 
           {cart.length > 0 && (
             <div className="prep-table-wrap purch-cart-wrap">
-              <table className="prep-table">
+              {/* On a phone the rows become stacked cards (see
+                  .purch-cart-table in App.css) — as a five-column table the
+                  number inputs were squeezed until "560" showed as "5". The
+                  data-label on each cell is the heading the card shows. */}
+              <table className="prep-table purch-cart-table">
                 <thead>
                   <tr>
                     <th className="prep-item-col">Item</th>
@@ -1443,6 +1750,16 @@ const WeeklyPurchasing: React.FC<{ channel?: 'B2C' | 'B2B' }> = ({ channel = 'B2
                           value={line.itemName}
                           onChange={(e) => handleUpdateLine(line.key, { itemName: e.target.value })}
                         />
+                        <button
+                          type="button"
+                          className={`purch-purpose-pill${line.purpose === 'Practice' ? ' is-practice' : ''}`}
+                          title="Tap to switch between order and practice"
+                          onClick={() =>
+                            handleUpdateLine(line.key, { purpose: line.purpose === 'Practice' ? 'Order' : 'Practice' })
+                          }
+                        >
+                          {line.purpose === 'Practice' ? 'Practice' : `${channel} order`}
+                        </button>
                         {line.billText && (
                           <small className="purch-cart-source">
                             Bill: {line.billText}
@@ -1450,8 +1767,8 @@ const WeeklyPurchasing: React.FC<{ channel?: 'B2C' | 'B2B' }> = ({ channel = 'B2
                           </small>
                         )}
                       </td>
-                      {isB2B && <td>{line.clientName || '—'}</td>}
-                      <td className="prep-total-cell">
+                      {isB2B && <td data-label="Client">{line.clientName || '—'}</td>}
+                      <td className="prep-total-cell" data-label={line.unit ? `Qty (${line.unit})` : 'Qty'}>
                         <input
                           type="number"
                           min="0"
@@ -1473,7 +1790,7 @@ const WeeklyPurchasing: React.FC<{ channel?: 'B2C' | 'B2B' }> = ({ channel = 'B2
                           </>
                         )}
                       </td>
-                      <td className="prep-total-cell">
+                      <td className="prep-total-cell" data-label={line.unit ? `Price / ${line.unit}` : 'Unit price'}>
                         <input
                           type="number"
                           min="0"
@@ -1483,8 +1800,11 @@ const WeeklyPurchasing: React.FC<{ channel?: 'B2C' | 'B2B' }> = ({ channel = 'B2
                           onChange={(e) => handleUpdateLine(line.key, { unitPrice: Number(e.target.value) || 0 })}
                         />
                         {line.derivedPrice && <small className="purch-cart-source">from line total</small>}
+                        {line.unit && !line.derivedPrice && <small className="purch-cart-source">per {line.unit}</small>}
                       </td>
-                      <td className="prep-total-cell">{inrFormat(line.quantity * line.unitPrice)}</td>
+                      <td className="prep-total-cell purch-cart-total" data-label="Total">
+                        {inrFormat(line.quantity * line.unitPrice)}
+                      </td>
                       <td className="purch-remove-cell">
                         <button type="button" className="purch-remove-btn" onClick={() => handleRemoveLine(line.key)}>
                           ×
@@ -1514,11 +1834,36 @@ const WeeklyPurchasing: React.FC<{ channel?: 'B2C' | 'B2B' }> = ({ channel = 'B2
               onClick={handleLogPurchase}
               disabled={!vendorName || !cart.length || isSubmitting}
             >
-              {isSubmitting ? 'Logging…' : 'Log purchase to CSV and Odoo'}
+              {isSubmitting ? 'Saving…' : 'Save'}
             </button>
           </div>
           {submitError && <p className="chat-error">{submitError}</p>}
           {submitStatus && !submitError && <p className="status-message">{submitStatus}</p>}
+          {/* The flag. The table below stays on this week whatever gets
+              logged — that is what it is for — so a buy dated into another
+              week says where it went and offers to take you there, rather
+              than moving the screen under you or, worse, saying nothing and
+              reading as a save that failed. */}
+          {landedElsewhere && !submitError && (
+            <p className="status-message purch-landed">
+              <span>
+                Those {landedElsewhere.lines} line{landedElsewhere.lines === 1 ? '' : 's'} are dated{' '}
+                {dayLabel(purchaseDate)}, so they went into the week of{' '}
+                <strong>{weekLabel(landedElsewhere.from, landedElsewhere.to)}</strong> — not the week showing below.
+              </span>
+              <button
+                type="button"
+                className="secondary-button small"
+                onClick={() => {
+                  setRangeFrom(landedElsewhere.from);
+                  setRangeTo(landedElsewhere.to);
+                  setLandedElsewhere(null);
+                }}
+              >
+                Show that week
+              </button>
+            </p>
+          )}
           {poResult && !submitError && (
             <p className="status-message">
               Created draft PO {poResult.name} in Odoo.{' '}
@@ -1529,79 +1874,13 @@ const WeeklyPurchasing: React.FC<{ channel?: 'B2C' | 'B2B' }> = ({ channel = 'B2
               )}
             </p>
           )}
+          </>
+          )}
         </div>
 
         <div className="purch-side">
           <div className="wizard-card">
-            <h2>Add inventory</h2>
-            <p className="inv-section-hint">
-              Stock that didn't come through a vendor purchase — an opening count, a correction found while
-              counting, a return. Logged separately from purchases (no vendor/price needed) but updates on-hand
-              the same way.
-            </p>
-
-            <button
-              type="button"
-              className="secondary-button small purch-add-vendor-toggle"
-              onClick={() => setShowAddInventory((v) => !v)}
-            >
-              {showAddInventory ? '− Cancel' : '+ Add inventory'}
-            </button>
-
-            {showAddInventory && (
-              <div className="purch-add-line">
-                <label>
-                  Item
-                  <select value={invMaterialChoice} onChange={(e) => setInvMaterialChoice(e.target.value)}>
-                    <option value="">Select an item…</option>
-                    {allMaterialsByCategory.map(([category, items]) => (
-                      <optgroup key={category} label={category}>
-                        {items.map((m) => (
-                          <option key={m.material_id} value={m.material_id}>
-                            {m.item_name}
-                          </option>
-                        ))}
-                      </optgroup>
-                    ))}
-                  </select>
-                </label>
-
-                <div className="purch-form-row">
-                  <label>
-                    Quantity to add
-                    <input type="number" min="0" step="any" value={invQuantity} onChange={(e) => setInvQuantity(e.target.value)} />
-                  </label>
-                  <label>
-                    Date
-                    <input type="date" value={invDate} onChange={(e) => setInvDate(e.target.value)} />
-                  </label>
-                </div>
-
-                <label>
-                  Reason (optional)
-                  <input
-                    value={invReason}
-                    onChange={(e) => setInvReason(e.target.value)}
-                    placeholder="e.g. Opening stock count, returned unused, count correction"
-                  />
-                </label>
-
-                <button
-                  type="button"
-                  className="secondary-button small"
-                  onClick={handleAddInventory}
-                  disabled={!invMaterialChoice || !invQuantity || isAddingInventory}
-                >
-                  {isAddingInventory ? 'Adding…' : 'Add to inventory'}
-                </button>
-                {addInventoryError && <p className="chat-error">{addInventoryError}</p>}
-                {addInventoryStatus && !addInventoryError && <p className="status-message">{addInventoryStatus}</p>}
-              </div>
-            )}
-          </div>
-
-          <div className="wizard-card">
-            <h2>This week's {channel} purchases</h2>
+            <h2>This week's {channel} expenses</h2>
             <div className="prep-odoo-dates purch-range">
               <span>
                 From
@@ -1614,22 +1893,62 @@ const WeeklyPurchasing: React.FC<{ channel?: 'B2C' | 'B2B' }> = ({ channel = 'B2
             </div>
 
             {purchasesError && <p className="chat-error">{purchasesError}</p>}
+            {/* In the other modes the entry card shows this beside the form. */}
+            {entryMode === 'Purchase' && expensesError && <p className="chat-error">{expensesError}</p>}
             {isLoadingPurchases && <p className="status-message">Loading…</p>}
 
+            {/* The three kinds of spend, then the one figure they add up to —
+                what the week actually cost this side of the business. */}
+            <ul className="purch-vendor-totals">
+              <li>
+                <span>Purchases</span>
+                <span>{inrFormat(purchasesTotal)}</span>
+              </li>
+              {practiceTotal > 0 && (
+                <li className="purch-practice-total">
+                  <span>of which practice</span>
+                  <span>{inrFormat(practiceTotal)}</span>
+                </li>
+              )}
+              <li>
+                <span>Labour</span>
+                <span>{inrFormat(labourTotal)}</span>
+              </li>
+              <li>
+                <span>Logistics</span>
+                <span>{inrFormat(logisticsTotal)}</span>
+              </li>
+              <li>
+                <span>Investment</span>
+                <span>{inrFormat(investmentTotal)}</span>
+              </li>
+              <li>
+                <span>Miscellaneous</span>
+                <span>{inrFormat(miscTotal)}</span>
+              </li>
+            </ul>
+            <div className="prep-summary-card prep-summary-card-total purch-week-total">
+              <div className="prep-summary-label">Week total · {channel}</div>
+              <div className="prep-summary-value">{inrFormat(expenseTotal)}</div>
+            </div>
+
+            <h3 className="inv-section-title">All spend</h3>
             {!isLoadingPurchases && purchases.length === 0 && !purchasesError && (
-              <p className="inv-note">No purchases logged in this range yet.</p>
+              <p className="inv-note">Nothing logged in this range yet.</p>
             )}
 
             {purchases.length > 0 && (
               <>
-                <ul className="purch-vendor-totals">
-                  {purchasesByVendor.map(([supplier, total]) => (
-                    <li key={supplier}>
-                      <span>{supplier}</span>
-                      <span>{inrFormat(total)}</span>
-                    </li>
-                  ))}
-                </ul>
+                {purchasesByVendor.length > 0 && (
+                  <ul className="purch-vendor-totals">
+                    {purchasesByVendor.map(([supplier, total]) => (
+                      <li key={supplier}>
+                        <span>{supplier}</span>
+                        <span>{inrFormat(total)}</span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
                 {isB2B && purchasesByClient.length > 0 && (
                   <>
                     <h3 className="inv-section-title">Spend by client</h3>
@@ -1643,11 +1962,6 @@ const WeeklyPurchasing: React.FC<{ channel?: 'B2C' | 'B2B' }> = ({ channel = 'B2
                     </ul>
                   </>
                 )}
-
-                <div className="prep-summary-card prep-summary-card-total purch-week-total">
-                  <div className="prep-summary-label">Week total · {channel}</div>
-                  <div className="prep-summary-value">{inrFormat(purchasesTotal)}</div>
-                </div>
 
                 {deleteError && <p className="chat-error">{deleteError}</p>}
 
@@ -1683,7 +1997,13 @@ const WeeklyPurchasing: React.FC<{ channel?: 'B2C' | 'B2B' }> = ({ channel = 'B2
                         <tr>
                           <td className="prep-item-col">
                             {p.item_name}
-                            {!p.material_id && (
+                            {p.purpose === 'Practice' && (
+                              <>
+                                {' '}
+                                <span className="purch-purpose-pill is-practice">Practice</span>
+                              </>
+                            )}
+                            {!p.material_id && p.item_type !== 'service' && (
                               <>
                                 {' '}
                                 <span className="purch-uncat-pill" title="Logged as spend, but no stock was added">

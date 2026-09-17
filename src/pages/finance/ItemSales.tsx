@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { REPORT_START } from '../reportRange';
+import { defaultWeekendRange } from '../ops/shared/packing';
 
 // Sales by Item — how much of each thing went out of the door, and which of
 // them people are asking for more of than they were a month ago.
@@ -48,6 +49,7 @@ type Side = 'B2C' | 'B2B';
 // What the toolbar can be set to: one side, or both shown one after the other.
 type Shown = 'both' | Side;
 type Granularity = 'week' | 'month';
+type View = 'week' | 'simple' | 'full';
 type Trend = 'rising' | 'falling' | 'new' | 'gone' | 'steady' | 'quiet' | 'unrated';
 
 type Period = {
@@ -91,10 +93,21 @@ type Item = {
   trend: Trend;
 };
 
-type Movers = { rising: Item[]; falling: Item[]; risingCount: number; fallingCount: number };
+type Movers = {
+  rising: Item[];
+  falling: Item[];
+  risingCount: number;
+  fallingCount: number;
+};
 
 type Report = {
-  range: { requested: { from: string; to: string }; from: string; to: string; granularity: Granularity; periods: number };
+  range: {
+    requested: { from: string; to: string };
+    from: string;
+    to: string;
+    granularity: Granularity;
+    periods: number;
+  };
   sources: {
     odoo: {
       configured: boolean;
@@ -122,6 +135,19 @@ type Report = {
     unmatchedLines: number;
     outOfRange: number;
   };
+  // B2C only — the wholesale book cannot price a line below zero. `gross` is
+  // weekend revenue before any of it came off. Optional so a server that
+  // predates it still renders.
+  discounts?: {
+    total: number;
+    coupons: number;
+    couponLines: number;
+    onItems: number;
+    itemLines: number;
+    orders: number;
+    gross: number;
+    pct: number;
+  };
   periods: Period[];
   items: Item[];
   // Per side, never pooled — see the note at the top of this file.
@@ -131,8 +157,18 @@ type Report = {
     // `units` is what each side sold in that window. An earlier window of zero
     // is why a dish can come back 'unrated': there is nothing for it to be new
     // against, and badging the whole menu "new" would be noise.
-    recent: { from: string; to: string; periods: number; units?: Record<Side, number> };
-    previous: { from: string; to: string; periods: number; units?: Record<Side, number> };
+    recent: {
+      from: string;
+      to: string;
+      periods: number;
+      units?: Record<Side, number>;
+    };
+    previous: {
+      from: string;
+      to: string;
+      periods: number;
+      units?: Record<Side, number>;
+    };
     ignoredPeriod: string | null;
   } | null;
 };
@@ -160,7 +196,9 @@ const signedQty = (value: number) => `${value > 0 ? '+' : value < 0 ? '−' : ''
 // percentage change, which is a different fact from 0% and has to read
 // differently or the two sort together.
 const percent = (value: number | null) =>
-  value === null ? '—' : `${value > 0 ? '+' : value < 0 ? '−' : ''}${Math.abs(value).toFixed(Math.abs(value) < 10 ? 1 : 0)}%`;
+  value === null
+    ? '—'
+    : `${value > 0 ? '+' : value < 0 ? '−' : ''}${Math.abs(value).toFixed(Math.abs(value) < 10 ? 1 : 0)}%`;
 
 const SHOWN_LABELS: Record<Shown, string> = {
   both: 'Both sides',
@@ -171,10 +209,20 @@ const SHOWN_LABELS: Record<Shown, string> = {
 // How each side of the business names its own figures. A wholesale invoice is
 // not an order and a kilo is not a portion, and one vocabulary for both would
 // be wrong on one of them.
-const SIDE: Record<Side, { title: string; hint: string; colour: string; quantity: string; orders: string; order: string }> = {
+const SIDE: Record<
+  Side,
+  {
+    title: string;
+    hint: string;
+    colour: string;
+    quantity: string;
+    orders: string;
+    order: string;
+  }
+> = {
   B2C: {
     title: 'B2C weekend',
-    hint: 'Odoo order lines, counted on the day the order was placed',
+    hint: 'Odoo order lines, counted in the week of the weekend slot they were ordered for',
     colour: COLOR_B2C,
     quantity: 'Portions sold',
     orders: 'Orders',
@@ -209,6 +257,19 @@ const dayLabel = (iso: string) => {
 const pad = (n: number) => String(n).padStart(2, '0');
 const iso = (date: Date) => `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
 
+// Local-date arithmetic on a YYYY-MM-DD string — never toISOString, which is
+// UTC and hands back yesterday for the first hours of every IST day.
+const shiftDays = (value: string, n: number) => {
+  const [y, m, d] = value.split('-').map(Number);
+  return iso(new Date(y, m - 1, d + n));
+};
+
+const VIEW_LABELS: Record<View, string> = {
+  week: 'One week',
+  simple: 'Week by week',
+  full: 'Full report',
+};
+
 const weeksAgo = (n: number) => {
   const date = new Date();
   date.setDate(date.getDate() - n * 7);
@@ -224,7 +285,8 @@ const monthsAgo = (n: number) => {
 // One side's figures out of a period row or the totals. Written once so the
 // tiles, the chart and the tooltip cannot end up reading different sides from
 // each other.
-const sideUnits = (row: { b2cUnits: number; b2bUnits: number }, side: Side) => (side === 'B2C' ? row.b2cUnits : row.b2bUnits);
+const sideUnits = (row: { b2cUnits: number; b2bUnits: number }, side: Side) =>
+  side === 'B2C' ? row.b2cUnits : row.b2bUnits;
 const sideRevenue = (row: { b2cRevenue: number; b2bRevenue: number }, side: Side) =>
   side === 'B2C' ? row.b2cRevenue : row.b2bRevenue;
 const sideOrders = (row: { b2cOrders: number; b2bOrders: number }, side: Side) =>
@@ -239,13 +301,33 @@ const ItemSales = () => {
   // Which side (or both) the screen is showing. Not a server round trip: the
   // report carries both sides in full, so switching is instant and no half of
   // the screen can be showing a side the other half is not.
-  const [shown, setShown] = useState<Shown>('both');
+  // Opens on the weekend menu: that is the side this screen is mostly read for.
+  const [shown, setShown] = useState<Shown>('B2C');
+  // 'week' is one Mon→Sun week against the week before, stepped with
+  // ‹ Week / Week › the way Marketing ROI is.
+  // 'simple' is the plain grid — how many of each item sold in each week.
+  // 'full' is everything else: tiles, chart, movers, trend table.
+  const [view, setView] = useState<View>('simple');
+  // The Monday of the week the one-week view is on. Opens on the same service
+  // week as Marketing ROI and B2C Order Management.
+  const [weekFrom, setWeekFrom] = useState(() => defaultWeekendRange().from);
   // One sort for both tables. A per-table sort would let the two sides be
   // ordered differently while sitting one above the other, which reads as an
   // inconsistency rather than as a choice.
   const [sort, setSort] = useState<SortKey>('units');
 
+  // The one-week view reads the week before as well, so every item can be
+  // shown against it. The other two views read the chosen range.
+  const query =
+    view === 'week'
+      ? `from=${shiftDays(weekFrom, -7)}&to=${shiftDays(weekFrom, 6)}&granularity=week`
+      : `from=${from}&to=${to}&granularity=${granularity}`;
+
   const [report, setReport] = useState<Report | null>(null);
+  // Which query the report on screen answers. Switching views changes the
+  // query, and until the new report lands the old one must not be drawn — a
+  // twelve-week report read as "this week and last" would be wrong numbers.
+  const [reportQuery, setReportQuery] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -253,17 +335,18 @@ const ItemSales = () => {
     setLoading(true);
     setError('');
     try {
-      const resp = await fetch(`/api/finance/item-sales?from=${from}&to=${to}&granularity=${granularity}`);
+      const resp = await fetch(`/api/finance/item-sales?${query}`);
       const data = await resp.json();
       if (!resp.ok) throw new Error(data.error || 'Could not build the item sales report.');
       setReport(data);
+      setReportQuery(query);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
       setReport(null);
     } finally {
       setLoading(false);
     }
-  }, [from, to, granularity]);
+  }, [query]);
 
   useEffect(() => {
     load();
@@ -286,35 +369,78 @@ const ItemSales = () => {
       <div className="mkt-head">
         <h3>Sales by Item</h3>
         <p>
-          How many of each thing sold, and what is moving. The weekend menu and the wholesale book are counted apart —
-          a portion and a kilo are both &quot;one&quot; and they are not the same thing.
+          How many of each thing sold, and what is moving. The weekend menu and the wholesale book are counted apart — a
+          portion and a kilo are both &quot;one&quot; and they are not the same thing.
         </p>
       </div>
 
       <div className="mkt-toolbar">
-        <div className="mkt-range">
-          <label className="mkt-range-field">
-            <span>From</span>
-            <input type="date" value={from} max={to} onChange={(event) => setFrom(event.target.value)} />
-          </label>
-          <label className="mkt-range-field">
-            <span>To</span>
-            <input type="date" value={to} min={from} onChange={(event) => setTo(event.target.value)} />
-          </label>
-          <div className="mkt-presets">
-            <button type="button" className="mkt-chip" onClick={() => preset(4)}>
-              Last 4 weeks
-            </button>
-            <button type="button" className="mkt-chip" onClick={() => preset(12)}>
-              Last 12 weeks
-            </button>
-            <button type="button" className="mkt-chip" onClick={() => preset(26)}>
-              Last 26 weeks
-            </button>
-            <button type="button" className="mkt-chip" onClick={() => monthPreset(12)}>
-              Last 12 months
-            </button>
+        {view === 'week' ? (
+          <div className="mkt-range">
+            <div className="mkt-presets">
+              <button
+                type="button"
+                className="mkt-chip"
+                aria-label="Previous week"
+                onClick={() => setWeekFrom(shiftDays(weekFrom, -7))}
+              >
+                ‹ Week
+              </button>
+              <button type="button" className="mkt-chip" onClick={() => setWeekFrom(defaultWeekendRange().from)}>
+                This week
+              </button>
+              <button
+                type="button"
+                className="mkt-chip"
+                aria-label="Next week"
+                onClick={() => setWeekFrom(shiftDays(weekFrom, 7))}
+              >
+                Week ›
+              </button>
+            </div>
+            <strong className="sal-week-label">
+              {dayLabel(weekFrom)} – {dayLabel(shiftDays(weekFrom, 6))}
+            </strong>
           </div>
+        ) : (
+          <div className="mkt-range">
+            <label className="mkt-range-field">
+              <span>From</span>
+              <input type="date" value={from} max={to} onChange={(event) => setFrom(event.target.value)} />
+            </label>
+            <label className="mkt-range-field">
+              <span>To</span>
+              <input type="date" value={to} min={from} onChange={(event) => setTo(event.target.value)} />
+            </label>
+            <div className="mkt-presets">
+              <button type="button" className="mkt-chip" onClick={() => preset(4)}>
+                Last 4 weeks
+              </button>
+              <button type="button" className="mkt-chip" onClick={() => preset(12)}>
+                Last 12 weeks
+              </button>
+              <button type="button" className="mkt-chip" onClick={() => preset(26)}>
+                Last 26 weeks
+              </button>
+              <button type="button" className="mkt-chip" onClick={() => monthPreset(12)}>
+                Last 12 months
+              </button>
+            </div>
+          </div>
+        )}
+
+        <div className="mkt-tabs" role="group" aria-label="View">
+          {(['week', 'simple', 'full'] as const).map((option) => (
+            <button
+              key={option}
+              type="button"
+              className={`mkt-tab${view === option ? ' is-active' : ''}`}
+              onClick={() => setView(option)}
+              aria-pressed={view === option}
+            >
+              {VIEW_LABELS[option]}
+            </button>
+          ))}
         </div>
 
         <div className="mkt-tabs fin-side-tabs" role="group" aria-label="Side of the business">
@@ -331,25 +457,29 @@ const ItemSales = () => {
           ))}
         </div>
 
-        <div className="mkt-tabs" role="group" aria-label="Period">
-          {(['week', 'month'] as const).map((option) => (
-            <button
-              key={option}
-              type="button"
-              className={`mkt-tab${granularity === option ? ' is-active' : ''}`}
-              onClick={() => setGranularity(option)}
-              aria-pressed={granularity === option}
-            >
-              {option === 'week' ? 'By week' : 'By month'}
-            </button>
-          ))}
-        </div>
+        {view === 'week' ? null : (
+          <div className="mkt-tabs" role="group" aria-label="Period">
+            {(['week', 'month'] as const).map((option) => (
+              <button
+                key={option}
+                type="button"
+                className={`mkt-tab${granularity === option ? ' is-active' : ''}`}
+                onClick={() => setGranularity(option)}
+                aria-pressed={granularity === option}
+              >
+                {option === 'week' ? 'By week' : 'By month'}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
       {error ? <div className="mkt-alert mkt-alert-error">{error}</div> : null}
-      {loading && !report ? <div className="mkt-alert">Counting what sold…</div> : null}
+      {loading && reportQuery !== query ? <div className="mkt-alert">Counting what sold…</div> : null}
 
-      {report ? <ReportView report={report} shown={shown} sort={sort} onSort={setSort} /> : null}
+      {report && reportQuery === query ? (
+        <ReportView report={report} shown={shown} view={view} sort={sort} onSort={setSort} />
+      ) : null}
     </div>
   );
 };
@@ -359,11 +489,13 @@ const ItemSales = () => {
 const ReportView = ({
   report,
   shown,
+  view,
   sort,
   onSort,
 }: {
   report: Report;
   shown: Shown;
+  view: View;
   sort: SortKey;
   onSort: (key: SortKey) => void;
 }) => {
@@ -396,7 +528,7 @@ const ReportView = ({
       {/* The one figure that spans both sides. Rupees add up where quantities
           do not, so revenue is reported for the business as a whole and every
           count below it belongs to one side only. */}
-      {shown === 'both' ? (
+      {shown === 'both' && view === 'full' ? (
         <div className="sal-whole">
           <div className="sal-whole-figure">
             <span className="mkt-tile-label">Revenue, both sides</span>
@@ -411,18 +543,248 @@ const ReportView = ({
         </div>
       ) : null}
 
-      {sides.map((side) => (
-        <SideReport key={side} side={side} report={report} sort={sort} onSort={onSort} labelled={shown === 'both'} />
-      ))}
+      {sides.map((side) =>
+        view === 'week' ? (
+          <OneWeek key={side} side={side} report={report} />
+        ) : view === 'simple' ? (
+          <WeekGrid key={side} side={side} report={report} />
+        ) : (
+          <SideReport key={side} side={side} report={report} sort={sort} onSort={onSort} labelled={shown === 'both'} />
+        ),
+      )}
 
-      <p className="mkt-panel-hint">
-        Covering {dayLabel(range.from)} – {dayLabel(range.to)}, widened to whole {range.granularity}s from the dates
-        asked for.
-        {totals.unmatchedLines > 0
-          ? ` ${totals.unmatchedLines} ${totals.unmatchedLines === 1 ? 'line is' : 'lines are'} not matched to a menu item — those are listed under the name they were sold as.`
-          : ''}
-      </p>
+      {view === 'week' ? null : (
+        <p className="mkt-panel-hint">
+          Covering {dayLabel(range.from)} – {dayLabel(range.to)}, widened to whole {range.granularity}s from the dates
+          asked for.
+          {totals.unmatchedLines > 0
+            ? ` ${totals.unmatchedLines} ${totals.unmatchedLines === 1 ? 'line is' : 'lines are'} not matched to a menu item — those are listed under the name they were sold as.`
+            : ''}
+        </p>
+      )}
     </div>
+  );
+};
+
+// ---- One week --------------------------------------------------------------
+
+// A single Mon→Sun week, the way Marketing ROI reads one: what each item sold
+// that week, beside the week before so the number has something to be read
+// against. The report is fetched two weeks wide for exactly this — the last
+// period is the week on screen, the one before it is last week. An item that
+// sold last week and nothing this week stays on the list at zero: a dish that
+// stopped is as much news as one that sold.
+const OneWeek = ({ side, report }: { side: Side; report: Report }) => {
+  const words = SIDE[side];
+  const { periods } = report;
+  const now = periods.length - 1;
+  const before = periods.length - 2;
+  const thisWeek = periods[now];
+  const lastWeek = before >= 0 ? periods[before] : null;
+
+  const rows = useMemo(
+    () =>
+      report.items
+        .filter((item) => item.channel === side)
+        .map((item) => ({
+          item,
+          sold: item.series[now] || 0,
+          earned: item.revenueSeries[now] || 0,
+          previous: before >= 0 ? item.series[before] || 0 : 0,
+        }))
+        .filter((row) => row.sold > 0 || row.previous > 0)
+        .sort((a, b) => b.sold - a.sold || b.previous - a.previous || a.item.name.localeCompare(b.item.name)),
+    [report.items, side, now, before],
+  );
+
+  if (!thisWeek) return null;
+
+  const sold = sideUnits(thisWeek, side);
+  const orders = sideOrders(thisWeek, side);
+  const revenue = sideRevenue(thisWeek, side);
+  const vsLastWeek = (value: number, previous: number, show: (n: number) => string) =>
+    lastWeek ? `${value - previous >= 0 ? '+' : '−'}${show(Math.abs(value - previous))} vs last week` : undefined;
+  const tone = (delta: number) => (delta > 0 ? 'mkt-good' : delta < 0 ? 'mkt-bad' : 'mkt-muted');
+  const soldCount = rows.filter((row) => row.sold > 0).length;
+
+  return (
+    <div className="sal-side">
+      <div className="sal-side-head">
+        <h4>
+          <i style={{ background: words.colour }} aria-hidden="true" />
+          {words.title}
+        </h4>
+        <span className="mkt-panel-hint">
+          {dayLabel(thisWeek.start)} – {dayLabel(thisWeek.end)}
+        </span>
+      </div>
+
+      <div className="mkt-tiles">
+        <Tile
+          label={words.quantity}
+          value={qty(sold)}
+          sub={vsLastWeek(sold, lastWeek ? sideUnits(lastWeek, side) : 0, qty)}
+        />
+        <Tile
+          label={words.orders}
+          value={grouped.format(orders)}
+          sub={vsLastWeek(orders, lastWeek ? sideOrders(lastWeek, side) : 0, qty)}
+        />
+        <Tile
+          label="Revenue"
+          value={money(revenue)}
+          sub={vsLastWeek(revenue, lastWeek ? sideRevenue(lastWeek, side) : 0, money)}
+        />
+      </div>
+
+      <section className="mkt-panel">
+        <div className="mkt-panel-head">
+          <h4>What sold this week</h4>
+          <span className="mkt-panel-hint">
+            {soldCount} {soldCount === 1 ? 'item' : 'items'} sold
+          </span>
+        </div>
+
+        {rows.length === 0 ? (
+          <div className="mkt-alert">Nothing sold on this side of the business this week or last.</div>
+        ) : (
+          <div className="mkt-table-wrap">
+            <table className="mkt-table sal-table sal-week-table">
+              <thead>
+                <tr>
+                  <th>Item</th>
+                  <th className="mkt-num">This week</th>
+                  <th className="mkt-num">Last week</th>
+                  <th className="mkt-num">Change</th>
+                  <th className="mkt-num">Revenue</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map(({ item, sold: count, previous, earned }) => (
+                  <tr key={item.key}>
+                    <td>
+                      {item.name}
+                      {item.unitLabel ? <span className="mkt-muted"> ({item.unitLabel})</span> : null}
+                    </td>
+                    <td className={`mkt-num sal-grid-cell${count ? '' : ' is-zero'}`}>{count ? qty(count) : '–'}</td>
+                    <td className="mkt-num mkt-muted">{previous ? qty(previous) : '–'}</td>
+                    <td className={`mkt-num ${tone(count - previous)}`}>
+                      {count === previous ? '–' : signedQty(count - previous)}
+                    </td>
+                    <td className="mkt-num">{earned ? money(earned) : '–'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+    </div>
+  );
+};
+
+// ---- Week by week (the simple view) ----------------------------------------
+
+// The plain answer: one row per item, one column per week, the count in each
+// cell. Oldest week first, reading left to right like a calendar; on a range
+// too wide for the screen the table opens scrolled to its right-hand end, so
+// the latest weeks are in view. The item column is sticky for when the range
+// is long. No trends, no revenue — the full report has those.
+const WeekGrid = ({ side, report }: { side: Side; report: Report }) => {
+  const { range } = report;
+  const words = SIDE[side];
+  const items = useMemo(
+    () =>
+      report.items
+        .filter((item) => item.channel === side)
+        .sort((a, b) => b.units - a.units || a.name.localeCompare(b.name)),
+    [report.items, side],
+  );
+  // Oldest first, the same order as each item's series.
+  const columns = report.periods.map((period, index) => ({ period, index }));
+  const unitWord = side === 'B2C' ? 'portions' : 'units';
+
+  // Start scrolled to the newest weeks whenever a new report is drawn.
+  const wrapRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const wrap = wrapRef.current;
+    if (wrap) wrap.scrollLeft = wrap.scrollWidth;
+  }, [report]);
+
+  return (
+    <section className="mkt-panel">
+      <div className="mkt-panel-head">
+        <h4>
+          {words.title} — sold each {range.granularity}
+        </h4>
+        <span className="mkt-panel-hint">
+          {items.length} {items.length === 1 ? 'item' : 'items'} · oldest {range.granularity} first
+        </span>
+      </div>
+
+      {items.length === 0 ? (
+        <div className="mkt-alert">Nothing sold on this side of the business in this range.</div>
+      ) : (
+        <div className="mkt-table-wrap" ref={wrapRef}>
+          <table className="mkt-table sal-grid">
+            <thead>
+              <tr>
+                <th className="sal-grid-item">Item</th>
+                {columns.map(({ period }) => (
+                  <th
+                    key={period.key}
+                    className="mkt-num"
+                    title={`${dayLabel(period.start)} – ${dayLabel(period.end)}`}
+                  >
+                    {period.label}
+                  </th>
+                ))}
+                <th className="mkt-num sal-grid-total">Total</th>
+              </tr>
+            </thead>
+            <tbody>
+              {items.map((item) => (
+                <tr key={item.key}>
+                  <td className="sal-grid-item">
+                    {item.name}
+                    {item.unitLabel ? <span className="mkt-muted"> ({item.unitLabel})</span> : null}
+                  </td>
+                  {columns.map(({ period, index }) => {
+                    const count = item.series[index] || 0;
+                    return (
+                      <td key={period.key} className={`mkt-num sal-grid-cell${count ? '' : ' is-zero'}`}>
+                        {count ? qty(count) : '–'}
+                      </td>
+                    );
+                  })}
+                  <td className="mkt-num sal-grid-total">{qty(item.units)}</td>
+                </tr>
+              ))}
+            </tbody>
+            <tfoot>
+              <tr>
+                <th className="sal-grid-item">All {unitWord}</th>
+                {columns.map(({ period }) => (
+                  <td key={period.key} className="mkt-num">
+                    {qty(sideUnits(period, side))}
+                  </td>
+                ))}
+                <td className="mkt-num sal-grid-total">{qty(sideUnits(report.totals, side))}</td>
+              </tr>
+              <tr>
+                <th className="sal-grid-item">{words.orders}</th>
+                {columns.map(({ period }) => (
+                  <td key={period.key} className="mkt-num">
+                    {grouped.format(sideOrders(period, side))}
+                  </td>
+                ))}
+                <td className="mkt-num sal-grid-total">{grouped.format(sideOrders(report.totals, side))}</td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      )}
+    </section>
   );
 };
 
@@ -474,6 +836,7 @@ const SideReport = ({
   };
   const best = items.length ? [...items].sort((a, b) => b.units - a.units)[0] : null;
   const movers = report.movers[side];
+  const discounts = side === 'B2C' ? report.discounts : undefined;
 
   return (
     <div className="sal-side">
@@ -507,6 +870,17 @@ const SideReport = ({
                   : 'nothing sold'
               }
             />
+            {discounts ? (
+              <Tile
+                label="Discounts given"
+                value={money(discounts.total)}
+                sub={
+                  discounts.total
+                    ? `${discounts.pct}% off ${money(discounts.gross)} · ${discounts.orders} ${discounts.orders === 1 ? 'order' : 'orders'}`
+                    : 'no discounts in this range'
+                }
+              />
+            ) : null}
             <Tile
               name
               label="Best seller"
@@ -528,6 +902,15 @@ const SideReport = ({
               }
             />
           </div>
+
+          {discounts && discounts.total > 0 ? (
+            <p className="mkt-panel-hint">
+              Discounts: {money(discounts.coupons)} from coupon codes and Discount lines ({discounts.couponLines}{' '}
+              {discounts.couponLines === 1 ? 'line' : 'lines'}), {money(discounts.onItems)} as a percentage off dishes (
+              {discounts.itemLines} {discounts.itemLines === 1 ? 'line' : 'lines'}). Revenue above is after them —
+              before, it would have been {money(discounts.gross)}.
+            </p>
+          ) : null}
 
           <TimeChart periods={periods} side={side} granularity={range.granularity} />
 
@@ -621,7 +1004,13 @@ const TimeChart = ({ periods, side, granularity }: { periods: Period[]; side: Si
                 >
                   <div className="sal-stack">
                     {total > 0 ? (
-                      <div className="sal-bar" style={{ height: `${(total / ceiling) * 100}%`, background: words.colour }} />
+                      <div
+                        className="sal-bar"
+                        style={{
+                          height: `${(total / ceiling) * 100}%`,
+                          background: words.colour,
+                        }}
+                      />
                     ) : null}
                   </div>
                   {isHot ? (
@@ -864,7 +1253,9 @@ const ItemTable = ({
                 <td className="mkt-num">{shortMoney(item.revenue)}</td>
                 <td className="mkt-num mkt-muted">{shortMoney(item.avgPrice)}</td>
                 <td className="mkt-num mkt-muted">{item.orders}</td>
-                <td className={`mkt-num ${item.deltaUnits > 0 ? 'mkt-good' : item.deltaUnits < 0 ? 'mkt-bad' : 'mkt-muted'}`}>
+                <td
+                  className={`mkt-num ${item.deltaUnits > 0 ? 'mkt-good' : item.deltaUnits < 0 ? 'mkt-bad' : 'mkt-muted'}`}
+                >
                   {signedQty(item.deltaUnits)}
                   {item.deltaPct === null ? null : <span className="mkt-muted"> {percent(item.deltaPct)}</span>}
                 </td>
@@ -907,7 +1298,9 @@ const SortHeader = ({
 // The badge is a word first and a colour second — the trend has to survive
 // being printed in grey, and 'steady' and 'too few to call' are different
 // findings that no colour could tell apart.
-const TrendBadge = ({ trend }: { trend: Trend }) => <span className={`sal-badge is-${trend}`}>{TREND_LABELS[trend]}</span>;
+const TrendBadge = ({ trend }: { trend: Trend }) => (
+  <span className={`sal-badge is-${trend}`}>{TREND_LABELS[trend]}</span>
+);
 
 // ---- Sparkline -------------------------------------------------------------
 
@@ -937,7 +1330,14 @@ const Sparkline = ({ series, side, labels }: { series: number[]; side: Side; lab
       role="img"
       aria-label={`${qty(series[series.length - 1])} in ${labels[labels.length - 1]}, peak ${qty(series[busiest])} in ${labels[busiest]}`}
     >
-      <polyline points={points} fill="none" stroke={colour} strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />
+      <polyline
+        points={points}
+        fill="none"
+        stroke={colour}
+        strokeWidth="2"
+        strokeLinejoin="round"
+        strokeLinecap="round"
+      />
       <circle cx={lastX} cy={y(series[series.length - 1])} r="2.5" fill={colour} />
     </svg>
   );

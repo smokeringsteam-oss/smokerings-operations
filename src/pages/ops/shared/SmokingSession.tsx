@@ -39,6 +39,7 @@ type Session = {
   smoking_end: string;
   finished_weight_with_bone_kg: string;
   finished_weight_without_bone_kg: string;
+  yield_pct: string | number | null;
   rest_start: string;
   rest_end: string;
   shred_start: string;
@@ -280,6 +281,11 @@ type Draft = {
   smokeRingsFormed: string;
   barkNotes: string;
   juiciness: string;
+  // A weight correction half-typed into one row of "All sessions".
+  weightEditId: string;
+  weightRaw: string;
+  weightWithBone: string;
+  weightWithoutBone: string;
 };
 
 const draftKey = (channel: Channel) => `smokerings.smokingSession.draft.v1.${channel}`;
@@ -314,7 +320,14 @@ const DRAFT_CONTENT_KEYS: (keyof Draft)[] = [
   'smokeRingsFormed',
   'barkNotes',
   'juiciness',
+  'weightEditId',
 ];
+
+// Weights only become editable once the step that records them has been
+// logged — mirrors FINISHED_STAGES in server/ops/shared/smoking.js.
+const FINISHED_STAGES = ['resting', 'shredding', 'completed'];
+const hasValue = (v: unknown) => v !== '' && v !== null && v !== undefined;
+const kg = (v: unknown) => (hasValue(v) ? `${v}kg` : '—');
 
 const draftHasContent = (draft: Draft) =>
   (draft.brineCart?.length || 0) > 0 ||
@@ -516,6 +529,18 @@ const SmokingSession: React.FC<{ channel?: Channel }> = ({ channel: defaultChann
   const [linkError, setLinkError] = useState('');
   const [linkFetched, setLinkFetched] = useState(false);
 
+  // ---- Weight correction — edited in place in the "All sessions" table ----
+  // The typed values ride in the draft like the wizard fields, so leaving the
+  // screen mid-correction doesn't lose them; saving writes the database (and
+  // the smoking_log.csv mirror) and clears the edit.
+  const [weightEditId, setWeightEditId] = useState(() => initial('weightEditId', ''));
+  const [weightRaw, setWeightRaw] = useState(() => initial('weightRaw', ''));
+  const [weightWithBone, setWeightWithBone] = useState(() => initial('weightWithBone', ''));
+  const [weightWithoutBone, setWeightWithoutBone] = useState(() => initial('weightWithoutBone', ''));
+  const [weightBusy, setWeightBusy] = useState(false);
+  const [weightError, setWeightError] = useState('');
+  const [weightStatus, setWeightStatus] = useState('');
+
   // ---- Draft mirror ------------------------------------------------------
   // Everything a human typed, in one object, written to localStorage whenever
   // any of it changes. Serialising it is what detects the change: the payload
@@ -561,6 +586,10 @@ const SmokingSession: React.FC<{ channel?: Channel }> = ({ channel: defaultChann
     smokeRingsFormed,
     barkNotes,
     juiciness,
+    weightEditId,
+    weightRaw,
+    weightWithBone,
+    weightWithoutBone,
   };
   const draftJson = JSON.stringify(draftPayload);
   const draftRef = useRef(draftPayload);
@@ -613,6 +642,10 @@ const SmokingSession: React.FC<{ channel?: Channel }> = ({ channel: defaultChann
     setSmokeRingsFormed('');
     setBarkNotes('');
     setJuiciness('');
+    setWeightEditId('');
+    setWeightRaw('');
+    setWeightWithBone('');
+    setWeightWithoutBone('');
   };
 
   // The two effects keyed on smokeStartSessionId below clear the lot pick and
@@ -1092,6 +1125,64 @@ const SmokingSession: React.FC<{ channel?: Channel }> = ({ channel: defaultChann
       setDeleteError(String((err as Error).message || err));
     } finally {
       setDeletingId('');
+    }
+  };
+
+  // Opens one row for weight correction, prefilled from what's on file.
+  const handleEditWeights = (s: Session) => {
+    setWeightEditId(s.session_id);
+    setWeightRaw(hasValue(s.raw_weight_kg) ? String(s.raw_weight_kg) : '');
+    setWeightWithBone(hasValue(s.finished_weight_with_bone_kg) ? String(s.finished_weight_with_bone_kg) : '');
+    setWeightWithoutBone(hasValue(s.finished_weight_without_bone_kg) ? String(s.finished_weight_without_bone_kg) : '');
+    setWeightError('');
+    setWeightStatus('');
+  };
+
+  const handleCancelWeights = () => {
+    setWeightEditId('');
+    setWeightRaw('');
+    setWeightWithBone('');
+    setWeightWithoutBone('');
+    setWeightError('');
+  };
+
+  const handleSaveWeights = async () => {
+    const session = sessions.find((s) => s.session_id === weightEditId);
+    if (!session || weightBusy) return;
+    setWeightBusy(true);
+    setWeightError('');
+    setWeightStatus('');
+    try {
+      // Only send what this row is allowed to change, so the server's stage
+      // checks never trip over a field the pitmaster couldn't have touched.
+      const body: Record<string, string> = {};
+      if (hasValue(session.raw_weight_kg)) body.rawWeightKg = weightRaw.trim();
+      if (FINISHED_STAGES.includes(session.stage)) {
+        body.finishedWeightWithBoneKg = weightWithBone.trim();
+        body.finishedWeightWithoutBoneKg = weightWithoutBone.trim();
+      }
+      const resp = await fetch(`/api/smoking/sessions/${session.session_id}/weights`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const data = await readJson<{
+        session?: Session;
+        inventoryAdjustment?: { item_name: string; newQuantity: number } | null;
+        inventoryWarning?: unknown;
+        error?: string;
+      }>(resp);
+      if (!resp.ok) throw new Error(data.error || 'Failed to save weights.');
+      const inv = data.inventoryAdjustment;
+      setWeightStatus(
+        `Weights saved for ${session.session_id}${inv ? ` — ${inv.item_name} stock now ${inv.newQuantity}` : ''}.`,
+      );
+      handleCancelWeights();
+      await loadSessions();
+    } catch (err) {
+      setWeightError(String((err as Error).message || err));
+    } finally {
+      setWeightBusy(false);
     }
   };
 
@@ -1903,6 +1994,8 @@ const SmokingSession: React.FC<{ channel?: Channel }> = ({ channel: defaultChann
       <div className="wizard-card">
         <h3 className="inv-section-title">📋 All sessions</h3>
         {deleteError && <p className="chat-error">{deleteError}</p>}
+        {weightError && <p className="chat-error">{weightError}</p>}
+        {weightStatus && !weightError && <p className="status-message">✅ {weightStatus}</p>}
         {allSessions.length === 0 ? (
           <p className="inv-note">Nothing logged yet — start one in the Marinating step.</p>
         ) : (
@@ -1915,7 +2008,10 @@ const SmokingSession: React.FC<{ channel?: Channel }> = ({ channel: defaultChann
                   <th>Output</th>
                   <th>Channel · purpose</th>
                   <th>Pitmaster</th>
-                  <th>Raw → Finished</th>
+                  <th>Raw</th>
+                  <th>Finished (bone)</th>
+                  <th>Finished (no bone)</th>
+                  <th>Yield</th>
                   <th>Sourced from</th>
                   <th>Fed to</th>
                   <th />
@@ -1924,6 +2020,21 @@ const SmokingSession: React.FC<{ channel?: Channel }> = ({ channel: defaultChann
               <tbody>
                 {allSessions.map((s) => {
                   const fedOrders = parseFedOrders(s.fed_order_refs);
+                  const canEditRaw = hasValue(s.raw_weight_kg);
+                  const canEditFinished = FINISHED_STAGES.includes(s.stage);
+                  const editing = weightEditId === s.session_id;
+                  const weightInput = (value: string, onChange: (v: string) => void, label: string) => (
+                    <input
+                      type="number"
+                      inputMode="decimal"
+                      step="0.001"
+                      min="0"
+                      className="smoke-weight-input"
+                      aria-label={`${label} (kg) for ${s.session_id}`}
+                      value={value}
+                      onChange={(e) => onChange(e.target.value)}
+                    />
+                  );
                   return (
                     <tr key={s.session_id}>
                       <td className="prep-item-col">
@@ -1936,8 +2047,49 @@ const SmokingSession: React.FC<{ channel?: Channel }> = ({ channel: defaultChann
                       <td>{channelTag(s)}</td>
                       <td>{s.pitmaster || '—'}</td>
                       <td className="prep-total-cell">
-                        {s.raw_weight_kg ? `${s.raw_weight_kg}kg` : '—'}
-                        {s.finished_weight_with_bone_kg ? ` → ${s.finished_weight_with_bone_kg}kg (bone)` : ''}
+                        {editing && canEditRaw ? weightInput(weightRaw, setWeightRaw, 'Raw weight') : kg(s.raw_weight_kg)}
+                      </td>
+                      <td className="prep-total-cell">
+                        {editing && canEditFinished
+                          ? weightInput(weightWithBone, setWeightWithBone, 'Finished weight with bone')
+                          : kg(s.finished_weight_with_bone_kg)}
+                      </td>
+                      <td className="prep-total-cell">
+                        {editing && canEditFinished
+                          ? weightInput(weightWithoutBone, setWeightWithoutBone, 'Finished weight without bone')
+                          : kg(s.finished_weight_without_bone_kg)}
+                      </td>
+                      <td className="prep-total-cell">
+                        {hasValue(s.yield_pct) ? `${s.yield_pct}%` : '—'}
+                        {/* Nothing to correct until at least the raw weight is on file. */}
+                        {canEditRaw && (
+                          <div className="smoke-weight-actions">
+                            {editing ? (
+                              <>
+                                <button
+                                  type="button"
+                                  className="primary-button small"
+                                  onClick={handleSaveWeights}
+                                  disabled={weightBusy}
+                                >
+                                  {weightBusy ? 'Saving…' : 'Save'}
+                                </button>
+                                <button
+                                  type="button"
+                                  className="secondary-button small"
+                                  onClick={handleCancelWeights}
+                                  disabled={weightBusy}
+                                >
+                                  Cancel
+                                </button>
+                              </>
+                            ) : (
+                              <button type="button" className="secondary-button small" onClick={() => handleEditWeights(s)}>
+                                ⚖️ Edit weights
+                              </button>
+                            )}
+                          </div>
+                        )}
                       </td>
                       <td>{s.source_purchase_id || '—'}</td>
                       <td>

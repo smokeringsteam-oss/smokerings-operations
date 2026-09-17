@@ -248,6 +248,7 @@ CREATE TABLE sales_order (
   channel             TEXT NOT NULL CHECK (channel IN ('B2C','B2B')),
   status              TEXT NOT NULL,
   delivery_person     TEXT,
+  tracking_url        TEXT,
   in_smoker_at        TEXT,
   prepping_at         TEXT,
   packed_at           TEXT,
@@ -457,7 +458,10 @@ CREATE TABLE shared_note (
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   done       INTEGER NOT NULL DEFAULT 0 CHECK (done IN (0, 1)),
   done_at    TEXT,
-  done_by    TEXT
+  done_by    TEXT,
+  assigned_to TEXT,
+  github_issue    INTEGER,
+  github_category INTEGER
 );
 `;
 
@@ -474,6 +478,14 @@ function createTestDb({
 } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'smokerings-db-'));
   const dbPath = path.join(dir, 'test.db');
+  // Writes to the purchase and vendor tables mirror themselves out to CSV. A
+  // test that didn't say where would rewrite the real knowledge-base repo's
+  // purchase_log.csv with fixture rows, so the default here is a directory
+  // that doesn't exist — the mirror skips. Tests about the mirror set their
+  // own before calling this.
+  if (!process.env.KNOWLEDGE_BASE_DATA_DIR) {
+    process.env.KNOWLEDGE_BASE_DATA_DIR = path.join(dir, 'no-knowledge-base');
+  }
   const db = new DatabaseSync(dbPath);
   db.exec(SCHEMA);
 

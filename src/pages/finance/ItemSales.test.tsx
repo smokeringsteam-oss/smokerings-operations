@@ -157,7 +157,81 @@ const stubFetch = (payload: unknown) =>
 beforeEach(() => stubFetch(report()));
 afterEach(() => vi.unstubAllGlobals());
 
-// Two tables on the page in the default "both sides" view, one per side.
+// The screen opens on the simple B2C week grid. Most tests below are about the
+// full report with both sides showing, so they open it first.
+const renderFull = async () => {
+  render(<ItemSales />);
+  await screen.findAllByRole('table');
+  fireEvent.click(screen.getByRole('button', { name: 'Full report' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Both sides' }));
+};
+
+test('opens on a simple week-by-week grid of B2C items, oldest week first', async () => {
+  render(<ItemSales />);
+
+  const tables = await screen.findAllByRole('table');
+  expect(tables).toHaveLength(1);
+  const grid = tables[0];
+
+  // Oldest week is the first week column, reading forward in time.
+  const headerRow = within(grid).getAllByRole('row')[0];
+  const headers = within(headerRow).getAllByRole('columnheader').map((cell) => cell.textContent);
+  expect(headers).toEqual(['Item', '3–9 Aug', '10–16 Aug', '17–23 Aug', '24–30 Aug', 'Total']);
+
+  // Burnt Ends: 0, 0, 8, 12, 20 total.
+  const burnt = within(grid).getByRole('row', { name: /burnt ends/i });
+  const cells = within(burnt).getAllByRole('cell').map((cell) => cell.textContent);
+  expect(cells).toEqual(['Burnt Ends', '–', '–', '8', '12', '20']);
+
+  // Wholesale is not in it until asked for.
+  expect(within(grid).queryByRole('row', { name: /pulled pork/i })).toBeNull();
+  // And none of the full report's trend furniture.
+  expect(screen.queryByText('Gaining')).toBeNull();
+});
+
+test('totals each week of the simple grid across every item', async () => {
+  render(<ItemSales />);
+  const grid = (await screen.findAllByRole('table'))[0];
+  const total = within(grid).getByRole('row', { name: /all portions/i });
+  expect(within(total).getAllByRole('cell').map((cell) => cell.textContent)).toEqual(['10', '12', '18', '20', '60']);
+});
+
+test('one-week view shows each item this week against last week, and steps week by week', async () => {
+  render(<ItemSales />);
+  await screen.findAllByRole('table');
+  const fetchMock = vi.mocked(fetch);
+
+  fireEvent.click(screen.getByRole('button', { name: 'One week' }));
+  const table = (await screen.findAllByRole('table'))[0];
+
+  // It asks for the week on screen plus the week before it, by week.
+  const url = String(fetchMock.mock.calls[fetchMock.mock.calls.length - 1][0]);
+  expect(url).toMatch(/granularity=week/);
+
+  // The stub's last two periods are "this week" and "last week".
+  // Ribs 10 → 12; Burnt Ends 8 → 12.
+  const ribs = within(table).getByRole('row', { name: /pork ribs/i });
+  expect(within(ribs).getAllByRole('cell').map((cell) => cell.textContent)).toEqual([
+    'Pork Ribs',
+    '12',
+    '10',
+    '+2',
+    '₹3,600',
+  ]);
+  expect(screen.getByText('Portions sold')).toBeInTheDocument();
+
+  // ‹ Week moves the request back seven days.
+  const before = fetchMock.mock.calls.length;
+  fireEvent.click(screen.getByRole('button', { name: 'Previous week' }));
+  await screen.findAllByRole('table');
+  expect(fetchMock.mock.calls.length).toBeGreaterThan(before);
+  const from = (u: string) => new URL(u, 'http://x').searchParams.get('from') as string;
+  const shifted = String(fetchMock.mock.calls[fetchMock.mock.calls.length - 1][0]);
+  const days = (Date.parse(from(url)) - Date.parse(from(shifted))) / 86400000;
+  expect(days).toBe(7);
+});
+
+// Two tables on the page in the "both sides" view, one per side.
 const tableFor = async (side: 'B2C' | 'B2B') => {
   const tables = await screen.findAllByRole('table');
   return side === 'B2C' ? tables[0] : tables[tables.length - 1];
@@ -167,7 +241,7 @@ const rowFor = async (side: 'B2C' | 'B2B', name: RegExp) =>
   within(await tableFor(side)).getByRole('row', { name });
 
 test('counts how many of each item sold, with its share and its revenue', async () => {
-  render(<ItemSales />);
+  await renderFull();
 
   const ribs = await rowFor('B2C', /pork ribs/i);
   expect(within(ribs).getByText('40')).toBeInTheDocument();
@@ -180,7 +254,7 @@ test('counts how many of each item sold, with its share and its revenue', async 
 });
 
 test('gives each side its own section, and never puts one side in the other', async () => {
-  render(<ItemSales />);
+  await renderFull();
 
   const b2c = await tableFor('B2C');
   const b2b = await tableFor('B2B');
@@ -202,7 +276,7 @@ test('gives each side its own section, and never puts one side in the other', as
 });
 
 test('adds up revenue across both sides but never the quantities', async () => {
-  render(<ItemSales />);
+  await renderFull();
 
   // Rupees are rupees on both sides, so the whole-business figure is real.
   expect(await screen.findByText('Revenue, both sides')).toBeInTheDocument();
@@ -214,7 +288,7 @@ test('adds up revenue across both sides but never the quantities', async () => {
 });
 
 test('shows one side alone when a side is picked', async () => {
-  render(<ItemSales />);
+  await renderFull();
   await screen.findAllByRole('table');
 
   fireEvent.click(screen.getByRole('button', { name: 'B2B wholesale' }));
@@ -228,7 +302,7 @@ test('shows one side alone when a side is picked', async () => {
 });
 
 test('names the two windows it compared rather than leaving the reader to guess', async () => {
-  render(<ItemSales />);
+  await renderFull();
   // Once per side: the windows are the same dates, but the verdicts under
   // them are each side's own.
   expect(await screen.findAllByText(/17 Aug 26 – 30 Aug 26/)).toHaveLength(2);
@@ -236,7 +310,7 @@ test('names the two windows it compared rather than leaving the reader to guess'
 });
 
 test('shows a new dish as new rather than as a percentage it cannot have', async () => {
-  render(<ItemSales />);
+  await renderFull();
 
   const burnt = await rowFor('B2C', /burnt ends/i);
   expect(within(burnt).getByText('★ New')).toBeInTheDocument();
@@ -252,7 +326,7 @@ test('shows a new dish as new rather than as a percentage it cannot have', async
 });
 
 test('sorts the table by the column asked for', async () => {
-  render(<ItemSales />);
+  await renderFull();
   await screen.findAllByRole('table');
 
   // Sorting by revenue puts the 12k dish above the 8k one, within its own side.
@@ -277,7 +351,7 @@ test('says the weekend half is missing rather than printing it as zero', async (
       },
     }),
   );
-  render(<ItemSales />);
+  await renderFull();
   expect(await screen.findByText(/odoo unreachable/i)).toBeInTheDocument();
 });
 
@@ -296,7 +370,7 @@ test('says the earlier window is empty rather than badging the whole menu new', 
       },
     }),
   );
-  render(<ItemSales />);
+  await renderFull();
   // Said once per side, because it is a fact about that side's own history.
   expect(await screen.findAllByText(/nothing sold on this side between 3 Aug 26 and 16 Aug 26/i)).toHaveLength(2);
   // And not an empty Gaining/Slipping pair, which would read as "nothing is
@@ -316,6 +390,6 @@ test('has nothing to compare in a single period, and says so instead of drawing 
       },
     }),
   );
-  render(<ItemSales />);
+  await renderFull();
   expect(await screen.findAllByText(/one week is a photograph, not a trend/i)).toHaveLength(2);
 });

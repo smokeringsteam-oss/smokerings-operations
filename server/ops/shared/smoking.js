@@ -620,6 +620,114 @@ function finishedWeightOf(row) {
   return Number.isFinite(n) ? n : null;
 }
 
+// ---- Weight correction (from the "All sessions" table) ---------------------
+// A scale misread or a typo in the smoke steps is otherwise permanent, and it
+// feeds straight into the realized-loss stats the Weekend Prep Planner buys
+// meat against. Not a stage move: the session stays where it is.
+//
+// Each weight is only editable once the step that records it has happened —
+// raw once the meat went on the smoker, finished once it came off — so this
+// can't be used to skip Smoking start (which picks the purchase lot and
+// decrements inventory) or Smoking finish. A field left undefined is left
+// alone; a finished weight sent as '' is cleared. Raw can't be cleared, since
+// inventory was already taken for it.
+//
+// A changed raw weight moves inventory by the difference, the same way
+// startSmoking took it and deleteSession gives it back.
+const FINISHED_STAGES = ['resting', 'shredding', 'completed'];
+
+function updateSessionWeights({ sessionId, rawWeightKg, finishedWeightWithBoneKg, finishedWeightWithoutBoneKg }) {
+  const existing = loadRow(sessionId);
+  const fail = (message) => {
+    const err = new Error(message);
+    err.status = 400;
+    throw err;
+  };
+  const positive = (label, value) => {
+    const n = Number(value);
+    if (!Number.isFinite(n) || n <= 0) fail(`${label} must be a number greater than 0.`);
+    return Math.round(n * 1000) / 1000;
+  };
+
+  const hasRaw = existing.raw_weight_kg !== '' && existing.raw_weight_kg != null;
+  const oldRaw = hasRaw ? Number(existing.raw_weight_kg) : null;
+  const patch = {};
+
+  if (rawWeightKg !== undefined) {
+    if (rawWeightKg === '' || rawWeightKg == null) {
+      if (hasRaw) fail("Raw weight can't be cleared once the meat has gone on the smoker.");
+    } else {
+      if (!hasRaw) fail(`Log Smoking start for ${sessionId} before entering a raw weight.`);
+      patch.raw_weight_kg = positive('Raw weight', rawWeightKg);
+    }
+  }
+
+  const finishedEditable = FINISHED_STAGES.includes(existing.stage);
+  [
+    ['finished_weight_with_bone_kg', finishedWeightWithBoneKg, 'Finished weight (with bone)'],
+    ['finished_weight_without_bone_kg', finishedWeightWithoutBoneKg, 'Finished weight (without bone)'],
+  ].forEach(([column, value, label]) => {
+    if (value === undefined) return;
+    if (value === '' || value == null) {
+      patch[column] = null;
+      return;
+    }
+    if (!finishedEditable) fail(`Log Smoking finish for ${sessionId} before entering a finished weight.`);
+    patch[column] = positive(label, value);
+  });
+
+  if (!Object.keys(patch).length) return { session: existing, inventoryAdjustment: null };
+
+  const candidate = { ...existing, ...patch };
+  const raw = Number(candidate.raw_weight_kg) || 0;
+  [
+    ['finished_weight_with_bone_kg', 'with bone'],
+    ['finished_weight_without_bone_kg', 'without bone'],
+  ].forEach(([column, label]) => {
+    const value = candidate[column];
+    if (value === '' || value == null || !raw) return;
+    if (Number(value) > raw) {
+      fail(`Finished weight ${label} (${value}kg) is heavier than the ${raw}kg raw weight — check the weights.`);
+    }
+  });
+  patch.yield_pct = yieldPctFor(candidate);
+
+  const row = patchSession(sessionId, patch);
+
+  const changes = [];
+  if (patch.raw_weight_kg !== undefined && patch.raw_weight_kg !== oldRaw) {
+    changes.push(`raw ${oldRaw}kg → ${patch.raw_weight_kg}kg`);
+  }
+  ['finished_weight_with_bone_kg', 'finished_weight_without_bone_kg'].forEach((column) => {
+    if (!(column in patch)) return;
+    const before = existing[column] === '' || existing[column] == null ? null : Number(existing[column]);
+    if (before === patch[column]) return;
+    const label = column.includes('without') ? 'finished (no bone)' : 'finished (bone)';
+    changes.push(`${label} ${before ?? '—'}kg → ${patch[column] ?? '—'}kg`);
+  });
+  if (changes.length) logStage(row, existing.stage, `Weights corrected — ${changes.join(', ')}`);
+
+  let inventoryAdjustment = null;
+  let inventoryWarning = null;
+  if (hasRaw && patch.raw_weight_kg !== undefined && patch.raw_weight_kg !== oldRaw && row.source_material_id) {
+    const { applied, skipped } = adjustInventory(
+      [
+        {
+          materialId: row.source_material_id,
+          // Positive when the corrected raw weight is lower — that meat never left stock.
+          deltaQty: Math.round((oldRaw - patch.raw_weight_kg) * 1000) / 1000,
+          itemName: row.source_material_name,
+        },
+      ],
+      new Date().toISOString().slice(0, 10),
+    );
+    inventoryAdjustment = applied[0] || null;
+    inventoryWarning = skipped[0] || null;
+  }
+
+  return { session: row, inventoryAdjustment, inventoryWarning };
+}
+
 // ---- Stage 4: Resting -------------------------------------------------------
 // Sessions producing a "Pulled" output move on to Shredding as before.
 // Everything else is done once it's rested, so the tasting notes normally
@@ -755,14 +863,20 @@ function lossCategoryFor(row) {
 // falls back to its static starting-guess default in that case.
 function getRealizedLossStats() {
   const totals = {}; // category -> { rawKg, finishedKg, sessionCount }
+  // Sessions weighed raw but with no finished weight yet — still on the
+  // smoker, or the Smoking Finish step was never logged. Counted so the
+  // planner can say why a category has no average rather than just "none".
+  const inProgress = Object.fromEntries(MEAT_CATEGORY_KEYS.map((key) => [key, 0]));
 
   readSessions().forEach((row) => {
     const raw = Number(row.raw_weight_kg) || 0;
     const finished = finishedWeightOf(row);
-    if (!raw || finished == null) return;
-
     const category = lossCategoryFor(row);
-    if (!category) return;
+    if (!raw || !category) return;
+    if (finished == null) {
+      inProgress[category] += 1;
+      return;
+    }
 
     if (!totals[category]) totals[category] = { rawKg: 0, finishedKg: 0, sessionCount: 0 };
     totals[category].rawKg += raw;
@@ -784,6 +898,7 @@ function getRealizedLossStats() {
       finishedKg: Math.round(t.finishedKg * 100) / 100,
     };
   });
+  result.inProgress = inProgress;
   return result;
 }
 
@@ -857,6 +972,7 @@ export {
   getTaggablePurchases,
   startSmoking,
   finishSmoking,
+  updateSessionWeights,
   completeResting,
   completeShredding,
   setFedOrders,

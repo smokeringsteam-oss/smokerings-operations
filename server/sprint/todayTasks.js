@@ -102,4 +102,27 @@ function setTodayTaskDone({ taskId, done, now = new Date() } = {}) {
   return getTodayTasks(now);
 }
 
-export { getTodayTasks, setTodayTaskDone };
+// Hands one of today's tasks to someone else, for this week only — the same
+// override Daily View's assignee box writes, so next week the cadence's own
+// name comes back. The tick and the time are read and written straight back
+// for the same reason the tick preserves the name: the row holds all three.
+function reassignTodayTask({ taskId, assignedTo, now = new Date() } = {}) {
+  const id = String(taskId || '').trim();
+  if (!id) throw bad('A task id is required.');
+  if (typeof assignedTo !== 'string') throw bad('assignedTo must be a name.');
+  const name = assignedTo.trim().slice(0, 40);
+  if (!name) throw bad('Give the task to someone — a name is required.');
+
+  const weekKey = getIsoWeekKey(now);
+  const row = select('scheduled_task', { task_id: id })[0];
+  if (!row) {
+    const err = new Error('That task is no longer in the schedule.');
+    err.status = 404;
+    throw err;
+  }
+  const task = toTask(row, select('task_completion', { week_key: weekKey, task_id: id })[0]);
+  setTaskStatus({ weekKey, taskId: id, done: task.done, assignedTo: name, time: task.time });
+  return getTodayTasks(now);
+}
+
+export { getTodayTasks, setTodayTaskDone, reassignTodayTask };

@@ -3,7 +3,6 @@ import WeeklySprintDashboard, { type WeeklySprintSub, weeklySprintTools } from '
 import MarketingDashboard, { type MarketingSub, marketingTools } from './pages/marketing/MarketingDashboard';
 import OpsDashboard, { type OpsSub, opsTools } from './pages/ops/OpsDashboard';
 import FinanceDashboard, { type FinanceSub, financeTools } from './pages/finance/FinanceDashboard';
-import ToolsDashboard, { type ToolsSub, toolsTools } from './pages/tools/ToolsDashboard';
 import { usePersistedChoice } from './lib/usePersistedChoice';
 import { useWhatsappAttentionCount } from './lib/useWhatsappAttention';
 import NotesBubble from './components/NotesBubble';
@@ -12,7 +11,7 @@ import NotesBubble from './components/NotesBubble';
 // sidebar entry; it now lives as the first step inside the B2C Dashboard's
 // sequential weekend flow (see B2CDashboard.tsx) so the whole Fri plan → buy
 // → smoke / Sat-Sun serve pipeline is one unified view.
-type ActiveTool = WeeklySprintSub | MarketingSub | OpsSub | FinanceSub | ToolsSub;
+type ActiveTool = WeeklySprintSub | MarketingSub | OpsSub | FinanceSub;
 
 const isWeeklySprintTool = (tool: ActiveTool): tool is WeeklySprintSub =>
   weeklySprintTools.some((item) => item.id === tool);
@@ -25,16 +24,13 @@ const isOpsTool = (tool: ActiveTool): tool is OpsSub => opsTools.some((item) => 
 const isFinanceTool = (tool: ActiveTool): tool is FinanceSub =>
   financeTools.some((item) => item.id === tool);
 
-const isToolsTool = (tool: ActiveTool): tool is ToolsSub => toolsTools.some((item) => item.id === tool);
-
 const menuSections: { label: string; tools: { id: ActiveTool; label: string; icon: string }[] }[] = [
   { label: 'Ops Dashboard', tools: opsTools },
   { label: 'Weekly Sprint Tasks', tools: weeklySprintTools },
   { label: 'Marketing', tools: marketingTools },
-  // Finance sits below the two halves of the business it adds up and above
-  // the standalone utilities — the order the sections are read in.
+  // Finance sits below the two halves of the business it adds up — the order
+  // the sections are read in.
   { label: 'Finance', tools: financeTools },
-  { label: 'Tools', tools: toolsTools },
 ];
 
 // Every sidebar id there is, derived from the sections rather than written
@@ -161,8 +157,6 @@ const App = () => {
             <OpsDashboard activeTool={activeTool} />
           ) : isFinanceTool(activeTool) ? (
             <FinanceDashboard activeTool={activeTool} />
-          ) : isToolsTool(activeTool) ? (
-            <ToolsDashboard activeTool={activeTool} />
           ) : null}
         </div>
       </main>

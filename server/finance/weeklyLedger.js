@@ -20,21 +20,35 @@
 // WHAT COUNTS AS SPEND
 //
 //   purchase          the raw-material and ad-hoc buying, out of SQLite. The
-//                     bulk of it, and always available.
+//                     bulk of it, and always available. Labour and
+//                     miscellaneous spend are purchase lines too (categories
+//                     "Labour" / "Miscellaneous", see recordExpense in
+//                     ops/shared/purchasing.js) and are reported as their own
+//                     `labour` / `misc` figures rather than as purchases.
+//                     A line tagged as practice (purpose "Practice" or
+//                     category "Practice / R&D") is NOT spend here: a practice
+//                     cook fed no sale, so counting it would make a week that
+//                     trialled a rub look like a week that lost money. It is
+//                     totalled as `practice` and added back only in
+//                     `investment` — everything that went out, practice too.
+//                     An "Investment" line (the Weekly Purchasing Investment
+//                     tab — a smoker, a freezer) is treated the same way: out
+//                     of spend, totalled as `investmentBuys`, in `investment`.
 //   marketing_budget  ad spend and the rest of the marketing ledger, pro-rated
 //                     into each week by day-share (see marketingBudget.js).
 //
-// Not counted, and deliberately: rent, salaries, gas, electricity, equipment.
-// None of them is recorded anywhere in this app, and inventing a fixed weekly
-// figure for them would turn a measured number into a guess wearing a
-// measured number's clothes. The screen says outright that it is a
-// cash-purchases view, not a P&L, so nobody reads "net" as profit.
+// Not counted, and deliberately: rent, electricity, and anything else nobody
+// has typed in. Inventing a fixed weekly figure for them would turn a measured
+// number into a guess wearing a measured number's clothes. The screen says
+// outright that it is a recorded-spend view, not a P&L, so nobody reads "net"
+// as profit.
 //
 // WHAT COUNTS AS SALES
 //
 //   b2b_sale          wholesale invoices, out of SQLite, by delivery date.
 //                     Always available.
-//   Odoo sale.order   the B2C side, by order date, confirmed orders only.
+//   Odoo sale.order   the B2C side, by the weekend slot the order is for
+//                     (Expected Date; order date if none), confirmed only.
 //                     Optional — if Odoo is not configured or is down, the
 //                     week rows still report the B2B half and the screen says
 //                     which half is missing.
@@ -80,9 +94,10 @@
 // the total printed under it.
 import { all } from '../core/db.js';
 import { listBudgets } from '../marketing/marketingBudget.js';
+import { INVESTMENT_CATEGORY, LABOUR_CATEGORY, MISC_CATEGORY, PRACTICE_CATEGORY } from '../core/expenseCategories.js';
 import { listSales } from '../ops/b2b/b2bSales.js';
 import { fetchAttributedOrders, channelFromGaSource, UNATTRIBUTED } from '../marketing/orderAttribution.js';
-import { getConfig as getOdooConfig } from '../integrations/odoo.js';
+import { getConfig as getOdooConfig, fetchSoldItems } from '../integrations/odoo.js';
 
 // The Odoo order-source value that means "this is wholesale". Matches the
 // entry in CHANNELS in orderAttribution.js — the two are the same selection
@@ -184,7 +199,19 @@ function emptyWeek(week) {
       uncategorised: 0,
       purchases: 0,
       marketing: 0,
+      labour: 0,
+      misc: 0,
       total: 0,
+      // Practice buying, outside `total` and every other figure above — see
+      // WHAT COUNTS AS SPEND. Split by side so a filtered view can still add
+      // its own practice into its investment figure.
+      practice: 0,
+      practiceB2c: 0,
+      practiceB2b: 0,
+      // Investment-tab buying, kept out of spend the same way as practice.
+      investmentBuys: 0,
+      investmentB2c: 0,
+      investmentB2b: 0,
       // The same money again, cut the other way: which side of the business
       // it was spent on. `shared` is the marketing that belongs to neither —
       // see the note at the top of this file on why it is not apportioned.
@@ -193,7 +220,7 @@ function emptyWeek(week) {
       shared: 0,
     },
     sales: { b2c: 0, b2b: 0, total: 0 },
-    counts: { purchaseLines: 0, uncostedLines: 0, b2cOrders: 0, b2bInvoices: 0, marketingRows: 0 },
+    counts: { purchaseLines: 0, uncostedLines: 0, b2cOrders: 0, b2bInvoices: 0, marketingRows: 0, expenseRows: 0 },
     // Booked is not banked. A wholesale invoice is revenue on the day it is
     // delivered and cash whenever the client pays, which on 15-day terms is
     // the week after next — so a week can look profitable and still be the
@@ -203,6 +230,11 @@ function emptyWeek(week) {
     // Odoo orders tagged B2B: excluded from `sales.b2c` above, kept here so
     // the overlap can be reported instead of silently disappearing.
     b2bTaggedOdoo: 0,
+    // Discounts given on the B2C orders counted in `sales.b2c`. Already taken
+    // out of that figure — this is what the week gave away, not a cost to
+    // subtract again. `onItems` is a Discount (%) on a dish line, `coupons` a
+    // negative line of its own.
+    discounts: { total: 0, onItems: 0, coupons: 0, orders: 0 },
     partialMarketing: false,
   };
 }
@@ -249,6 +281,7 @@ const PURCHASE_SQL = `
          p.channel,
          p.item_type,
          p.expense_category,
+         p.purpose,
          p.total_cost,
          p.item_name,
          p.client_id,
@@ -299,11 +332,33 @@ async function buildWeeklyReport({ fromDate, toDate, weeks } = {}) {
   // Odoo is fetched alongside nothing else it can take down with it. Unlike
   // the ROI screen, revenue here is not all Odoo's — the wholesale half lives
   // locally — so a failed read degrades the screen rather than emptying it.
-  const b2c = odoo.configured
-    ? await fetchAttributedOrders({ fromDate: rangeFrom, toDate: rangeTo })
+  const b2cRead = odoo.configured
+    ? fetchAttributedOrders({ fromDate: rangeFrom, toDate: rangeTo, dateBy: 'promised' })
         .then((result) => ({ orders: result.orders, error: '' }))
         .catch((err) => ({ orders: [], error: err.message || String(err) }))
     : { orders: [], error: '' };
+
+  // Money taken off the weekend orders, per Odoo order id. Read from the order
+  // lines, because sale.order carries no discount figure of its own: a
+  // percentage typed on a dish line and a negative "Discount"/coupon line are
+  // both only visible there. fetchSoldItems already works out the rupees for
+  // both shapes (the same figure Sales by Item totals), so it is reused rather
+  // than re-derived. Its own failure only blanks the discount column — sales
+  // are already net of every discount, so nothing else on the screen depends
+  // on it.
+  const linesRead = odoo.configured
+    ? fetchSoldItems({ fromDate: rangeFrom, toDate: rangeTo })
+        .then((result) => ({ lines: result.lines, error: '' }))
+        .catch((err) => ({ lines: [], error: err.message || String(err) }))
+    : { lines: [], error: '' };
+  const [b2c, discountRead] = await Promise.all([b2cRead, linesRead]);
+  const discountByOrder = new Map();
+  for (const line of discountRead.lines) {
+    const entry = discountByOrder.get(line.orderId) || { onItems: 0, coupons: 0 };
+    if (line.isDiscountLine) entry.coupons += -line.revenue;
+    else entry.onItems += line.discount || 0;
+    discountByOrder.set(line.orderId, entry);
+  }
 
   const rows = new Map(buckets.map((week) => [week.weekStart, emptyWeek(week)]));
   // Anything dated inside the range but outside every bucket cannot happen —
@@ -316,6 +371,8 @@ async function buildWeeklyReport({ fromDate, toDate, weeks } = {}) {
   const vendors = new Map();
   const categories = new Map();
   let uncostedLines = 0;
+  let practiceLines = 0;
+  let investmentLines = 0;
 
   // Every rollup on this screen is filterable by side, so the category list
   // carries its own split rather than being the one table that silently stays
@@ -377,9 +434,31 @@ async function buildWeeklyReport({ fromDate, toDate, weeks } = {}) {
     }
 
     const cost = Number(line.total_cost) || 0;
-    const bucket = purchaseBucket(line.item_type);
+
+    // Practice comes out here, before any bucket, vendor, category or client
+    // sees it — it is in none of this screen's spend, only in investment.
+    if (line.purpose === 'Practice' || line.expense_category === PRACTICE_CATEGORY) {
+      week.spend.practice += cost;
+      week.spend[line.channel === 'B2B' ? 'practiceB2b' : 'practiceB2c'] += cost;
+      practiceLines += 1;
+      return;
+    }
+    if (line.expense_category === INVESTMENT_CATEGORY) {
+      week.spend.investmentBuys += cost;
+      week.spend[line.channel === 'B2B' ? 'investmentB2b' : 'investmentB2c'] += cost;
+      investmentLines += 1;
+      return;
+    }
+
+    // Labour and miscellaneous are reported beside purchases, not inside them:
+    // a week's wages are not a buy, and Spending vs Sales shows them as their
+    // own columns.
+    const expenseBucket =
+      line.expense_category === LABOUR_CATEGORY ? 'labour' : line.expense_category === MISC_CATEGORY ? 'misc' : null;
+    const bucket = expenseBucket || purchaseBucket(line.item_type);
     week.spend[bucket] += cost;
-    week.spend.purchases += cost;
+    if (expenseBucket) week.counts.expenseRows += 1;
+    else week.spend.purchases += cost;
     week.spend.total += cost;
 
     // The side of the business this cost belongs to. The column is NOT NULL
@@ -389,7 +468,11 @@ async function buildWeeklyReport({ fromDate, toDate, weeks } = {}) {
     week.spend[side] += cost;
     if (side === 'b2b') b2bPurchaseSpend += cost;
 
-    const vendor = line.vendor_name || line.vendor_id || 'Unknown vendor';
+    // A miscellaneous entry is listed under the name it was entered with (what
+    // recordExpense stores as item_name), not under the catch-all
+    // "Miscellaneous" vendor and category every such entry shares.
+    const miscName = expenseBucket === 'misc' ? String(line.item_name || '').trim() || null : null;
+    const vendor = miscName || line.vendor_name || line.vendor_id || 'Unknown vendor';
     const vendorRow = vendors.get(vendor) || { vendor, spend: 0, b2c: 0, b2b: 0, lines: 0 };
     vendorRow.spend += cost;
     vendorRow[side] += cost;
@@ -414,7 +497,7 @@ async function buildWeeklyReport({ fromDate, toDate, weeks } = {}) {
     // everything bought before the column had a writer is blank too. So the
     // fallback stays the bucket rather than a blank label — a "where did it
     // go" list of empty strings answers nothing.
-    addCategory(line.expense_category || bucket, side, cost);
+    addCategory(miscName || line.expense_category || bucket, side, cost);
   });
 
   // ---- Marketing spend ---------------------------------------------------
@@ -502,7 +585,11 @@ async function buildWeeklyReport({ fromDate, toDate, weeks } = {}) {
   };
 
   b2c.orders.forEach((order) => {
-    const week = weekOf(String(order.orderedOn).slice(0, 10));
+    // By the weekend slot the order is for, not the day it was placed — the
+    // site takes orders upfront for later weekends, and that money belongs to
+    // the week it is cooked and served in, beside the buying that fed it.
+    // Falls back to the ordering day for an order with no promised day.
+    const week = weekOf(order.promisedDay || String(order.orderedOn).slice(0, 10));
     if (!week) return;
 
     // Draft quotations. Real money soon, not revenue now — the same rule the
@@ -527,6 +614,16 @@ async function buildWeeklyReport({ fromDate, toDate, weeks } = {}) {
     week.sales.b2c += order.amount;
     week.sales.total += order.amount;
     week.counts.b2cOrders += 1;
+
+    // Only for orders counted as sales above, so drafts and B2B-tagged orders
+    // cannot put a discount in a week whose revenue they are not in.
+    const off = discountByOrder.get(order.id);
+    if (off && off.onItems + off.coupons > 0.5) {
+      week.discounts.onItems += off.onItems;
+      week.discounts.coupons += off.coupons;
+      week.discounts.total += off.onItems + off.coupons;
+      week.discounts.orders += 1;
+    }
 
     // An order with neither a link nor a filed source is not spread across
     // the channels that do have one -- it gets the Unattributed row, exactly
@@ -557,7 +654,11 @@ async function buildWeeklyReport({ fromDate, toDate, weeks } = {}) {
       uncategorised: round(row.spend.uncategorised),
       purchases: round(row.spend.purchases),
       marketing: round(row.spend.marketing),
+      labour: round(row.spend.labour),
+      misc: round(row.spend.misc),
       total: round(row.spend.total),
+      practice: round(row.spend.practice),
+      investmentBuys: round(row.spend.investmentBuys),
       b2c: round(row.spend.b2c),
       b2b: round(row.spend.b2b),
       shared: round(row.spend.shared),
@@ -577,6 +678,12 @@ async function buildWeeklyReport({ fromDate, toDate, weeks } = {}) {
       counts: row.counts,
       b2bOutstanding: round(row.b2bOutstanding),
       b2bTaggedOdoo: round(row.b2bTaggedOdoo),
+      discounts: {
+        total: round(row.discounts.total),
+        onItems: round(row.discounts.onItems),
+        coupons: round(row.discounts.coupons),
+        orders: row.discounts.orders,
+      },
       partialMarketing: row.partialMarketing,
       // Whether anything at all happened in this week. A closed weekend is a
       // real answer and the row stays, but the screen greys it rather than
@@ -587,6 +694,12 @@ async function buildWeeklyReport({ fromDate, toDate, weeks } = {}) {
 
   const totalSpend = weekRows.reduce((sum, week) => sum + week.spend.total, 0);
   const totalSales = weekRows.reduce((sum, week) => sum + week.sales.total, 0);
+  const practiceB2c = [...rows.values()].reduce((sum, row) => sum + row.spend.practiceB2c, 0);
+  const practiceB2b = [...rows.values()].reduce((sum, row) => sum + row.spend.practiceB2b, 0);
+  const practiceTotal = practiceB2c + practiceB2b;
+  const investmentB2c = [...rows.values()].reduce((sum, row) => sum + row.spend.investmentB2c, 0);
+  const investmentB2b = [...rows.values()].reduce((sum, row) => sum + row.spend.investmentB2b, 0);
+  const investmentBuys = investmentB2c + investmentB2b;
   const trading = weekRows.filter((week) => !week.quiet);
 
   // Best and worst are picked over trading weeks only. A quiet week is a net
@@ -613,6 +726,9 @@ async function buildWeeklyReport({ fromDate, toDate, weeks } = {}) {
         // the first means the B2C column is missing and should come back, the
         // second means it was never there.
         reachable: odoo.configured && !b2c.error,
+        // The order-line read behind the discount column, which can fail on
+        // its own while the order totals came back fine.
+        discountsError: discountRead.error,
       },
     },
     totals: {
@@ -623,6 +739,20 @@ async function buildWeeklyReport({ fromDate, toDate, weeks } = {}) {
       services: round(weekRows.reduce((sum, week) => sum + week.spend.services, 0)),
       uncategorised: round(weekRows.reduce((sum, week) => sum + week.spend.uncategorised, 0)),
       marketing: round(weekRows.reduce((sum, week) => sum + week.spend.marketing, 0)),
+      labour: round(weekRows.reduce((sum, week) => sum + week.spend.labour, 0)),
+      misc: round(weekRows.reduce((sum, week) => sum + week.spend.misc, 0)),
+      // Practice buying, left out of `spend` above, and what the range cost
+      // with it put back: spend + practice. Per side too, for the side filter.
+      practice: round(practiceTotal),
+      practiceB2c: round(practiceB2c),
+      practiceB2b: round(practiceB2b),
+      practiceLines,
+      // Investment-tab lines, also left out of `spend`.
+      investmentBuys: round(investmentBuys),
+      investmentB2c: round(investmentB2c),
+      investmentB2b: round(investmentB2b),
+      investmentLines,
+      investment: round(totalSpend + practiceTotal + investmentBuys),
       b2c: round(weekRows.reduce((sum, week) => sum + week.sales.b2c, 0)),
       b2b: round(weekRows.reduce((sum, week) => sum + week.sales.b2b, 0)),
       b2cSpend: round(weekRows.reduce((sum, week) => sum + week.spend.b2c, 0)),
@@ -643,6 +773,10 @@ async function buildWeeklyReport({ fromDate, toDate, weeks } = {}) {
       b2bTaggedOrders,
       pendingRevenue: round(pendingRevenue),
       pendingOrders,
+      discounts: round(weekRows.reduce((sum, week) => sum + week.discounts.total, 0)),
+      discountOnItems: round(weekRows.reduce((sum, week) => sum + week.discounts.onItems, 0)),
+      discountCoupons: round(weekRows.reduce((sum, week) => sum + week.discounts.coupons, 0)),
+      discountedOrders: weekRows.reduce((sum, week) => sum + week.discounts.orders, 0),
     },
     // The whole range, per side. The headline answer to "does wholesale pay":
     // its own cost against its own revenue, with the marketing that could not

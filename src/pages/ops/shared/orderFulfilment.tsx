@@ -30,6 +30,9 @@ export type PackInvoice = { number: string; id: string | null; url: string | nul
 export type PackingStatus = {
   status: PackStatusValue;
   deliveryPerson: string | null;
+  // The Porter (or any courier's) live tracking link — saved from the card,
+  // and pasting one moves the order to Out for Delivery.
+  trackingUrl: string | null;
   inSmokerAt: string | null;
   preppingAt: string | null;
   packedAt: string | null;
@@ -58,6 +61,7 @@ export type PackingStatus = {
 export const PENDING_STATUS: PackingStatus = {
   status: 'pending',
   deliveryPerson: null,
+  trackingUrl: null,
   inSmokerAt: null,
   preppingAt: null,
   packedAt: null,
@@ -96,9 +100,23 @@ export const STAGES: Stage[] = [
   { key: 'delivered', label: 'Delivered', emoji: '✅', atKey: 'deliveredAt', odooValue: 'delivered' },
 ];
 
-// From this stage on the delivery partner is either known or being chased, so
-// the name field is offered and the chip shown.
-const PARTNER_KNOWN_FROM_INDEX = STAGES.findIndex((s) => s.key === 'finding_partner');
+// From this stage on a rider can already be booked, so the tracking-link field
+// is offered. Earlier than that the box isn't close to leaving and the field
+// would only be clutter on a card being cooked for.
+const TRACKING_FROM_INDEX = STAGES.findIndex((s) => s.key === 'prepping');
+const OUT_FOR_DELIVERY_INDEX = STAGES.findIndex((s) => s.key === 'out_for_delivery');
+
+// The first link in whatever was pasted — Porter's share text wraps the link
+// in a sentence, and often drops the https:// ("porter.in/rd/b98a3b5ba4"),
+// which is added back. Mirrors cleanTrackingUrl in
+// server/ops/shared/orderPackingStatus.js, which has the final say.
+export const extractTrackingUrl = (raw: string): string | null => {
+  const text = String(raw || '');
+  const found = text.match(/https?:\/\/[^\s<>"']+/i) || text.match(/(?:[a-z0-9-]+\.)+[a-z]{2,}\/[^\s<>"']+/i);
+  if (!found) return null;
+  const link = found[0].replace(/[).,;]+$/, '');
+  return /^https?:\/\//i.test(link) ? link : `https://${link}`;
+};
 
 // How Odoo labels each Fulfilment Status value on the sale order form, so the
 // dropdown and drift warning read in Odoo's words rather than this app's.
@@ -237,6 +255,45 @@ export function useOrderFulfilment(orderIds: number[], channel: 'B2C' | 'B2B' = 
     [channel],
   );
 
+  // Saves the tracking link; `advance` also moves the order to Out for
+  // Delivery (the caller knows the stage Odoo shows, so it decides).
+  const saveTrackingLink = useCallback(
+    async (order: FulfilmentOrder, trackingUrl: string, advance: boolean) => {
+      const key = String(order.orderId);
+      setBusy((prev) => ({ ...prev, [key]: true }));
+      setErrors((prev) => ({ ...prev, [key]: '' }));
+      try {
+        const resp = await fetch('/api/order-packing/tracking', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ orderId: order.orderId, orderName: order.orderName, trackingUrl, advance, channel }),
+        });
+        const json = await resp.json();
+        if (!resp.ok) throw new Error(json.error || 'Failed to save the tracking link.');
+        setStatuses((prev) => ({
+          ...prev,
+          // A link-only save carries no Odoo echo; keep the last one so the
+          // stage shown doesn't fall back to the fetch-time snapshot.
+          [key]: advance ? { ...json, savedHere: true } : { ...prev[key], ...json },
+        }));
+        // Saved on the board, but Odoo (and so the customer's tracker) missed it.
+        if (json.odooTrackingError) {
+          setErrors((prev) => ({
+            ...prev,
+            [key]: `Link saved here, but Odoo didn't take it: ${json.odooTrackingError}`,
+          }));
+        }
+        return true;
+      } catch (err) {
+        setErrors((prev) => ({ ...prev, [key]: String((err as Error).message || err) }));
+        return false;
+      } finally {
+        setBusy((prev) => ({ ...prev, [key]: false }));
+      }
+    },
+    [channel],
+  );
+
   const retryInvoice = useCallback(async (order: FulfilmentOrder) => {
     const key = String(order.orderId);
     setBusy((prev) => ({ ...prev, [key]: true }));
@@ -273,7 +330,7 @@ export function useOrderFulfilment(orderIds: number[], channel: 'B2C' | 'B2B' = 
     [setStatus],
   );
 
-  return { statuses, busy, errors, setStatus, setStatusBulk, retryInvoice };
+  return { statuses, busy, errors, setStatus, setStatusBulk, saveTrackingLink, retryInvoice };
 }
 
 // The current stage as a badge — lives in the order card's header row so the
@@ -341,7 +398,7 @@ export const BulkStatusBar: React.FC<BulkStatusBarProps> = ({ orders, statuses, 
       >
         {STAGES.map((stage) => (
           <option key={stage.key} value={stage.key}>
-            {stage.emoji} {stage.label} · {ODOO_STATUS_LABELS[stage.odooValue]}
+            {stage.emoji} {stage.label}
           </option>
         ))}
       </select>
@@ -358,27 +415,126 @@ export type FulfilmentControlProps = {
   busy: boolean;
   error?: string;
   onSetStatus: (order: FulfilmentOrder, status: Exclude<PackStatusValue, 'pending'>, deliveryPerson?: string) => void;
+  onSaveTracking: (order: FulfilmentOrder, trackingUrl: string, advance: boolean) => Promise<boolean>;
   onRetryInvoice: (order: FulfilmentOrder) => void;
 };
 
-// Badge + Odoo status dropdown + delivery-partner field + invoice state for
-// one order.
+// The rider's live tracking link. Pasting is the whole interaction: a link
+// pasted into the box saves straight away and, if the order isn't out yet,
+// moves it to Out for Delivery — the rider having a tracking link IS the box
+// having left. Typing one works too (Enter or Save), for the odd link that
+// arrives some other way.
+const TrackingLinkField: React.FC<{
+  order: FulfilmentOrder;
+  savedUrl: string | null;
+  busy: boolean;
+  advances: boolean;
+  onSave: FulfilmentControlProps['onSaveTracking'];
+}> = ({ order, savedUrl, busy, advances, onSave }) => {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState('');
+  const [localError, setLocalError] = useState('');
+
+  const save = async (raw: string) => {
+    const url = extractTrackingUrl(raw);
+    if (!url) {
+      setLocalError("That doesn't look like a link — paste the https:// link Porter shares.");
+      return;
+    }
+    setLocalError('');
+    const ok = await onSave(order, url, advances);
+    if (ok) {
+      setEditing(false);
+      setDraft('');
+    }
+  };
+
+  if (savedUrl && !editing) {
+    return (
+      <div className="pack-tracking pack-tracking-saved">
+        <span className="pack-tracking-label">🛵 Porter tracking</span>
+        <div className="pack-tracking-row">
+          <a className="pack-tracking-link" href={savedUrl} target="_blank" rel="noreferrer">
+            Open live tracking ↗
+          </a>
+          <button
+            type="button"
+            className="pack-link-btn"
+            onClick={() => {
+              setDraft(savedUrl);
+              setEditing(true);
+            }}
+          >
+            Change
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="pack-tracking">
+      <label className="pack-tracking-label" htmlFor={`tracking-${order.orderId}`}>
+        🛵 Porter tracking link
+      </label>
+      <div className="pack-tracking-row">
+        <input
+          id={`tracking-${order.orderId}`}
+          type="url"
+          inputMode="url"
+          placeholder="Paste the Porter link here"
+          value={draft}
+          disabled={busy}
+          onChange={(e) => setDraft(e.target.value)}
+          onPaste={(e) => {
+            const pasted = e.clipboardData.getData('text');
+            if (!extractTrackingUrl(pasted)) return; // let it land; Save will explain
+            e.preventDefault();
+            setDraft(pasted.trim());
+            void save(pasted);
+          }}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && draft.trim()) void save(draft);
+          }}
+        />
+        <button
+          type="button"
+          className="secondary-button small"
+          disabled={busy || !draft.trim()}
+          onClick={() => void save(draft)}
+        >
+          {busy ? 'Saving…' : 'Save'}
+        </button>
+        {editing && (
+          <button type="button" className="pack-link-btn" onClick={() => setEditing(false)}>
+            Cancel
+          </button>
+        )}
+      </div>
+      <span className="pack-tracking-hint">
+        {advances ? 'Pasting a link marks this order 🛵 Out for delivery.' : 'Saved on the order for the team.'}
+      </span>
+      {localError && <span className="pack-tracking-error">{localError}</span>}
+    </div>
+  );
+};
+
+// Odoo status dropdown + tracking link + invoice state for one order.
 export const FulfilmentControl: React.FC<FulfilmentControlProps> = ({
   order,
   status,
   busy,
   error,
   onSetStatus,
+  onSaveTracking,
   onRetryInvoice,
 }) => {
   const st = status || PENDING_STATUS;
-  const [partnerDraft, setPartnerDraft] = useState<string | null>(null);
 
   // Odoo's word on where this order is, falling back to the local stage.
   const current = effectiveStatus(order, st);
   const stageIndex = STAGES.findIndex((s) => s.key === current);
-  const showsPartner = stageIndex >= PARTNER_KNOWN_FROM_INDEX;
-  const partnerValue = partnerDraft ?? st.deliveryPerson ?? '';
+  const showsTracking = stageIndex >= TRACKING_FROM_INDEX || Boolean(st.trackingUrl);
 
   // Odoo holds a value with no stage on this board — a selection option added
   // or renamed in Odoo since. Worth saying out loud, because the stage shown
@@ -388,28 +544,27 @@ export const FulfilmentControl: React.FC<FulfilmentControlProps> = ({
 
   return (
     <div className="pack-status-block">
-      {/* One dropdown drives everything: it saves the stage locally (the
-          source of truth), swaps the Odoo status tag, and writes Odoo's own
-          Fulfilment Status field. Every stage is selectable rather than just
-          the next one, so a mis-click can be walked back without needing a
-          separate path for it. */}
+      {/* One dropdown drives everything: it saves the stage locally, swaps the
+          Odoo status tag, and writes Odoo's own Fulfilment Status field. Every
+          stage is selectable rather than just the next one, so a mis-click can
+          be walked back. */}
       <label className="pack-status-select">
-        <span className="pack-status-select-label">Fulfilment status (Odoo)</span>
+        <span className="pack-status-select-label">Stage</span>
         <select
           value={current === 'pending' ? '' : current}
           disabled={busy}
           onChange={(e) => {
             const next = e.target.value as Exclude<PackStatusValue, 'pending'>;
             if (!next) return;
-            onSetStatus(order, next, partnerDraft ?? undefined);
+            onSetStatus(order, next);
           }}
         >
           <option value="" disabled>
-            {busy ? 'Updating…' : 'Not started'}
+            {busy ? 'Updating…' : '⏳ Not started'}
           </option>
           {STAGES.map((stage) => (
             <option key={stage.key} value={stage.key}>
-              {stage.emoji} {stage.label} · {ODOO_STATUS_LABELS[stage.odooValue]}
+              {stage.emoji} {stage.label}
             </option>
           ))}
         </select>
@@ -422,33 +577,23 @@ export const FulfilmentControl: React.FC<FulfilmentControlProps> = ({
         </p>
       )}
 
-      {/* Who's delivering — offered from "finding partner" onwards, and still
-          editable after that so a swapped partner can be corrected without
-          walking the stage back just to re-capture the name. */}
-      {showsPartner && (
-        <div className="pack-dispatch-form">
-          <input
-            type="text"
-            placeholder="Delivery partner name"
-            value={partnerValue}
-            onChange={(e) => setPartnerDraft(e.target.value)}
-          />
-          <button
-            type="button"
-            className="secondary-button small"
-            disabled={busy || !partnerValue.trim()}
-            onClick={() => onSetStatus(order, current as Exclude<PackStatusValue, 'pending'>, partnerValue)}
-          >
-            {busy ? 'Saving…' : 'Save partner'}
-          </button>
-        </div>
+      {showsTracking && (
+        <TrackingLinkField
+          // Remount when the saved link changes so a stale draft can't linger.
+          key={st.trackingUrl || 'none'}
+          order={order}
+          savedUrl={st.trackingUrl}
+          busy={busy}
+          advances={stageIndex < OUT_FOR_DELIVERY_INDEX}
+          onSave={onSaveTracking}
+        />
       )}
 
       {current === 'delivered' && (
         <div className="pack-invoice-box">
           {st.invoice ? (
-            <span>
-              🧾 <strong>{st.invoice.number}</strong>
+            <span className="pack-invoice-ok">
+              🧾 Invoice <strong>{st.invoice.number}</strong>
               {st.invoice.url && (
                 <>
                   {' · '}
@@ -459,18 +604,21 @@ export const FulfilmentControl: React.FC<FulfilmentControlProps> = ({
               )}
             </span>
           ) : st.invoiceError ? (
-            <span className="pack-invoice-error">
-              ⚠️ Invoice failed: {st.invoiceError}
+            <div className="pack-invoice-error">
+              <div>
+                <strong>⚠️ Invoice not raised</strong>
+                <span className="pack-invoice-error-detail">{st.invoiceError}</span>
+              </div>
               <button type="button" className="secondary-button small" disabled={busy} onClick={() => onRetryInvoice(order)}>
-                {busy ? 'Retrying…' : 'Retry invoice'}
+                {busy ? 'Retrying…' : 'Retry'}
               </button>
-            </span>
+            </div>
           ) : st.status === 'delivered' ? (
             <span>Generating invoice…</span>
           ) : (
             // Odoo was moved to DELIVERED somewhere else, so the invoice step
             // never ran from here — re-picking Delivered above runs it.
-            <span>No invoice raised from here — pick Delivered above to raise one.</span>
+            <span className="pack-invoice-muted">No invoice raised from here — pick Delivered above to raise one.</span>
           )}
         </div>
       )}

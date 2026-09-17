@@ -11,7 +11,12 @@ import {
 import {
   defaultB2BRange,
   defaultWeekendRange,
+  formatClockMinutes,
   formatDateInput,
+  hasDeadline,
+  leaveByMinutes,
+  prioritiseOrders,
+  sortByDistance,
   suggestedGroupId,
   type OrderTimePreference,
   type OrderTimePreferences,
@@ -42,21 +47,51 @@ import { copyToClipboard } from '../../../lib/clipboard';
 
 type PackChannel = 'B2C' | 'B2B';
 
+// ---- What the browser keeps between visits ---------------------------------
+// The fetched board and the Gemini read of its notes, each tagged with what it
+// was for so a stale one is never shown against a different range or notes.
+type BoardCache = { rangeKey: string; fetchedAt: number; data: PackingResponse };
+type NotesCache = { notesKey: string; preferences: OrderTimePreferences };
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+
+const reviveBoardCache = (stored: unknown): BoardCache | undefined => {
+  if (!isRecord(stored) || typeof stored.rangeKey !== 'string' || typeof stored.fetchedAt !== 'number') return undefined;
+  const data = stored.data;
+  if (!isRecord(data) || !Array.isArray(data.groups) || !Array.isArray(data.unmatched)) return undefined;
+  return stored as BoardCache;
+};
+
+const reviveNotesCache = (stored: unknown): NotesCache | undefined =>
+  isRecord(stored) && typeof stored.notesKey === 'string' && isRecord(stored.preferences)
+    ? (stored as NotesCache)
+    : undefined;
+
+// "10:42 AM" today, "Sat 10:42 AM" otherwise — enough to tell a board pulled
+// this morning from one left over from yesterday.
+const formatFetchedAt = (at: number): string => {
+  const d = new Date(at);
+  const sameDay = d.toDateString() === new Date().toDateString();
+  return d.toLocaleString('en-IN', {
+    ...(sameDay ? {} : { weekday: 'short' }),
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+};
+
 // Wording that differs per channel — the board itself is identical.
 const CHANNEL_COPY: Record<
   PackChannel,
-  { groupNoun: string; fetchHint: string; intro: string }
+  { groupNoun: string; fetchHint: string }
 > = {
   B2C: {
     groupNoun: 'delivery slot',
     fetchHint: 'Pulls confirmed, individual-customer Sales Orders — B2B/corporate orders are excluded.',
-    intro:
-      'Pick a delivery slot — Saturday Lunch, Saturday Dinner, Sunday Lunch or Sunday Dinner — and that slot’s orders fill the page',
   },
   B2B: {
     groupNoun: 'delivery day',
     fetchHint: 'Pulls confirmed Sales Orders for company accounts only — individual B2C orders are excluded.',
-    intro: 'Pick a delivery day and that day’s wholesale orders fill the page',
   },
 };
 
@@ -87,16 +122,46 @@ const formatPackBy = (iso: string | null) => {
 // "by 1PM if possible" and "MUST be there by 1" are the same badge and very
 // different kitchen decisions, so the quote is shown, not just a paraphrase.
 // Nothing renders for the orders that asked for nothing, which is most of them.
-const TimePreferenceCallout: React.FC<{ preference: OrderTimePreference | undefined }> = ({ preference }) => {
-  if (!preference?.hasPreference) return null;
+//
+// The same read also pulls out urgency flags ("Party at 1 PM") and a one-line
+// kitchen summary ("No onions; sauces separate"), shown under the callout — or
+// on their own when the note asked for no time at all.
+const NoteHighlights: React.FC<{ order: PackOrder; preference: OrderTimePreference | undefined }> = ({
+  order,
+  preference,
+}) => {
+  if (!preference) return null;
+  const flags = preference.urgencyFlags ?? [];
+  const kitchen = preference.kitchenInstructions ?? '';
+  const leaveBy = leaveByMinutes(order, preference);
   return (
-    <div className={`pack-time-pref pack-time-pref-${preference.confidence}`}>
-      <span className="pack-time-pref-label">⏰ {preference.label || 'Time preference'}</span>
-      {preference.quote && <span className="pack-time-pref-quote">“{preference.quote}”</span>}
-      {preference.confidence !== 'high' && (
-        <span className="pack-time-pref-hint">Read from a vague note — worth a look before you promise it.</span>
+    <>
+      {preference.hasPreference && (
+        <div className={`pack-time-pref pack-time-pref-${preference.confidence}`}>
+          <span className="pack-time-pref-label">⏰ {preference.label || 'Time preference'}</span>
+          {preference.quote && <span className="pack-time-pref-quote">“{preference.quote}”</span>}
+          {leaveBy != null && (
+            <span className="pack-time-pref-leave">
+              🛵 Leave by ~{formatClockMinutes(leaveBy)}
+              {order.distanceKm != null ? ` (~${order.distanceKm.toFixed(1)} km)` : ' (distance not measured)'}
+            </span>
+          )}
+          {preference.confidence !== 'high' && (
+            <span className="pack-time-pref-hint">Read from a vague note — worth a look before you promise it.</span>
+          )}
+        </div>
       )}
-    </div>
+      {flags.length > 0 && (
+        <div className="pack-urgency-flags">
+          {flags.map((flag) => (
+            <span key={flag} className="pack-urgency-flag">
+              ⚠️ {flag}
+            </span>
+          ))}
+        </div>
+      )}
+      {kitchen && <div className="pack-kitchen-line">🍳 {kitchen}</div>}
+    </>
   );
 };
 
@@ -229,30 +294,75 @@ const DeliveryContact: React.FC<{ order: PackOrder }> = ({ order }) => {
   );
 };
 
-// ---- Step 1: the orders, and where each one is ---------------------------
+// ---- The orders, and where each one is -----------------------------------
+type OrderSort = 'priority' | 'distance' | 'time';
+const ORDER_SORTS: OrderSort[] = ['priority', 'distance', 'time'];
+
+// Priority (the default) puts customers who asked for a time first, by when the
+// rider has to leave, then everyone else farthest first — see prioritiseOrders
+// in packing.ts. Distance alone is farthest first: the long runs need booking
+// and dispatching earliest. Orders with no distance (no address, not found,
+// not looked up yet) go after the measured ones in the server's time order.
+const sortOrders = (orders: PackOrder[], sortBy: OrderSort, preferences: OrderTimePreferences): PackOrder[] => {
+  if (sortBy === 'time') return orders;
+  if (sortBy === 'distance') return sortByDistance(orders);
+  return prioritiseOrders(orders, preferences);
+};
+
+// "~4.2 km · Koramangala", or why there's no number.
+const DistanceChip: React.FC<{ order: PackOrder }> = ({ order }) => {
+  if (order.distanceKm != null) {
+    return (
+      <span className="pack-distance" title="Straight-line distance from the kitchen">
+        📍 ~{order.distanceKm.toFixed(1)} km{order.locality ? ` · ${order.locality}` : ''}
+      </span>
+    );
+  }
+  if (order.distanceStatus === 'not_found') {
+    return (
+      <span className="pack-distance muted" title="The map couldn't place this address">
+        📍 Distance unknown
+      </span>
+    );
+  }
+  return null;
+};
+
 type OrdersBoardProps = {
   orders: PackOrder[];
+  sortBy: OrderSort;
   statuses: Record<string, PackingStatus>;
   busy: Record<string, boolean>;
   errors: Record<string, string>;
   isBulkBusy: boolean;
   timePreferences: OrderTimePreferences;
   onSetStatus: (order: FulfilmentOrder, status: Exclude<PackStatusValue, 'pending'>, deliveryPerson?: string) => void;
+  onSaveTracking: (order: FulfilmentOrder, trackingUrl: string, advance: boolean) => Promise<boolean>;
   onBulkApply: (orders: FulfilmentOrder[], status: Exclude<PackStatusValue, 'pending'>) => void;
   onRetryInvoice: (order: FulfilmentOrder) => void;
 };
 
+// "[PB-001] Signature Pulled Pork BBQ Burger" -> code + name, so the name
+// leads and the code sits quietly beside it for whoever packs by code.
+const splitItemName = (name: string): { code: string; label: string } => {
+  const match = name.match(/^\s*\[([^\]]+)\]\s*(.*)$/);
+  return match ? { code: match[1], label: match[2] } : { code: '', label: name };
+};
+
 const OrdersBoard: React.FC<OrdersBoardProps> = ({
   orders,
+  sortBy,
   statuses,
   busy,
   errors,
   isBulkBusy,
   timePreferences,
   onSetStatus,
+  onSaveTracking,
   onBulkApply,
   onRetryInvoice,
 }) => {
+  const sorted = useMemo(() => sortOrders(orders, sortBy, timePreferences), [orders, sortBy, timePreferences]);
   if (orders.length === 0) return <p className="pack-slot-empty">Nothing for this slot.</p>;
 
   return (
@@ -260,23 +370,30 @@ const OrdersBoard: React.FC<OrdersBoardProps> = ({
       <BulkStatusBar orders={orders} statuses={statuses} busy={isBulkBusy} onApply={onBulkApply} />
 
       <div className="pack-order-grid">
-        {orders.map((order, index) => {
+        {sorted.map((order, index) => {
           const key = String(order.orderId);
           return (
             <div key={order.orderId} className="pack-order-card">
               <div className="pack-order-header">
                 <span className="pack-order-rank">#{index + 1}</span>
                 <span className="pack-order-name">{order.orderName}</span>
+                {sortBy === 'priority' && hasDeadline(timePreferences[key]) && (
+                  <span className="pack-priority-chip" title="The customer asked for a delivery time">
+                    ⚡ Priority
+                  </span>
+                )}
                 <FulfilmentBadge order={order} status={statuses[key]} />
               </div>
+
               <div className="pack-order-customer">
-                <span>{order.customer}</span>
-                <span className="pack-order-time">{formatPackBy(order.packBy)}</span>
+                <span className="pack-order-customer-name">{order.customer}</span>
+                <span className="pack-order-time">🕒 {formatPackBy(order.packBy)}</span>
               </div>
+              <DistanceChip order={order} />
 
               <DeliveryContact order={order} />
 
-              <TimePreferenceCallout preference={timePreferences[key]} />
+              <NoteHighlights order={order} preference={timePreferences[key]} />
 
               {/* Below the time-preference callout: that one is the reading to
                   act on, this is the source it was read from (and the only
@@ -284,23 +401,33 @@ const OrdersBoard: React.FC<OrdersBoardProps> = ({
                   other than a time). */}
               <CustomerNote order={order} />
 
+              <div className="pack-order-section-label">
+                Items · {order.itemCount}
+              </div>
+              <ul className="pack-order-items">
+                {order.items.map((item) => {
+                  const { code, label } = splitItemName(item.name);
+                  return (
+                    <li key={item.itemId}>
+                      <span className="pack-order-item-qty">{item.qty}×</span>
+                      <span className="pack-order-item-name">
+                        {label}
+                        {code && <span className="pack-order-item-code">{code}</span>}
+                      </span>
+                    </li>
+                  );
+                })}
+              </ul>
+
               <FulfilmentControl
                 order={order}
                 status={statuses[key]}
                 busy={Boolean(busy[key])}
                 error={errors[key]}
                 onSetStatus={onSetStatus}
+                onSaveTracking={onSaveTracking}
                 onRetryInvoice={onRetryInvoice}
               />
-
-              <ul className="pack-order-items">
-                {order.items.map((item) => (
-                  <li key={item.itemId}>
-                    <span>{item.name}</span>
-                    <span className="pack-order-item-qty">× {item.qty}</span>
-                  </li>
-                ))}
-              </ul>
             </div>
           );
         })}
@@ -339,7 +466,23 @@ const OrderManagement: React.FC<{ channel?: PackChannel }> = ({ channel = 'B2C' 
 
   const [isFetching, setIsFetching] = useState(false);
   const [error, setError] = useState('');
-  const [data, setData] = useState<PackingResponse | null>(null);
+
+  // The last board fetched, kept in the browser with the range it was for.
+  // Reopening the page (or the OS evicting the tab mid-service) used to redo
+  // the whole Odoo fetch, the distance lookups and the Gemini note read; now
+  // it draws straight from here, and "Refresh orders" is the way to pull new
+  // orders in. A cache for a different range is ignored rather than shown —
+  // last weekend's orders under this weekend's dates would be worse than a
+  // spinner.
+  const rangeKey = `${channel}|${odooFrom}|${odooTo}`;
+  const [boardCache, setBoardCache] = usePersistedState<BoardCache | null>(
+    `smokerings.orderBoard.${channel}.board`,
+    null,
+    reviveBoardCache,
+  );
+  const data = boardCache && boardCache.rangeKey === rangeKey ? boardCache.data : null;
+  const setData = (next: PackingResponse, forRange = rangeKey) =>
+    setBoardCache({ rangeKey: forRange, fetchedAt: Date.now(), data: next });
 
   // One group's dashboard at a time — the picker strip below chooses which.
   // Held as an id rather than an index so a re-fetch that adds or drops a B2B
@@ -364,8 +507,19 @@ const OrderManagement: React.FC<{ channel?: PackChannel }> = ({ channel = 'B2C' 
     },
   );
 
+  // Priority by default — customers who asked for a time, by when the rider
+  // must leave, then farthest first. Plain distance and plain time order are
+  // one tap away. A new storage key, so boards that were left on the old
+  // distance default open on priority rather than keeping it.
+  const [sortBy, setSortBy] = usePersistedState<OrderSort>(
+    `smokerings.orderBoard.${channel}.sortBy`,
+    'priority',
+    (stored) => (ORDER_SORTS.includes(stored as OrderSort) ? (stored as OrderSort) : undefined),
+  );
+
   const handleFetch = async () => {
     if (!odooFrom || !odooTo || isFetching) return;
+    const forRange = rangeKey;
     setIsFetching(true);
     setError('');
     try {
@@ -379,7 +533,10 @@ const OrderManagement: React.FC<{ channel?: PackChannel }> = ({ channel = 'B2C' 
         throw new Error('Got an empty response from the server. Is the backend running (npm run start-server)? Try again.');
       }
       if (!resp.ok) throw new Error(json.error || 'Odoo request failed.');
-      setData(json);
+      setData(json, forRange);
+      // A manual refresh re-measures anything new, which the locate pass
+      // otherwise runs only once per range.
+      locatedRange.current = '';
     } catch (err) {
       setError(String((err as Error).message || err));
     } finally {
@@ -389,19 +546,72 @@ const OrderManagement: React.FC<{ channel?: PackChannel }> = ({ channel = 'B2C' 
 
   // Nobody should have to press a button to see the range's orders — the
   // fetch is part of loading the board. Runs on mount and again whenever the
-  // range (or channel) changes; the ref keeps StrictMode's double-mount (and
-  // a re-render with the same dates) from firing a second request. Safe to
-  // re-run because the fetch replaces the board rather than adding to it.
-  const autoFetchedRange = useRef('');
+  // range (or channel) changes, unless the browser already holds this range's
+  // board; the ref keeps StrictMode's double-mount (and a re-render with the
+  // same dates) from firing a second request. Safe to re-run because the
+  // fetch replaces the board rather than adding to it.
+  const autoFetchedRange = useRef(data ? rangeKey : '');
   useEffect(() => {
     if (!odooFrom || !odooTo) return;
-    const key = `${channel}|${odooFrom}|${odooTo}`;
-    if (autoFetchedRange.current === key) return;
-    autoFetchedRange.current = key;
+    if (autoFetchedRange.current === rangeKey) return;
+    autoFetchedRange.current = rangeKey;
+    if (boardCache?.rangeKey === rangeKey) return;
     void handleFetch();
-  }, [channel, odooFrom, odooTo]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rangeKey]);
 
   const groups = useMemo<PackGroup[]>(() => data?.groups || [], [data]);
+
+  // ---- Delivery distances ------------------------------------------------
+  // The fetch answers from the geocode cache. Addresses it has never seen come
+  // back 'pending', and one follow-up call looks those up (a second or so
+  // each — Nominatim's limit) and hands the board back with distances in.
+  // Once per range: every address is cached after its first lookup, so the
+  // next load of the same board sorts straight away.
+  const [isLocating, setIsLocating] = useState(false);
+  const [locateError, setLocateError] = useState('');
+  const locatedRange = useRef('');
+  const pendingDistanceCount = useMemo(
+    () =>
+      groups.reduce(
+        (sum, g) => sum + g.orders.filter((o) => o.distanceStatus === 'pending').length,
+        0,
+      ),
+    [groups],
+  );
+
+  useEffect(() => {
+    if (!pendingDistanceCount || !data?.kitchenLocated) return;
+    const key = `${channel}|${odooFrom}|${odooTo}`;
+    if (locatedRange.current === key) return;
+    locatedRange.current = key;
+    let cancelled = false;
+    setIsLocating(true);
+    setLocateError('');
+    fetch('/api/odoo/order-packing/locate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ from: odooFrom, to: odooTo, channel: channel.toLowerCase() }),
+    })
+      .then(async (resp) => {
+        const json: PackingResponse & { error?: string; located?: { error?: string } } = await resp.json();
+        if (!resp.ok) throw new Error(json.error || 'Could not work out delivery distances.');
+        if (cancelled) return;
+        setData(json);
+        if (json.located?.error) setLocateError(json.located.error);
+      })
+      .catch((err) => {
+        if (!cancelled) setLocateError(String((err as Error).message || err));
+      })
+      .finally(() => {
+        if (!cancelled) setIsLocating(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+    // Keyed on the count and range, not `data`: setData above must not re-run it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingDistanceCount, data?.kitchenLocated, channel, odooFrom, odooTo]);
 
   // The service the clock says is on right now — Saturday Dinner at 6pm on a
   // Saturday, the coming Saturday Lunch on a Wednesday, today's delivery day
@@ -446,7 +656,15 @@ const OrderManagement: React.FC<{ channel?: PackChannel }> = ({ channel = 'B2C' 
   //
   // Failing is non-fatal by design: no GEMINI_API_KEY, or a quota 503, costs
   // the highlights and nothing else. The note itself is still on the order.
-  const [timePreferences, setTimePreferences] = useState<OrderTimePreferences>({});
+  //
+  // The answer is kept in the browser beside the board, tagged with the notes
+  // it was read from, so reopening the page shows the callouts (and the
+  // priority order that depends on them) without asking Gemini again.
+  const [notesCache, setNotesCache] = usePersistedState<NotesCache | null>(
+    `smokerings.orderBoard.${channel}.notes`,
+    null,
+    reviveNotesCache,
+  );
   const [isReadingNotes, setIsReadingNotes] = useState(false);
   const [notesError, setNotesError] = useState('');
 
@@ -464,12 +682,14 @@ const OrderManagement: React.FC<{ channel?: PackChannel }> = ({ channel = 'B2C' 
     () => ordersWithNotes.map((order) => `${order.orderId}:${order.note.length}`).join('|'),
     [ordersWithNotes],
   );
+  const timePreferences = useMemo<OrderTimePreferences>(
+    () => (notesKey && notesCache?.notesKey === notesKey ? notesCache.preferences : {}),
+    [notesKey, notesCache],
+  );
 
   useEffect(() => {
-    if (!notesKey) {
-      setTimePreferences({});
-      return;
-    }
+    // Nothing to read, or already read for exactly these notes.
+    if (!notesKey || notesCache?.notesKey === notesKey) return;
     let cancelled = false;
     setIsReadingNotes(true);
     setNotesError('');
@@ -482,7 +702,7 @@ const OrderManagement: React.FC<{ channel?: PackChannel }> = ({ channel = 'B2C' 
       .then(async (resp) => {
         const json: { preferences?: OrderTimePreferences; error?: string } = await resp.json();
         if (!resp.ok) throw new Error(json.error || 'Could not read the order notes.');
-        if (!cancelled) setTimePreferences(json.preferences || {});
+        if (!cancelled) setNotesCache({ notesKey, preferences: json.preferences || {} });
       })
       .catch((err) => {
         if (!cancelled) setNotesError(String((err as Error).message || err));
@@ -523,11 +743,6 @@ const OrderManagement: React.FC<{ channel?: PackChannel }> = ({ channel = 'B2C' 
     <div className="wizard-page">
       <div className="wizard-header">
         <h1>Order Management{channel === 'B2B' ? ' — B2B' : ''}</h1>
-        <p>
-          {copy.intro} — every order with its Odoo Fulfilment Status dropdown (IN_SMOKER → PREPPING → PACKED →
-          PARTNER_ASGN → OUT_FOR_DEL → DELIVERED), written straight to the sale order and logged with its
-          timestamp. Marking Delivered also creates and posts the invoice, moving Odoo on to INVOICED.
-        </p>
       </div>
 
       <div className="wizard-shell">
@@ -560,7 +775,9 @@ const OrderManagement: React.FC<{ channel?: PackChannel }> = ({ channel = 'B2C' 
             {error && <p className="chat-error">{error}</p>}
             {hasResult && !error && (
               <p className="status-message">
-                Found {data!.ordersFound} order{data!.ordersFound === 1 ? '' : 's'} in that range.
+                Found {data!.ordersFound} order{data!.ordersFound === 1 ? '' : 's'} in that range
+                {boardCache?.fetchedAt ? ` · fetched ${formatFetchedAt(boardCache.fetchedAt)}` : ''}. Refresh to
+                pull in new orders.
               </p>
             )}
           </div>
@@ -640,8 +857,50 @@ const OrderManagement: React.FC<{ channel?: PackChannel }> = ({ channel = 'B2C' 
                 </p>
               )}
 
-              <h4 className="pack-orders-title">📦 Orders — earliest promised time first</h4>
+              {isLocating && (
+                <p className="pack-guide-note">📍 Measuring delivery distances for {pendingDistanceCount} new address{pendingDistanceCount === 1 ? '' : 'es'}…</p>
+              )}
+              {locateError && <p className="chat-error">📍 Couldn't measure every distance: {locateError}</p>}
+              {data && data.kitchenLocated === false && sortBy !== 'time' && (
+                <p className="pack-guide-note">
+                  📍 Distance sort needs the kitchen's location — set <code>KITCHEN_LAT</code> and{' '}
+                  <code>KITCHEN_LON</code> in <code>.env</code> and restart the server. Showing time order until then.
+                </p>
+              )}
+
+              <div className="pack-orders-toolbar">
+                <h4 className="pack-orders-title">📦 Orders</h4>
+                <div className="pack-sort-toggle" role="group" aria-label="Sort orders">
+                  <button
+                    type="button"
+                    className={sortBy === 'priority' ? 'active' : ''}
+                    aria-pressed={sortBy === 'priority'}
+                    onClick={() => setSortBy('priority')}
+                    title="Customers who asked for a time first, then farthest first"
+                  >
+                    ⚡ Priority
+                  </button>
+                  <button
+                    type="button"
+                    className={sortBy === 'distance' ? 'active' : ''}
+                    aria-pressed={sortBy === 'distance'}
+                    onClick={() => setSortBy('distance')}
+                  >
+                    📍 Farthest first
+                  </button>
+                  <button
+                    type="button"
+                    className={sortBy === 'time' ? 'active' : ''}
+                    aria-pressed={sortBy === 'time'}
+                    onClick={() => setSortBy('time')}
+                  >
+                    🕒 Earliest time
+                  </button>
+                </div>
+              </div>
               <OrdersBoard
+                sortBy={sortBy}
+                onSaveTracking={fulfilment.saveTrackingLink}
                 orders={activeGroup?.orders || []}
                 statuses={fulfilment.statuses}
                 busy={fulfilment.busy}

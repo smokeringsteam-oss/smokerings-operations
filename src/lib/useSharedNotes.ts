@@ -25,6 +25,8 @@ export type SharedNote = {
   done: boolean;
   doneAt: string | null;
   doneBy: string;
+  // Whose job it is, or '' when it is nobody's in particular.
+  assignedTo: string;
 };
 
 export type SharedNotes = {
@@ -278,6 +280,34 @@ async function setDone(id: number, done: boolean, by: string): Promise<void> {
   await load();
 }
 
+// Hands a note to someone (or to nobody with ''). Optimistic like the tick, so
+// the new name is on the row the moment Save is tapped.
+async function assign(id: number, assignedTo: string): Promise<void> {
+  const name = assignedTo.trim();
+  if (store.data) {
+    const notes = store.data.notes.map((note) => (note.id === id ? { ...note, assignedTo: name } : note));
+    publish({ ...store, data: { ...store.data, notes } });
+  }
+  let resp: Response;
+  let updated: unknown;
+  try {
+    resp = await fetch(`/api/notes/${id}/assignee`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ assignedTo: name }),
+    });
+    updated = await resp.json();
+  } catch (err) {
+    await load();
+    throw err;
+  }
+  if (!resp.ok) {
+    await load();
+    throw new Error((updated as { error?: string })?.error || `Request failed (${resp.status})`);
+  }
+  await load();
+}
+
 async function destroy(id: number): Promise<void> {
   const resp = await fetch(`/api/notes/${id}`, { method: 'DELETE' });
   const body = await resp.json();
@@ -345,6 +375,7 @@ export function useSharedNotes() {
     refresh: useCallback(() => load(), []),
     addNote: useCallback((body: string, author: string) => post(body, author), []),
     setDone: useCallback((id: number, done: boolean, by: string) => setDone(id, done, by), []),
+    assignNote: useCallback((id: number, assignedTo: string) => assign(id, assignedTo), []),
     deleteNote: useCallback((id: number) => destroy(id), []),
   };
 }

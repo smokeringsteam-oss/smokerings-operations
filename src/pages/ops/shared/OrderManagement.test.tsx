@@ -94,8 +94,8 @@ const waitForBoard = async () => {
   await waitFor(() => expect(document.querySelector('.slot-picker-btn.active')).toBeTruthy());
 };
 
-// Scoped to the picker strip: the page's intro paragraph names all four slots
-// too, so a bare text query matches the prose as well as the button.
+// Scoped to the picker strip, so a slot name used anywhere else on the page
+// can't match instead of the button.
 const clickSlot = (label: string) => {
   const button = Array.from(document.querySelectorAll('.slot-picker-btn')).find((el) =>
     el.textContent?.includes(label),
@@ -279,4 +279,154 @@ test('says nothing at all when Odoo has no contact on file', async () => {
   await waitForBoard();
 
   expect(document.querySelector('.pack-order-contact')).toBeNull();
+});
+
+test('pasting a Porter link saves it and moves a packed order out for delivery', async () => {
+  GROUPS = [
+    group('satLunch', 'Saturday Lunch', [order(1, { odooFulfilment: 'packed' })]),
+    group('satEvening', 'Saturday Dinner', []),
+    group('sunLunch', 'Sunday Lunch', []),
+    group('sunEvening', 'Sunday Dinner', []),
+  ];
+  atClock('2026-09-05T10:00:00');
+  render(<OrderManagement />);
+  await waitForBoard();
+
+  const input = screen.getByLabelText(/Porter tracking link/);
+  // Porter's share text wraps the link in a sentence; only the link is sent.
+  fireEvent.paste(input, {
+    clipboardData: { getData: () => 'Track your order here: https://porter.in/track_live_order?booking_id=CRN123' },
+  });
+
+  const fetchMock = globalThis.fetch as unknown as ReturnType<typeof vi.fn>;
+  await waitFor(() => {
+    const call = fetchMock.mock.calls.find(([url]) => String(url).includes('/api/order-packing/tracking'));
+    expect(call).toBeTruthy();
+    expect(JSON.parse(call![1].body)).toMatchObject({
+      orderId: 1,
+      trackingUrl: 'https://porter.in/track_live_order?booking_id=CRN123',
+      advance: true,
+    });
+  });
+});
+
+test('a Porter link pasted without https:// is still taken', async () => {
+  GROUPS = [
+    group('satLunch', 'Saturday Lunch', [order(1, { odooFulfilment: 'packed' })]),
+    group('satEvening', 'Saturday Dinner', []),
+    group('sunLunch', 'Sunday Lunch', []),
+    group('sunEvening', 'Sunday Dinner', []),
+  ];
+  atClock('2026-09-05T10:00:00');
+  render(<OrderManagement />);
+  await waitForBoard();
+
+  fireEvent.paste(screen.getByLabelText(/Porter tracking link/), {
+    clipboardData: { getData: () => 'porter.in/rd/b98a3b5ba4' },
+  });
+
+  const fetchMock = globalThis.fetch as unknown as ReturnType<typeof vi.fn>;
+  await waitFor(() => {
+    const call = fetchMock.mock.calls.find(([url]) => String(url).includes('/api/order-packing/tracking'));
+    expect(call).toBeTruthy();
+    expect(JSON.parse(call![1].body)).toMatchObject({ trackingUrl: 'https://porter.in/rd/b98a3b5ba4' });
+  });
+});
+
+test('puts the farthest drop first, and unmeasured ones after', async () => {
+  GROUPS = [
+    group('satLunch', 'Saturday Lunch', [
+      order(1, { distanceKm: 9.4, distanceStatus: 'ok' }),
+      order(2, { distanceKm: null, distanceStatus: 'no_address' }),
+      order(3, { distanceKm: 2.1, distanceStatus: 'ok', locality: 'Koramangala' }),
+    ]),
+    group('satEvening', 'Saturday Dinner', []),
+    group('sunLunch', 'Sunday Lunch', []),
+    group('sunEvening', 'Sunday Dinner', []),
+  ];
+  atClock('2026-09-05T10:00:00');
+  render(<OrderManagement />);
+  await waitForBoard();
+
+  const names = () => Array.from(document.querySelectorAll('.pack-order-name')).map((el) => el.textContent);
+  expect(names()).toEqual(['S00001', 'S00003', 'S00002']);
+  expect(screen.getByText(/~2\.1 km · Koramangala/)).toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole('button', { name: /Earliest time/ }));
+  expect(names()).toEqual(['S00001', 'S00002', 'S00003']);
+});
+
+test('reopening the board draws from the browser instead of fetching again', async () => {
+  GROUPS = [
+    group('satLunch', 'Saturday Lunch', [order(1, { note: 'please deliver by 1pm' })]),
+    group('satEvening', 'Saturday Dinner', []),
+    group('sunLunch', 'Sunday Lunch', []),
+    group('sunEvening', 'Sunday Dinner', []),
+  ];
+  atClock('2026-09-05T10:00:00');
+  const fetchMock = globalThis.fetch as unknown as ReturnType<typeof vi.fn>;
+  const calls = (part: string) => fetchMock.mock.calls.filter(([url]) => String(url).includes(part)).length;
+
+  const first = render(<OrderManagement />);
+  await waitForBoard();
+  await waitFor(() => expect(calls('/time-preferences')).toBe(1));
+  expect(calls('/api/odoo/order-packing?')).toBe(1);
+  first.unmount();
+
+  render(<OrderManagement />);
+  await waitForBoard();
+  expect(calls('/api/odoo/order-packing?')).toBe(1);
+  expect(calls('/time-preferences')).toBe(1);
+
+  // Refresh is still the way to pull new orders in.
+  fireEvent.click(screen.getByRole('button', { name: /Refresh orders/ }));
+  await waitFor(() => expect(calls('/api/odoo/order-packing?')).toBe(2));
+});
+
+test('Priority puts the customer who asked for a time ahead of a farther drop', async () => {
+  GROUPS = [
+    group('satLunch', 'Saturday Lunch', [
+      order(1, { distanceKm: 12, distanceStatus: 'ok' }),
+      order(2, { distanceKm: 3, distanceStatus: 'ok', note: 'need it by 1pm, party. no onions' }),
+    ]),
+    group('satEvening', 'Saturday Dinner', []),
+    group('sunLunch', 'Sunday Lunch', []),
+    group('sunEvening', 'Sunday Dinner', []),
+  ];
+  const fetchMock = globalThis.fetch as unknown as ReturnType<typeof vi.fn>;
+  const base = fetchMock.getMockImplementation()!;
+  fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+    if (url.includes('/time-preferences')) {
+      return {
+        ok: true,
+        json: async () => ({
+          preferences: {
+            2: {
+              hasPreference: true,
+              label: 'Deliver by 1:00 PM',
+              preferredTime: '13:00',
+              quote: 'need it by 1pm',
+              confidence: 'high',
+              kind: 'by',
+              urgencyFlags: ['Party'],
+              kitchenInstructions: 'No onions',
+            },
+          },
+        }),
+      } as unknown as Response;
+    }
+    return base(url, init);
+  });
+  atClock('2026-09-05T10:00:00');
+  render(<OrderManagement />);
+  await waitForBoard();
+
+  const names = () => Array.from(document.querySelectorAll('.pack-order-name')).map((el) => el.textContent);
+  await waitFor(() => expect(names()).toEqual(['S00002', 'S00001']));
+  expect(screen.getByText(/Leave by ~12:48 PM/)).toBeInTheDocument();
+  expect(screen.getByText(/Party/, { selector: '.pack-urgency-flag' })).toBeInTheDocument();
+  expect(screen.getByText(/No onions/, { selector: '.pack-kitchen-line' })).toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole('button', { name: /Farthest first/ }));
+  expect(names()).toEqual(['S00001', 'S00002']);
 });

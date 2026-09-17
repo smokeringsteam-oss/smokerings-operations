@@ -5,6 +5,7 @@ import {
   containersNeeded,
   describeBoxes,
   describePacking,
+  describeTotalPacking,
   portionSplit,
   orderMeatCategories,
   orderNeedsLoad,
@@ -160,6 +161,20 @@ describe('describePacking', () => {
     expect(describePacking(4, 1, TRAY)).toBe('1 × 30 oz packaging');
     expect(describePacking(4, 1, FOIL)).toBe('1 × aluminium foil sheet');
     expect(describePacking(1, 1, TUB)).toBe('1 × 2 oz container');
+  });
+});
+
+describe('describeTotalPacking', () => {
+  it('never splits pooled portions the per-order box count contradicts', () => {
+    // 12 chip portions across 8 orders is 8 sheets — not "6 + 6".
+    expect(describeTotalPacking(12, 8, FOIL)).toBe('8 × aluminium foil sheet — up to 6 portions each');
+    expect(describeTotalPacking(12, 2, FOIL)).toBe('2 × aluminium foil sheet — up to 6 portions each');
+  });
+
+  it('keeps the plain label where every portion has its own box', () => {
+    expect(describeTotalPacking(4, 4, FOIL)).toBe('4 × aluminium foil sheet');
+    expect(describeTotalPacking(4, 4, TUB)).toBe('4 × 2 oz container — one portion each');
+    expect(describeTotalPacking(4, 2, TRAY)).toBe('2 × 30 oz packaging');
   });
 });
 

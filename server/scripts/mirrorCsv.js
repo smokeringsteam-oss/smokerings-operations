@@ -4,8 +4,8 @@
 //   npm run csv:mirror
 //
 // The mirrors normally run on their own, after each edit the app makes (see
-// server/sprint/recurringSchedule.js, server/sprint/weeklyScheduleStatusLog.js
-// and server/ops/shared/smoking.js).
+// server/sprint/recurringSchedule.js, server/sprint/weeklyScheduleStatusLog.js,
+// server/ops/shared/smoking.js and server/ops/shared/purchasing.js).
 // This is for the two cases those don't cover: the first run after this
 // feature landed, when the files on disk are still whatever the SQLite cutover
 // left behind, and after a `npm run db -- "update scheduled_task ..."`
@@ -16,6 +16,7 @@ import 'dotenv/config';
 import { mirrorScheduleCsv } from '../sprint/recurringSchedule.js';
 import { mirrorWeekStatusCsv } from '../sprint/weeklyScheduleStatusLog.js';
 import { mirrorSessionsCsv } from '../ops/shared/smoking.js';
+import { mirrorPurchasingCsv } from '../ops/shared/purchasing.js';
 
 let failed = false;
 
@@ -23,6 +24,7 @@ let failed = false;
   ['schedule', mirrorScheduleCsv],
   ['weekly status log', mirrorWeekStatusCsv],
   ['smoking log', mirrorSessionsCsv],
+  ['purchase log + vendors', mirrorPurchasingCsv],
 ].forEach(([label, mirror]) => {
   const result = mirror();
   if (result.mirrored) {

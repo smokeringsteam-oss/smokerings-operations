@@ -3,7 +3,39 @@
 // worth pinning down because its failure mode is silent — a bad repair
 // hands the pitmaster a cart of numbers that were never on the paper.
 import { describe, it, expect } from 'vitest';
-import { normaliseTaskPlacement, repairTruncatedJSON } from './geminiContent.js';
+import { normaliseNoteReading, normaliseTaskPlacement, repairTruncatedJSON } from './geminiContent.js';
+
+describe('normaliseNoteReading', () => {
+  it('keeps flags and the kitchen line on a note that asked for no time', () => {
+    const reading = normaliseNoteReading({
+      orderId: '7',
+      hasPreference: false,
+      kind: 'other',
+      urgencyFlags: ['Birthday lunch', '  ', 42],
+      kitchenInstructions: ' No onions; sauces separate ',
+    });
+    expect(reading).toMatchObject({
+      hasPreference: false,
+      label: '',
+      urgencyFlags: ['Birthday lunch'],
+      kitchenInstructions: 'No onions; sauces separate',
+    });
+  });
+
+  it('drops a timing read with nothing to show, and an unknown kind', () => {
+    expect(normaliseNoteReading({ hasPreference: true, kind: 'soon', label: '', quote: '' })).toMatchObject({
+      hasPreference: false,
+      kind: 'other',
+    });
+    expect(
+      normaliseNoteReading({ hasPreference: true, kind: 'by', label: 'By 1 PM', preferredTime: '1pm' }),
+    ).toMatchObject({ hasPreference: true, kind: 'by', preferredTime: '', urgencyFlags: [] });
+  });
+
+  it('caps the flags at three', () => {
+    expect(normaliseNoteReading({ urgencyFlags: ['a', 'b', 'c', 'd'] }).urgencyFlags).toEqual(['a', 'b', 'c']);
+  });
+});
 
 const BILL = {
   vendorName: 'Venkateshwara Pork',

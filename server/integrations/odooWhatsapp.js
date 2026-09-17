@@ -34,8 +34,10 @@
 // out. A thread with 40 minutes left is a different kind of urgent from one
 // with 20 hours, so `replyWindow` carries the time remaining.
 //
-// Read-only. Nothing here writes to Odoo or sends a message — the deep link on
-// each thread opens the real conversation in Odoo Discuss to reply there.
+// The list is read-only. The one write is `sendWhatsappReply` at the bottom,
+// which posts a free-form reply into the channel exactly the way Odoo Discuss
+// does — so a reply sent from the dashboard is indistinguishable in Odoo from
+// one typed there, and goes out through the same WhatsApp account.
 import { execute, getConfig, htmlToText } from './odoo.js';
 
 // Outbound states that mean the message actually left. Anything else is either
@@ -45,6 +47,14 @@ const DELIVERED_STATES = new Set(['sent', 'delivered', 'read']);
 // How much back-and-forth each thread carries for the preview: enough to see
 // what was asked and what we last said, not the whole history.
 const THREAD_TAIL = 8;
+
+// One open conversation in the chat pane: enough scroll-back to read the order
+// that started it, capped so a years-old regular doesn't pull everything.
+const DEFAULT_HISTORY = 60;
+const MAX_HISTORY = 200;
+
+// WhatsApp's own ceiling on a text message body.
+const MAX_REPLY_LENGTH = 4096;
 
 // Cheap guards so a mistyped request can't ask Odoo for the whole database.
 const MAX_CHANNELS = 100;
@@ -131,6 +141,177 @@ function previewOf(text, max = 160) {
   return oneLine.length > max ? `${oneLine.slice(0, max - 1)}…` : oneLine;
 }
 
+// The customer-visible messages in the given channels, newest first, plus the
+// delivery half of each (direction and state) keyed by its mail.message id.
+async function fetchChannelMessages(channelIds, limit) {
+  const commentSubtypeId = await resolveCommentSubtypeId();
+  const messageDomain = [
+    ['model', '=', 'discuss.channel'],
+    ['res_id', 'in', channelIds],
+  ];
+  if (commentSubtypeId) messageDomain.push(['subtype_id', '=', commentSubtypeId]);
+
+  const messages = await execute(
+    'mail.message',
+    'search_read',
+    [messageDomain, ['id', 'res_id', 'date', 'author_id', 'body']],
+    { order: 'id desc', limit },
+  );
+
+  const messageIds = messages.map((message) => message.id);
+  const waRows = messageIds.length
+    ? await execute(
+        'whatsapp.message',
+        'search_read',
+        [
+          [['mail_message_id', 'in', messageIds]],
+          ['mail_message_id', 'message_type', 'state', 'failure_type', 'failure_reason'],
+        ],
+      )
+    : [];
+  return { messages, waByMessageId: new Map(waRows.map((row) => [row.mail_message_id?.[0], row])) };
+}
+
+// One mail.message as the client reads it. `atDate` is kept for the verdict
+// maths and stripped before anything leaves the server.
+function toHistoryEntry(message, waByMessageId, customerPartnerId) {
+  const wa = waByMessageId.get(message.id);
+  // whatsapp.message states the direction outright. Where there's no row
+  // (a template send logged only as a comment), the author decides it: the
+  // customer's own partner is the only inbound author there can be.
+  const fromCustomer = wa
+    ? wa.message_type === 'inbound'
+    : Boolean(customerPartnerId) && message.author_id?.[0] === customerPartnerId;
+  const at = parseOdooUtc(message.date);
+  return {
+    id: message.id,
+    at: isoOrNull(at),
+    atDate: at,
+    from: fromCustomer ? 'customer' : 'us',
+    author: message.author_id?.[1] || null,
+    text: htmlToText(message.body) || '',
+    state: wa?.state || null,
+    failureReason: wa?.state === 'error' ? wa.failure_reason || null : null,
+  };
+}
+
+function httpError(status, message) {
+  const err = new Error(message);
+  err.status = status;
+  return err;
+}
+
+// The channel behind a reply or a history request, checked to really be a
+// WhatsApp conversation — a mistyped id must not post into some internal
+// Discuss channel instead.
+async function readWhatsappChannel(channelId) {
+  const id = Number(channelId);
+  if (!Number.isInteger(id) || id <= 0) throw httpError(400, 'Invalid conversation id.');
+  const { configured } = getConfig();
+  if (!configured) throw httpError(503, "Odoo isn't configured yet.");
+  if (!(await resolveWhatsappAvailable())) throw httpError(503, "Odoo's WhatsApp module isn't installed.");
+  const [channel] = await execute('discuss.channel', 'search_read', [
+    [
+      ['id', '=', id],
+      ['channel_type', '=', 'whatsapp'],
+    ],
+    ['whatsapp_partner_id', 'whatsapp_channel_valid_until'],
+  ]);
+  if (!channel) throw httpError(404, 'That WhatsApp conversation no longer exists in Odoo.');
+  return channel;
+}
+
+/**
+ * The longer scroll-back for one conversation, oldest first — what the chat
+ * pane shows once a thread is opened. The inbox poll only carries a short tail
+ * per thread, so it stays cheap on its one-minute timer.
+ */
+async function fetchWhatsappConversation({ channelId, limit = DEFAULT_HISTORY }) {
+  const channel = await readWhatsappChannel(channelId);
+  const historyLimit = Math.min(Math.max(Number(limit) || DEFAULT_HISTORY, 1), MAX_HISTORY);
+  const { messages, waByMessageId } = await fetchChannelMessages([channel.id], historyLimit);
+  const customerPartnerId = channel.whatsapp_partner_id?.[0] ?? null;
+  return {
+    channelId: channel.id,
+    messages: messages
+      .slice()
+      .reverse()
+      .map((message) => {
+        const { atDate, ...entry } = toHistoryEntry(message, waByMessageId, customerPartnerId);
+        return entry;
+      }),
+    // A full page back means there may be older messages still in Odoo.
+    truncated: messages.length === historyLimit,
+  };
+}
+
+// Plain text in, the HTML Odoo stores out: escaped, line breaks kept.
+function textToHtml(text) {
+  const escaped = text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+  return `<p>${escaped.replace(/\r?\n/g, '<br>')}</p>`;
+}
+
+/**
+ * Send a free-form WhatsApp reply to a customer, through Odoo.
+ *
+ * Posts on the channel with message_type 'whatsapp_message' — the same call
+ * Odoo Discuss makes when you press send, which is what hands the message to
+ * the WhatsApp module to deliver. Any other message_type would only land as a
+ * Discuss note the customer never sees.
+ *
+ * Refuses outright once the 24h window has shut: Meta rejects free text after
+ * that, and letting it through would just produce a failed send to clean up.
+ * Those customers need an approved template, which is still done in Odoo.
+ */
+async function sendWhatsappReply({ channelId, text }) {
+  const body = typeof text === 'string' ? text.trim() : '';
+  if (!body) throw httpError(400, 'Type a message first.');
+  if (body.length > MAX_REPLY_LENGTH) {
+    throw httpError(400, `WhatsApp messages are capped at ${MAX_REPLY_LENGTH} characters.`);
+  }
+
+  const channel = await readWhatsappChannel(channelId);
+  const windowExpiresAt = parseOdooUtc(channel.whatsapp_channel_valid_until);
+  if (!windowExpiresAt || windowExpiresAt <= new Date()) {
+    throw httpError(
+      409,
+      "The 24h reply window has closed, so WhatsApp won't accept a typed message — send an approved template from Odoo instead.",
+    );
+  }
+
+  const posted = await execute('discuss.channel', 'message_post', [[channel.id]], {
+    body: textToHtml(body),
+    body_is_html: true,
+    message_type: 'whatsapp_message',
+    subtype_xmlid: 'mail.mt_comment',
+  });
+  // RPC turns the returned mail.message record into its id list.
+  const messageId = Array.isArray(posted) ? posted[0] : posted;
+
+  // Read back what the WhatsApp module made of it, so the bubble can show
+  // "sent" or the real error rather than assuming it went.
+  const [wa] = messageId
+    ? await execute('whatsapp.message', 'search_read', [
+        [['mail_message_id', '=', messageId]],
+        ['state', 'failure_reason'],
+      ])
+    : [];
+
+  return {
+    messageId: messageId || null,
+    state: wa?.state || null,
+    failureReason: wa?.state === 'error' ? wa.failure_reason || null : null,
+    // No whatsapp.message row means Odoo stored the post but didn't queue it
+    // for WhatsApp — surfaced rather than reported as sent.
+    queued: Boolean(wa),
+  };
+}
+
 /**
  * Every WhatsApp conversation in Odoo, already judged against the two rules at
  * the top of this file, needs-attention first.
@@ -190,36 +371,9 @@ async function fetchWhatsappThreads({ limit = DEFAULT_CHANNELS } = {}) {
   if (!channels.length) return { ...empty, configured: true, available: true };
 
   const channelIds = channels.map((channel) => channel.id);
-  const commentSubtypeId = await resolveCommentSubtypeId();
-  const messageDomain = [
-    ['model', '=', 'discuss.channel'],
-    ['res_id', 'in', channelIds],
-  ];
-  if (commentSubtypeId) messageDomain.push(['subtype_id', '=', commentSubtypeId]);
-
   // Newest first and capped: only the tail of each thread is ever shown, and
   // the verdict itself depends on nothing but the last message in each.
-  const messages = await execute(
-    'mail.message',
-    'search_read',
-    [messageDomain, ['id', 'res_id', 'date', 'author_id', 'body']],
-    { order: 'id desc', limit: channelIds.length * THREAD_TAIL * 3 },
-  );
-
-  const messageIds = messages.map((message) => message.id);
-  // The delivery half of each message: direction and state, keyed by the
-  // mail.message it belongs to.
-  const waRows = messageIds.length
-    ? await execute(
-        'whatsapp.message',
-        'search_read',
-        [
-          [['mail_message_id', 'in', messageIds]],
-          ['mail_message_id', 'message_type', 'state', 'failure_type', 'failure_reason'],
-        ],
-      )
-    : [];
-  const waByMessageId = new Map(waRows.map((row) => [row.mail_message_id?.[0], row]));
+  const { messages, waByMessageId } = await fetchChannelMessages(channelIds, channelIds.length * THREAD_TAIL * 3);
 
   const selfPartnerId = await resolveSelfPartnerId();
   const members = selfPartnerId
@@ -248,26 +402,7 @@ async function fetchWhatsappThreads({ limit = DEFAULT_CHANNELS } = {}) {
     // search_read came back newest-first; a thread reads oldest-first.
     const raw = (byChannelId.get(channel.id) || []).slice().reverse();
 
-    const history = raw.map((message) => {
-      const wa = waByMessageId.get(message.id);
-      // whatsapp.message states the direction outright. Where there's no row
-      // (a template send logged only as a comment), the author decides it: the
-      // customer's own partner is the only inbound author there can be.
-      const fromCustomer = wa
-        ? wa.message_type === 'inbound'
-        : Boolean(customerPartnerId) && message.author_id?.[0] === customerPartnerId;
-      const at = parseOdooUtc(message.date);
-      return {
-        id: message.id,
-        at: isoOrNull(at),
-        atDate: at,
-        from: fromCustomer ? 'customer' : 'us',
-        author: message.author_id?.[1] || null,
-        text: htmlToText(message.body) || '',
-        state: wa?.state || null,
-        failureReason: wa?.state === 'error' ? wa.failure_reason || null : null,
-      };
-    });
+    const history = raw.map((message) => toHistoryEntry(message, waByMessageId, customerPartnerId));
 
     const last = history[history.length - 1] || null;
 
@@ -296,8 +431,8 @@ async function fetchWhatsappThreads({ limit = DEFAULT_CHANNELS } = {}) {
       customer: customerNameOf(channel),
       phone: channel.whatsapp_number || null,
       partnerId: customerPartnerId,
-      // Opens the real conversation in Odoo Discuss, which is where a reply is
-      // actually written — this view surfaces, it doesn't send.
+      // Opens the real conversation in Odoo Discuss — still needed for what
+      // the dashboard can't do, like sending a template.
       odooUrl: url ? `${url}/odoo/discuss/${channel.id}` : null,
       lastMessageAt: last?.at || isoOrNull(parseOdooUtc(channel.last_interest_dt)),
       lastMessageFrom: last?.from || null,
@@ -340,4 +475,4 @@ async function fetchWhatsappThreads({ limit = DEFAULT_CHANNELS } = {}) {
   };
 }
 
-export { fetchWhatsappThreads };
+export { fetchWhatsappThreads, fetchWhatsappConversation, sendWhatsappReply };

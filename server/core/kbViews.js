@@ -204,6 +204,7 @@ const PURCHASE_SQL = `
   SELECT p.purchase_id,
          p.purchase_date,
          p.channel,
+         p.purpose,
          p.client_id,
          p.client_name,
          p.smoking_session_id,

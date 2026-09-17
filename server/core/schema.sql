@@ -460,6 +460,9 @@ CREATE TABLE purchase (
     -- before anyone put it on a scale, which is a real answer, not a gap to
     -- fill with a guess.
     weight_per_unit_kg REAL CHECK (weight_per_unit_kg IS NULL OR weight_per_unit_kg > 0),
+    -- Whether the buy was for a real order on this channel or for a practice
+    -- cook. Same word smoking_session.purpose uses for the same idea.
+    purpose            TEXT NOT NULL DEFAULT 'Order' CHECK (purpose IN ('Order','Practice')),
     CONSTRAINT purchase_material_required
         CHECK (item_type <> 'material' OR material_id IS NOT NULL)
 );
@@ -493,6 +496,7 @@ CREATE TABLE sales_order (
     channel             TEXT NOT NULL CHECK (channel IN ('B2C','B2B')),
     status              TEXT NOT NULL,
     delivery_person     TEXT,
+    tracking_url        TEXT,
     in_smoker_at        TEXT,
     prepping_at         TEXT,
     packed_at           TEXT,
@@ -861,5 +865,14 @@ CREATE TABLE shared_note (
     -- is that "already done" is only useful if you can tell who did it — two
     -- people otherwise both go and buy the gas.
     done_at    TEXT,
-    done_by    TEXT
+    done_by    TEXT,
+    -- Whose job it is, if not the poster's. Free text like author, and the one
+    -- column a note changes after it is written besides the tick: a note typed
+    -- by Sowmya is often for someone else, and that can change after posting.
+    assigned_to TEXT,
+    -- The GitHub issue this note was filed as, and the category issue Gemini
+    -- put it under — see server/integrations/noteIssues.js. NULL until filed,
+    -- which is also how a failed filing gets retried.
+    github_issue    INTEGER,
+    github_category INTEGER
 );

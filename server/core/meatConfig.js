@@ -64,11 +64,11 @@ const MEAT_CATEGORIES = {
     label: 'Pulled Pork',
     productName: 'Pulled pork',
     productIds: ['IP-003'],
-    lossPct: 56,
-    // 1.2 kg is the meat vendor's minimum buy unit for shoulder — the buy
-    // figure rounds up to a multiple of it, and the leftover shows as
-    // wastage on the tile.
-    cut: { materialId: 'RM-051', name: 'Pork shoulder', minBuyKg: 1.2 },
+    lossPct: 40,
+    // No minimum buy unit — the buy figure is the exact raw weight at 40%
+    // loss. (It used to round up to 1.2 kg slabs; set minBuyKg again to
+    // bring that back.)
+    cut: { materialId: 'RM-051', name: 'Pork shoulder', minBuyKg: null },
     otherCuts: [],
   },
   ribs: {
