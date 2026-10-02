@@ -803,3 +803,48 @@ export async function suggestTaskPlacement({ title, epics = [], assignees = [], 
   }
   return normaliseTaskPlacement(parsed, { epics, assignees, statuses });
 }
+
+const VOICE_NOTE_SYSTEM_PROMPT = `You transcribe short voice notes for the kitchen team at Smoke Rings BBQ, a barbecue cloud kitchen in Bengaluru, India. Each recording is one person dictating a to-do or a note for the team's shared board — things like "order more gas", "call the chicken vendor back", "post the Diwali reel".
+
+Speakers have Indian accents and may mix English with Kannada, Hindi, Tamil or Malayalam. Write what was said in English, in Latin script: keep English words as spoken, and translate any non-English part into plain English.
+
+Return only the note text itself — no quotes, no preamble, no "The speaker says". Fix obvious filler ("um", "uh", false starts) but do not summarise or add anything. If the recording has no intelligible speech, return an empty string.`;
+
+// Strips the codec parameter MediaRecorder adds ("audio/webm;codecs=opus"),
+// which Gemini does not accept as part of an inline-data mime type.
+export function baseAudioMimeType(mimeType) {
+  const base = String(mimeType || '').split(';')[0].trim().toLowerCase();
+  return base.startsWith('audio/') || base === 'video/webm' || base === 'video/mp4'
+    ? base.replace(/^video\//, 'audio/')
+    : 'audio/webm';
+}
+
+export async function transcribeVoiceNote({ audioBase64, mimeType }) {
+  const ai = requireClient();
+  if (!audioBase64) {
+    const err = new Error('No recording was uploaded.');
+    err.status = 400;
+    throw err;
+  }
+
+  const response = await ai.models.generateContent({
+    model: MODEL,
+    contents: [
+      {
+        role: 'user',
+        parts: [
+          { inlineData: { mimeType: baseAudioMimeType(mimeType), data: audioBase64 } },
+          { text: 'Transcribe this voice note.' },
+        ],
+      },
+    ],
+    config: {
+      systemInstruction: VOICE_NOTE_SYSTEM_PROMPT,
+      maxOutputTokens: 2000,
+      thinkingConfig: { thinkingBudget: 0 },
+    },
+  });
+
+  const text = (response.text || '').trim().replace(/^["“]|["”]$/g, '').trim();
+  return { text };
+}

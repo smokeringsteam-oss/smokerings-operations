@@ -12583,6 +12583,11 @@ span.purch-purpose-pill {
   outline-offset: 1px;
 }
 
+.notes-mic:disabled {
+  opacity: 0.5;
+  cursor: progress;
+}
+
 .notes-mic.is-listening {
   border-color: transparent;
   background: var(--color-ember);

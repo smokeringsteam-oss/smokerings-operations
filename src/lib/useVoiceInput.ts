@@ -1,143 +1,186 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-// Dictation for a text box, on the browser's own speech recogniser.
+// Dictation for a text box: record from the microphone, send the clip to the
+// server, get the words back.
 //
-// The Web Speech API rather than a recording sent to a transcription service:
-// it needs no key, no server route and no upload over kitchen wifi, and the
-// words land in the box as they are spoken rather than after a round trip.
-// Chrome, Edge and Safari carry it (Android and iOS included); Firefox does
-// not, and there `supported` is false and the caller simply hides the mic.
+// Not the browser's own speech recogniser (the Web Speech API), which is what
+// this first used. On a phone it fails silently where it matters most: in the
+// dashboard opened from the home screen the recogniser exists, starts, shows
+// the mic as live — and never returns a word. Recording works everywhere the
+// microphone does, installed apps included, and the server's Gemini read
+// copes with Indian accents and a sentence that drifts into Kannada or Hindi
+// far better than the browser does.
+//
+// The price is no live text while speaking: the words arrive a second or two
+// after the mic is tapped off. For a one-line to-do that is a fair trade for
+// a mic that actually works.
 //
 // It only ever hands text back. What to do with it — append to a draft,
-// replace a search term — is the caller's, so the same hook can serve any box.
+// replace a search term — is the caller's.
 
-type RecognitionResult = { isFinal: boolean; 0: { transcript: string } };
-type RecognitionEvent = { resultIndex: number; results: ArrayLike<RecognitionResult> };
-type RecognitionErrorEvent = { error: string };
+// Long enough for any to-do, short enough that a mic forgotten in a pocket
+// does not upload ten minutes of kitchen noise.
+const MAX_RECORDING_MS = 2 * 60 * 1000;
 
-interface Recognition {
-  lang: string;
-  continuous: boolean;
-  interimResults: boolean;
-  onresult: ((event: RecognitionEvent) => void) | null;
-  onerror: ((event: RecognitionErrorEvent) => void) | null;
-  onend: (() => void) | null;
-  start(): void;
-  stop(): void;
-  abort(): void;
+// In order of preference. iOS records only mp4; Chrome and Android record webm.
+const MIME_CANDIDATES = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg;codecs=opus'];
+
+function pickMimeType(): string {
+  if (typeof MediaRecorder === 'undefined' || typeof MediaRecorder.isTypeSupported !== 'function') return '';
+  return MIME_CANDIDATES.find((type) => MediaRecorder.isTypeSupported(type)) ?? '';
 }
 
-type RecognitionCtor = new () => Recognition;
-
-function recognitionCtor(): RecognitionCtor | null {
-  if (typeof window === 'undefined') return null;
-  const w = window as unknown as { SpeechRecognition?: RecognitionCtor; webkitSpeechRecognition?: RecognitionCtor };
-  return w.SpeechRecognition ?? w.webkitSpeechRecognition ?? null;
+function isSupported(): boolean {
+  return (
+    typeof window !== 'undefined' &&
+    typeof MediaRecorder !== 'undefined' &&
+    typeof navigator !== 'undefined' &&
+    !!navigator.mediaDevices?.getUserMedia
+  );
 }
 
-function describeError(code: string): string {
-  switch (code) {
-    case 'not-allowed':
-    case 'service-not-allowed':
-      return 'Microphone access is blocked — allow it in the browser to dictate.';
-    case 'no-speech':
-      return "Didn't catch anything — tap the mic and try again.";
-    case 'audio-capture':
-      return 'No microphone found on this device.';
-    case 'network':
-      return 'Voice input needs a connection — type it instead for now.';
-    default:
-      return 'Voice input stopped unexpectedly.';
+function describeMicError(err: unknown): string {
+  const name = err instanceof DOMException ? err.name : '';
+  if (name === 'NotAllowedError' || name === 'SecurityError') {
+    return 'Microphone access is blocked — allow it for this app in your phone settings, then try again.';
   }
+  if (name === 'NotFoundError') return 'No microphone found on this device.';
+  if (name === 'NotReadableError') return 'The microphone is busy in another app — close it and try again.';
+  return 'Could not start the microphone.';
+}
+
+async function transcribe(blob: Blob): Promise<string> {
+  const ext = blob.type.includes('mp4') ? 'm4a' : blob.type.includes('ogg') ? 'ogg' : 'webm';
+  const form = new FormData();
+  form.append('audio', blob, `voice-note.${ext}`);
+  const res = await fetch('/api/notes/transcribe', { method: 'POST', body: form });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data?.error || `Transcription failed (${res.status})`);
+  return typeof data?.text === 'string' ? data.text.trim() : '';
 }
 
 export interface VoiceInput {
   supported: boolean;
+  // The mic is live and recording.
   listening: boolean;
-  // Words heard but not yet settled; shown live, replaced as they firm up.
-  interim: string;
+  // Recording finished; waiting for the words to come back.
+  transcribing: boolean;
   error: string | null;
   start(): void;
   stop(): void;
   toggle(): void;
 }
 
-// `onFinal` is called once per settled phrase. Held in a ref so a caller
-// passing a fresh closure each render does not restart the recogniser.
-export function useVoiceInput(onFinal: (text: string) => void, lang?: string): VoiceInput {
-  const [supported] = useState(() => recognitionCtor() !== null);
+// `onText` is called once per recording with what was said. Held in a ref so
+// a caller passing a fresh closure each render is always the one called.
+export function useVoiceInput(onText: (text: string) => void): VoiceInput {
+  const [supported] = useState(isSupported);
   const [listening, setListening] = useState(false);
-  const [interim, setInterim] = useState('');
+  const [transcribing, setTranscribing] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const recRef = useRef<Recognition | null>(null);
-  const onFinalRef = useRef(onFinal);
-  onFinalRef.current = onFinal;
+  const recorderRef = useRef<MediaRecorder | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Set while starting, so a double tap does not open the mic twice.
+  const startingRef = useRef(false);
+  // Cleared on unmount, so a reply that lands after the panel is gone is
+  // dropped rather than written into state nobody holds.
+  const aliveRef = useRef(true);
+  const onTextRef = useRef(onText);
+  onTextRef.current = onText;
 
-  const stop = useCallback(() => {
-    recRef.current?.stop();
+  const releaseMic = useCallback(() => {
+    if (timerRef.current) clearTimeout(timerRef.current);
+    timerRef.current = null;
+    // Stopping the tracks is what turns the phone's mic indicator off.
+    streamRef.current?.getTracks().forEach((track) => track.stop());
+    streamRef.current = null;
   }, []);
 
-  const start = useCallback(() => {
-    const Ctor = recognitionCtor();
-    if (!Ctor || recRef.current) return;
-    const rec = new Ctor();
-    rec.lang = lang || (typeof navigator !== 'undefined' && navigator.language) || 'en-IN';
-    // Keeps listening through a pause for breath; the person taps to stop.
-    rec.continuous = true;
-    rec.interimResults = true;
-    rec.onresult = (event) => {
-      let pending = '';
-      for (let i = event.resultIndex; i < event.results.length; i += 1) {
-        const result = event.results[i];
-        const text = result[0].transcript;
-        if (result.isFinal) {
-          const settled = text.trim();
-          if (settled) onFinalRef.current(settled);
-        } else {
-          pending += text;
-        }
-      }
-      setInterim(pending.trim());
-    };
-    rec.onerror = (event) => {
-      // An abort is ours (unmount or a second tap), not something to report.
-      if (event.error !== 'aborted') setError(describeError(event.error));
-    };
-    rec.onend = () => {
-      recRef.current = null;
-      setListening(false);
-      setInterim('');
-    };
+  const stop = useCallback(() => {
+    const recorder = recorderRef.current;
+    if (recorder && recorder.state !== 'inactive') recorder.stop();
+  }, []);
+
+  const start = useCallback(async () => {
+    if (!isSupported() || recorderRef.current || startingRef.current) return;
+    startingRef.current = true;
     setError(null);
-    setInterim('');
+    let stream: MediaStream;
     try {
-      rec.start();
-      recRef.current = rec;
-      setListening(true);
-    } catch {
-      setError('Voice input could not start.');
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch (err) {
+      startingRef.current = false;
+      if (aliveRef.current) setError(describeMicError(err));
+      return;
     }
-  }, [lang]);
+    if (!aliveRef.current) {
+      stream.getTracks().forEach((track) => track.stop());
+      return;
+    }
+
+    const mimeType = pickMimeType();
+    let recorder: MediaRecorder;
+    try {
+      recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
+    } catch {
+      stream.getTracks().forEach((track) => track.stop());
+      startingRef.current = false;
+      setError('Recording is not available on this device.');
+      return;
+    }
+
+    const chunks: Blob[] = [];
+    recorder.ondataavailable = (event) => {
+      if (event.data && event.data.size > 0) chunks.push(event.data);
+    };
+    recorder.onstop = async () => {
+      recorderRef.current = null;
+      releaseMic();
+      if (!aliveRef.current) return;
+      setListening(false);
+      const blob = new Blob(chunks, { type: recorder.mimeType || mimeType || 'audio/webm' });
+      if (blob.size === 0) {
+        setError("Didn't catch anything — tap the mic and try again.");
+        return;
+      }
+      setTranscribing(true);
+      try {
+        const text = await transcribe(blob);
+        if (!aliveRef.current) return;
+        if (text) onTextRef.current(text);
+        else setError("Didn't catch anything — tap the mic and try again.");
+      } catch (err) {
+        if (aliveRef.current) setError(err instanceof Error ? err.message : String(err));
+      } finally {
+        if (aliveRef.current) setTranscribing(false);
+      }
+    };
+
+    streamRef.current = stream;
+    recorderRef.current = recorder;
+    recorder.start();
+    startingRef.current = false;
+    setListening(true);
+    timerRef.current = setTimeout(() => stop(), MAX_RECORDING_MS);
+  }, [releaseMic, stop]);
 
   const toggle = useCallback(() => {
-    if (recRef.current) stop();
-    else start();
+    if (recorderRef.current) stop();
+    else void start();
   }, [start, stop]);
 
-  // A recogniser left running after the panel closes keeps the mic light on.
-  useEffect(
-    () => () => {
-      const rec = recRef.current;
-      if (rec) {
-        rec.onend = null;
-        rec.onresult = null;
-        rec.onerror = null;
-        rec.abort();
-        recRef.current = null;
-      }
-    },
-    [],
-  );
+  // A recorder left running after the panel is gone keeps the mic light on.
+  useEffect(() => {
+    aliveRef.current = true;
+    return () => {
+      aliveRef.current = false;
+      const recorder = recorderRef.current;
+      recorderRef.current = null;
+      if (recorder && recorder.state !== 'inactive') recorder.stop();
+      releaseMic();
+    };
+  }, [releaseMic]);
 
-  return { supported, listening, interim, error, start, stop, toggle };
+  return { supported, listening, transcribing, error, start: () => void start(), stop, toggle };
 }

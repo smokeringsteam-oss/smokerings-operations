@@ -245,7 +245,7 @@ const NotesBubble = () => {
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
-  // Dictation into the composer. Each settled phrase is added to the end of
+  // Dictation into the composer. Each recording is added to the end of
   // whatever is already in the box, so speaking and typing mix freely — say
   // most of it, fix a word by hand, say the rest. Nothing is sent on its own:
   // a recogniser that mishears "gas" as "glass" must still pass a human eye
@@ -259,7 +259,7 @@ const NotesBubble = () => {
   });
   const stopVoice = voice.stop;
   // The panel closing is the person done with it; a mic left live behind a
-  // closed panel would keep writing into a box nobody can see.
+  // closed panel would keep recording a kitchen nobody is talking to.
   useEffect(() => {
     if (!open) stopVoice();
   }, [open, stopVoice]);
@@ -481,7 +481,6 @@ const NotesBubble = () => {
   const submit = async () => {
     const body = draft.trim();
     if (!body || posting) return;
-    voice.stop();
     setPosting(true);
     setActionError(null);
     try {
@@ -624,7 +623,6 @@ const NotesBubble = () => {
   const submitTask = async () => {
     const label = draft.trim();
     if (!label || addingTask) return;
-    voice.stop();
     setAddingTask(true);
     setActionError(null);
     try {
@@ -1041,10 +1039,8 @@ const NotesBubble = () => {
                   aria-pressed={voice.listening}
                   aria-label={voice.listening ? 'Stop voice input' : 'Speak a to-do'}
                   title={voice.listening ? 'Stop voice input' : 'Speak a to-do'}
-                  onClick={() => {
-                    voice.toggle();
-                    inputRef.current?.focus();
-                  }}
+                  disabled={voice.transcribing}
+                  onClick={() => voice.toggle()}
                 >
                   <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
                     <path
@@ -1057,19 +1053,19 @@ const NotesBubble = () => {
               <button
                 type="submit"
                 className="notes-send"
-                disabled={!draft.trim() || posting || addingTask}
+                disabled={!draft.trim() || posting || addingTask || voice.listening || voice.transcribing}
               >
                 {posting || addingTask ? 'Saving…' : 'Add'}
               </button>
             </div>
 
-            {voice.listening || voice.error ? (
+            {voice.listening || voice.transcribing || voice.error ? (
               <p className={`notes-voice-status${voice.error ? ' is-error' : ''}`} role="status" aria-live="polite">
                 {voice.error
                   ? voice.error
-                  : voice.interim
-                    ? <>Listening… <em>{voice.interim}</em></>
-                    : 'Listening… speak now, tap the mic to stop.'}
+                  : voice.transcribing
+                    ? 'Writing down what you said…'
+                    : 'Recording… speak now, tap the mic again when done.'}
               </p>
             ) : null}
 

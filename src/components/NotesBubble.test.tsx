@@ -16,7 +16,7 @@
 //     one, and reads as an empty day by evening;
 //   * a search narrows both halves. Tasks are filtered in the browser and
 //     notes on the server, so this is the one place the two can disagree.
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, expect, test, vi } from 'vitest';
 import NotesBubble from './NotesBubble';
 
@@ -260,68 +260,104 @@ test('a search narrows the jobs as well as the notes', async () => {
   await waitFor(() => expect(screen.getByText('Order more charcoal')).toBeInTheDocument());
 });
 
-// Voice input. The browser's recogniser is faked: what matters here is that a
-// settled phrase joins whatever was already typed rather than replacing it,
-// and that nothing is posted until someone presses Add.
-class FakeRecognition {
-  static last: FakeRecognition | null = null;
-  lang = '';
-  continuous = false;
-  interimResults = false;
-  onresult: ((event: any) => void) | null = null;
-  onerror: ((event: any) => void) | null = null;
-  onend: (() => void) | null = null;
-  started = false;
-  constructor() {
-    FakeRecognition.last = this;
+// Voice input. The microphone and the recorder are faked, and the transcribe
+// endpoint answers from the fetch stub: what matters here is that the words
+// join whatever was already typed rather than replacing it, that the mic is
+// released, and that nothing is posted until someone presses Add.
+class FakeRecorder {
+  static last: FakeRecorder | null = null;
+  static isTypeSupported = (type: string) => type.startsWith('audio/webm');
+  state: 'inactive' | 'recording' = 'inactive';
+  mimeType: string;
+  ondataavailable: ((event: { data: Blob }) => void) | null = null;
+  onstop: (() => void) | null = null;
+  constructor(_stream: unknown, options?: { mimeType?: string }) {
+    this.mimeType = options?.mimeType || '';
+    FakeRecorder.last = this;
   }
   start() {
-    this.started = true;
+    this.state = 'recording';
   }
   stop() {
-    this.started = false;
-    this.onend?.();
-  }
-  abort() {
-    this.stop();
-  }
-  say(text: string, isFinal: boolean) {
-    this.onresult?.({ resultIndex: 0, results: [{ isFinal, 0: { transcript: text } }] });
+    this.state = 'inactive';
+    this.ondataavailable?.({ data: new Blob(['sound'], { type: 'audio/webm' }) });
+    void this.onstop?.();
   }
 }
 
-test('the mic adds spoken words to what is typed, and waits for Add', async () => {
-  (window as any).webkitSpeechRecognition = FakeRecognition;
+const withMic = () => {
+  const track = { stop: vi.fn() };
+  vi.stubGlobal('MediaRecorder', FakeRecorder);
+  Object.defineProperty(navigator, 'mediaDevices', {
+    configurable: true,
+    value: { getUserMedia: vi.fn(async () => ({ getTracks: () => [track] })) },
+  });
+  const realFetch = globalThis.fetch as any;
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string, options?: RequestInit) => {
+      if (url === '/api/notes/transcribe') {
+        calls.push({ url, method: 'POST' });
+        return { ok: true, json: async () => ({ text: 'more gas' }) };
+      }
+      return realFetch(url, options);
+    }),
+  );
+  return track;
+};
+
+test('the mic records, and the words join what is typed and wait for Add', async () => {
+  const track = withMic();
   try {
     await openPanel();
     const box = screen.getByLabelText('Add a to-do') as HTMLTextAreaElement;
     fireEvent.change(box, { target: { value: 'Order' } });
 
     fireEvent.click(screen.getByRole('button', { name: 'Speak a to-do' }));
-    const rec = FakeRecognition.last!;
-    expect(rec.started).toBe(true);
-    expect(screen.getByRole('button', { name: 'Stop voice input' })).toHaveAttribute('aria-pressed', 'true');
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Stop voice input' })).toHaveAttribute('aria-pressed', 'true'),
+    );
+    expect(FakeRecorder.last?.state).toBe('recording');
+    expect(screen.getByText(/Recording/)).toBeInTheDocument();
 
-    act(() => rec.say('more gas', false));
-    expect(screen.getByText('more gas')).toBeInTheDocument();
-    expect(box.value).toBe('Order');
-
-    act(() => rec.say('more gas', true));
-    expect(box.value).toBe('Order more gas');
+    fireEvent.click(screen.getByRole('button', { name: 'Stop voice input' }));
+    await waitFor(() => expect(box.value).toBe('Order more gas'));
+    // The phone's mic light goes off with the recording, not with the panel.
+    expect(track.stop).toHaveBeenCalled();
     expect(calls.some((call) => call.url === '/api/notes' && call.method === 'POST')).toBe(false);
 
     fireEvent.click(screen.getByRole('button', { name: 'Add' }));
     await waitFor(() => expect(calls.some((call) => call.url === '/api/notes' && call.method === 'POST')).toBe(true));
-    expect(calls.find((call) => call.method === 'POST')?.body).toMatchObject({ body: 'Order more gas' });
-    // Sending ends the dictation, so the next thing said is not quietly
-    // written into an empty box.
-    expect(rec.started).toBe(false);
+    expect(calls.find((call) => call.url === '/api/notes' && call.method === 'POST')?.body).toMatchObject({
+      body: 'Order more gas',
+    });
   } finally {
-    delete (window as any).webkitSpeechRecognition;
+    delete (navigator as any).mediaDevices;
   }
 });
 
-test('a browser without speech recognition shows no mic', async () => {
+test('a blocked microphone says so instead of looking live', async () => {
+  vi.stubGlobal('MediaRecorder', FakeRecorder);
+  Object.defineProperty(navigator, 'mediaDevices', {
+    configurable: true,
+    value: {
+      getUserMedia: vi.fn(async () => {
+        throw new DOMException('denied', 'NotAllowedError');
+      }),
+    },
+  });
+  try {
+    await openPanel();
+    fireEvent.click(screen.getByRole('button', { name: 'Speak a to-do' }));
+    await waitFor(() => expect(screen.getByText(/Microphone access is blocked/)).toBeInTheDocument());
+    expect(screen.getByRole('button', { name: 'Speak a to-do' })).toHaveAttribute('aria-pressed', 'false');
+  } finally {
+    delete (navigator as any).mediaDevices;
+  }
+});
+
+test('a browser that cannot record shows no mic', async () => {
+  vi.stubGlobal('MediaRecorder', undefined);
   await openPanel();
   expect(screen.queryByRole('button', { name: 'Speak a to-do' })).not.toBeInTheDocument();
 });

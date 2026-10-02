@@ -9,6 +9,7 @@ import {
   extractWeekendOrders,
   readOrderTimePreferences,
   suggestTaskPlacement,
+  transcribeVoiceNote,
 } from './integrations/geminiContent.js';
 import {
   getConfig as getGithubConfig,
@@ -253,6 +254,21 @@ const readBillUpload = (req, res, next) =>
       return res.status(413).json({ error: 'That file is over 10 MB — take the photo again at a smaller size.' });
     }
     console.error('Error uploading a bill scan:', err);
+    return res.status(400).json({ error: err.message || String(err) });
+  });
+
+// Voice notes for the notes board, recorded in the browser and read once by
+// Gemini. Kept in memory and dropped after the read, like bill photos. Ten
+// megabytes is several minutes of compressed speech — far past any to-do.
+const MAX_VOICE_BYTES = 10 * 1024 * 1024;
+const voiceUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: MAX_VOICE_BYTES } });
+const readVoiceUpload = (req, res, next) =>
+  voiceUpload.single('audio')(req, res, (err) => {
+    if (!err) return next();
+    if (err.code === 'LIMIT_FILE_SIZE') {
+      return res.status(413).json({ error: 'That recording is too long — keep voice notes under a couple of minutes.' });
+    }
+    console.error('Error uploading a voice note:', err);
     return res.status(400).json({ error: err.message || String(err) });
   });
 
@@ -2856,6 +2872,19 @@ app.post('/api/today-tasks/:taskId/assignee', (req, res) => {
 // ?q= filters on the note text and the poster's name; ?author= narrows to one
 // person by whole name, and the two stack. Server-side because the browser
 // only ever holds the most recent page of notes — see listNotes.
+// Turns a recorded voice note into text for the composer. Writes nothing:
+// the words go back into the box, and the person still presses Add.
+app.post('/api/notes/transcribe', readVoiceUpload, async (req, res) => {
+  try {
+    const file = req.file;
+    if (!file?.buffer?.length) return res.status(400).json({ error: 'No recording was uploaded.' });
+    res.json(await transcribeVoiceNote({ audioBase64: file.buffer.toString('base64'), mimeType: file.mimetype }));
+  } catch (err) {
+    console.error('Error in POST /api/notes/transcribe:', err);
+    res.status(err.status || 500).json({ error: err.message || String(err) });
+  }
+});
+
 app.get('/api/notes', (req, res) => {
   try {
     res.json(listNotes({ q: req.query?.q, author: req.query?.author }));

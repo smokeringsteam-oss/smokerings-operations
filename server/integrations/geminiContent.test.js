@@ -3,7 +3,12 @@
 // worth pinning down because its failure mode is silent — a bad repair
 // hands the pitmaster a cart of numbers that were never on the paper.
 import { describe, it, expect } from 'vitest';
-import { normaliseNoteReading, normaliseTaskPlacement, repairTruncatedJSON } from './geminiContent.js';
+import {
+  baseAudioMimeType,
+  normaliseNoteReading,
+  normaliseTaskPlacement,
+  repairTruncatedJSON,
+} from './geminiContent.js';
 
 describe('normaliseNoteReading', () => {
   it('keeps flags and the kitchen line on a note that asked for no time', () => {
@@ -158,5 +163,17 @@ describe('normaliseTaskPlacement', () => {
 
   it('ignores a reason that is not text at all', () => {
     expect(normaliseTaskPlacement({ parentNumber: 1, reason: { text: 'no' } }, lists).reason).toBe('');
+  });
+});
+
+describe('baseAudioMimeType', () => {
+  it('drops the codec MediaRecorder appends', () => {
+    expect(baseAudioMimeType('audio/webm;codecs=opus')).toBe('audio/webm');
+    expect(baseAudioMimeType('audio/mp4')).toBe('audio/mp4');
+  });
+  it('treats a video-typed audio clip as audio and an unknown type as webm', () => {
+    expect(baseAudioMimeType('video/webm')).toBe('audio/webm');
+    expect(baseAudioMimeType('')).toBe('audio/webm');
+    expect(baseAudioMimeType('application/octet-stream')).toBe('audio/webm');
   });
 });
