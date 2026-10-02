@@ -6,6 +6,7 @@ import FinanceDashboard, { type FinanceSub, financeTools } from './pages/finance
 import { usePersistedChoice } from './lib/usePersistedChoice';
 import { useWhatsappAttentionCount } from './lib/useWhatsappAttention';
 import NotesBubble from './components/NotesBubble';
+import WhatsappAlarm from './components/WhatsappAlarm';
 
 // Weekend Prep Planner used to be its own top-level "Kitchen Prep Automation"
 // sidebar entry; it now lives as the first step inside the B2C Dashboard's
@@ -167,6 +168,13 @@ const App = () => {
           Fixed, so the same bubble is in the same corner on both, and so a
           note stays one tap away however far down a page you have scrolled. */}
       <NotesBubble />
+
+      {/* Renders nothing until a WhatsApp alarm is actually sounding. Mounted
+          at the shell for the same reason the badge is: the message that needs
+          answering never arrives while you are on the inbox screen. Opening
+          the inbox from it switches tools AND stops the noise — see the
+          component. */}
+      <WhatsappAlarm onOpenInbox={() => setActiveTool(BADGED_TOOL)} />
     </div>
   );
 };

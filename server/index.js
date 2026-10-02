@@ -103,6 +103,8 @@ import {
   sendPendingDigestNow,
   DEFAULT_DIGEST_MINUTES,
 } from './sprint/taskReminders.js';
+import { runWhatsappAlertTick, sendAlarmTest } from './integrations/whatsappAlerts.js';
+import { localAlarmState, stopLocalAlarm } from './integrations/localAlarm.js';
 import { getMenu, computeSwiggyPlan, computeMeatPlan, computePrepPlan, getPackableSidesByItem, getMeatByItem } from './ops/b2c/recipes.js';
 import { getMenuItemRecipe, updateMenuItemRecipe } from './ops/menu/menuRecipe.js';
 import { getWeekendStatus, setWeekendStatus } from './ops/b2c/weekendStatus.js';
@@ -126,6 +128,14 @@ import {
 } from './ops/menu/menuItems.js';
 import { getPackingStatuses, setPackingStatus, setTrackingLink, retryInvoice } from './ops/shared/orderPackingStatus.js';
 import { attachDistances, locateBoardAddresses } from './ops/shared/deliveryDistance.js';
+import {
+  backfillWatches,
+  checkWatchNow,
+  getDeliveryWatches,
+  openWatchCount,
+  runDeliveryWatchTick,
+} from './ops/shared/deliveryWatch.js';
+import { readPorterOrderWithEta } from './ops/shared/porterTracking.js';
 import {
   listClients as listB2BClients,
   addClient as addB2BClient,
@@ -221,6 +231,7 @@ import {
 } from './finance/purchaseLog.js';
 import { describeConfig as describeGaConfig } from './integrations/googleAnalytics.js';
 import { buildCustomerMapReport, pendingAddresses } from './marketing/customerGeography.js';
+import { buildCompetitorReport, pendingCompetitorAddresses } from './marketing/competitors.js';
 import { getAutoReelJob, startAutoReel } from './marketing/autoReel.js';
 import { locateAddresses, pinAddress, forgetAddress } from './core/geocode.js';
 
@@ -757,6 +768,49 @@ app.post('/api/order-packing/tracking', async (req, res) => {
   } catch (err) {
     console.error('Error in POST /api/order-packing/tracking:', err);
     res.status(err.status || 500).json({ error: err.message || String(err) });
+  }
+});
+
+// The Porter delivery watch, per order — the ETA, what Porter last said, and
+// whether the watch is still running (see server/ops/shared/deliveryWatch.js).
+// ?orderIds=1,2,3 scopes it the same way the status lookup does.
+app.get('/api/order-packing/delivery-watch', (req, res) => {
+  try {
+    const orderIds = req.query.orderIds ? String(req.query.orderIds).split(',').filter(Boolean) : undefined;
+    res.json(getDeliveryWatches({ orderIds }));
+  } catch (err) {
+    console.error('Error in GET /api/order-packing/delivery-watch:', err);
+    res.status(err.status || 500).json({ error: err.message || String(err) });
+  }
+});
+
+// Checks one watched order against Porter right now rather than at its next
+// due time — the card's "check now", and what to reach for when an order is
+// known to have landed and nobody wants to wait for the poll.
+app.post('/api/order-packing/delivery-watch/check', async (req, res) => {
+  try {
+    const { orderId } = req.body || {};
+    res.json(await checkWatchNow(orderId));
+  } catch (err) {
+    console.error('Error in POST /api/order-packing/delivery-watch/check:', err);
+    res.status(err.status || 500).json({ error: err.message || String(err) });
+  }
+});
+
+// Reads a Porter link without touching any order — for pasting a link to see
+// where the rider is, and for checking that a link is readable before it is
+// saved. Nothing here writes.
+app.get('/api/porter-tracking', async (req, res) => {
+  try {
+    const url = String(req.query.url || '');
+    if (!url) {
+      res.status(400).json({ error: 'url is required.' });
+      return;
+    }
+    res.json(await readPorterOrderWithEta(url));
+  } catch (err) {
+    console.error('Error in GET /api/porter-tracking:', err);
+    res.status(err.status || 502).json({ error: err.message || String(err), code: err.code || null });
   }
 });
 
@@ -1944,6 +1998,38 @@ app.post('/api/marketing/customer-map/forget', (req, res) => {
   }
 });
 
+// ---- Competitors (Marketing > Customer Map, Competitors view) -------------
+// The other half of the same map: who else is selling smoked meat, and how
+// close they are to the neighbourhoods our orders come from. The roster is
+// hand-kept in server/marketing/competitors.js; the points come from the same
+// geocode cache the customer side uses, so a competitor address is looked up
+// once and never again, and a pin dropped on one is the same pin endpoint.
+
+app.get('/api/marketing/competitors', async (req, res) => {
+  try {
+    // radius is how far from a competitor counts as "in their reach"; the
+    // screen's slider sends it, and nothing sends it means three kilometres.
+    const { from, to, radius } = req.query || {};
+    res.json(await buildCompetitorReport({ fromDate: from, toDate: to, radiusKm: radius }));
+  } catch (err) {
+    console.error('Error in GET /api/marketing/competitors:', err);
+    res.status(err.status || 500).json({ error: err.message || String(err) });
+  }
+});
+
+// Looks up the competitor addresses nothing has ever looked up. The client
+// says how many at most; the list itself comes from the roster on this
+// machine, never from the request body.
+app.post('/api/marketing/competitors/locate', async (req, res) => {
+  try {
+    const { limit } = req.body || {};
+    res.json(await locateAddresses(pendingCompetitorAddresses(), { limit }));
+  } catch (err) {
+    console.error('Error in POST /api/marketing/competitors/locate:', err);
+    res.status(err.status || 500).json({ error: err.message || String(err) });
+  }
+});
+
 // ---- Tracked links & QR codes (Marketing > QR & Link Builder) -------------
 // The other end of attribution from the tagging list above: instead of
 // working out afterwards where an order came from, publish a link that says
@@ -2855,6 +2941,11 @@ app.get('/api/push/status', (req, res) => {
       publicKey: getPushPublicKey(),
       subscriptions: listPushSubscriptions(),
       digestTime: pushDigestLabel(),
+      // Whether legion can shout on its own, and whether it is doing so right
+      // now. Reported alongside the subscriptions because the two answer the
+      // same question from opposite ends — a server with no subscribers is
+      // not necessarily a server that cannot reach anybody.
+      localAlarm: localAlarmState(),
     });
   } catch (err) {
     console.error('Error in GET /api/push/status:', err);
@@ -2902,6 +2993,40 @@ app.post('/api/push/test', async (req, res) => {
     });
   } catch (err) {
     console.error('Error in POST /api/push/test:', err);
+    res.status(err.status || 500).json({ error: err.message || String(err) });
+  }
+});
+
+// The alarm's own test button, separate from the digest's.
+//
+// It has to be separate: the digest test proves delivery, this one proves the
+// noisy half — the Android channel sound, the vibrate pattern, and the audio
+// loop on whatever page is open. Those fail independently of delivery and of
+// each other, and a single button would leave you guessing which.
+app.post('/api/push/alarm-test', async (req, res) => {
+  try {
+    res.json(await sendAlarmTest());
+  } catch (err) {
+    console.error('Error in POST /api/push/alarm-test:', err);
+    res.status(err.status || 500).json({ error: err.message || String(err) });
+  }
+});
+
+// Silence legion's own speakers.
+//
+// The page's Stop button stops the page. This is how it stops the OTHER noise
+// — the one coming out of the machine in the corner, which the page has no
+// other way to reach. Called by whatsappAlarm.ts's stop(), so one press
+// silences both, which is what anybody pressing Stop means.
+//
+// Unauthenticated like the rest of this server, and safe to be: the worst it
+// can do is make a noise stop, and everything here is already behind the
+// tailnet.
+app.post('/api/push/alarm-stop', (req, res) => {
+  try {
+    res.json(stopLocalAlarm('stopped from the dashboard'));
+  } catch (err) {
+    console.error('Error in POST /api/push/alarm-stop:', err);
     res.status(err.status || 500).json({ error: err.message || String(err) });
   }
 });
@@ -2968,6 +3093,35 @@ if (process.env.PUSH_REMINDERS !== 'off') {
   }
 }
 
+// The WhatsApp alarm.
+//
+// Its own timer rather than a line inside the reminder tick, because the two
+// have nothing in common but the word "push": this one calls out to Odoo over
+// the network every pass, and the reminder tick is two indexed reads that must
+// stay cheap enough to run every minute forever. Keeping them apart also means
+// an Odoo that is down or slow cannot delay a task nudge.
+//
+// One minute matches the inbox poll the dashboard already does
+// (useWhatsappAttention.ts), so the badge and the alarm learn about a message
+// on the same beat and can never disagree about whether it exists.
+//
+// No startup pass, unlike the reminders. A reminder missed during a restart is
+// still worth delivering late; an alarm is not — see the grace window in
+// whatsappAlerts.js — and firing one the instant the server comes up would
+// make every backend edit set the laugh off. WHATSAPP_ALERTS=off disables it.
+const WHATSAPP_ALERT_MS = 60 * 1000;
+if (process.env.WHATSAPP_ALERTS !== 'off') {
+  const graceMinutes = Number(process.env.WHATSAPP_ALERT_GRACE_MINUTES) || undefined;
+  setInterval(() => {
+    runWhatsappAlertTick(new Date(), graceMinutes ? { graceMinutes } : {}).then((result) => {
+      if (result?.sent) console.log(`[whatsapp-alert] sounded ${result.announced} conversation(s), ${result.sent} device(s)`);
+    });
+    // unref() for the same reason the reminder timer has it: Ctrl-C on a dev
+    // server should not hang for a minute waiting on a timer with nothing to
+    // say.
+  }, WHATSAPP_ALERT_MS).unref();
+}
+
 // Sprint rollover: open items left in a sprint that has ended move into the
 // current one. Hourly is plenty — the move only matters once a week, and each
 // pass is a handful of GitHub reads when there is nothing to carry. Also run at
@@ -2986,6 +3140,49 @@ if (process.env.SPRINT_CARRYOVER !== 'off' && getGithubConfig().configured) {
   };
   setInterval(carryOver, SPRINT_CARRYOVER_MS).unref();
   carryOver();
+}
+
+// The Porter delivery watch: orders out with a rider get checked against
+// Porter's own tracking page, and marked Delivered in Odoo when Porter says
+// the trip ended. See server/ops/shared/deliveryWatch.js for why the queue is
+// a table rather than a timer per order.
+//
+// Every minute, because the row itself carries when it is next due — the tick
+// is only asking "is anything due yet?", which with nothing out is one indexed
+// read that returns no rows. The floor on how often a single order is polled
+// is POLL_FLOOR_MIN over there, not this interval.
+//
+// Run at startup too, and this is the part that matters most: the server
+// restarts on every backend edit, and an order that came due while it was
+// down is due the moment it is back. DELIVERY_WATCH=off disables it.
+const DELIVERY_WATCH_TICK_MS = 60 * 1000;
+if (process.env.DELIVERY_WATCH !== 'off') {
+  const watchTick = () => {
+    runDeliveryWatchTick(new Date())
+      .then((result) => {
+        if (!result.checked) return;
+        const parts = [`checked ${result.checked}`];
+        if (result.delivered) parts.push(`${result.delivered} delivered`);
+        if (result.cancelled) parts.push(`${result.cancelled} cancelled`);
+        if (result.gaveUp) parts.push(`${result.gaveUp} gave up`);
+        if (result.errors) parts.push(`${result.errors} to retry`);
+        console.log(`[delivery-watch] ${parts.join(', ')}`);
+      })
+      .catch((err) => console.error('[delivery-watch] tick failed —', err.message || err));
+  };
+  setInterval(watchTick, DELIVERY_WATCH_TICK_MS).unref();
+  try {
+    const open = openWatchCount();
+    if (open) console.log(`[delivery-watch] ${open} order(s) still out — resuming.`);
+    // Orders that went out with a Porter link but no watch on them: the link
+    // was saved before this existed, or a restart landed in the middle of
+    // saving it. Scoped to what is still in flight — see backfillWatches.
+    const queued = backfillWatches(new Date());
+    if (queued.length) console.log(`[delivery-watch] picked up ${queued.length} order(s) already out: ${queued.join(', ')}`);
+  } catch (err) {
+    console.error('[delivery-watch] could not take stock of open watches —', err.message);
+  }
+  watchTick();
 }
 
 const port = process.env.PORT || 4000;

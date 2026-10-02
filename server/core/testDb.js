@@ -263,6 +263,34 @@ CREATE TABLE sales_order (
   updated_at          TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- The Porter delivery watch queue. The state CHECK is carried over from the
+-- real schema on purpose: "which states exist" is the thing deliveryWatch.js
+-- is most likely to drift on, and a fixture that took any string would let a
+-- typo'd state close a watch here and fail in production.
+CREATE TABLE delivery_watch (
+  order_id        INTEGER PRIMARY KEY REFERENCES sales_order(order_id),
+  order_name      TEXT NOT NULL,
+  tracking_url    TEXT NOT NULL,
+  track_url       TEXT,
+  crn             TEXT,
+  state           TEXT NOT NULL DEFAULT 'watching'
+                    CHECK (state IN ('watching','delivered','cancelled','given_up','stopped')),
+  porter_status   TEXT,
+  eta_at          TEXT,
+  eta_basis       TEXT,
+  next_check_at   TEXT NOT NULL,
+  checks          INTEGER NOT NULL DEFAULT 0,
+  errors          INTEGER NOT NULL DEFAULT 0,
+  last_error      TEXT,
+  last_checked_at TEXT,
+  rider           TEXT,
+  porter_ended_at TEXT,
+  closed_at       TEXT,
+  closed_reason   TEXT,
+  created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 -- The stage-order and yield CHECKs are carried over from the real schema
 -- deliberately: smoking.js validates the same things itself, with a message
 -- that names the fields, and these are what would catch it going the other

@@ -3,6 +3,7 @@ import {
   sendWhatsappReply,
   useWhatsappConversation,
   useWhatsappInbox,
+  type WhatsappAccount,
   type WhatsappMessage,
   type WhatsappThread,
 } from '../../../lib/useWhatsappAttention';
@@ -18,9 +19,23 @@ import { usePersistedChoice } from '../../../lib/usePersistedChoice';
 // attention first and the longest wait at the top, so it reads top-to-bottom
 // as the order to work through. Anything this screen can't send — an approved
 // template once the 24h window has closed — links out to Odoo Discuss.
+//
+// MORE THAN ONE BUSINESS NUMBER. The server hands back every WhatsApp thread
+// regardless of which of our numbers it came to, each tagged with its
+// `account`. This screen shows them in ONE list — the whole point is a single
+// place that answers "who is still waiting", and splitting it per number
+// would put that answer in two places and let one of them go unread. The
+// number is a label on the row and an optional filter, nothing more.
+//
+// All of that is hidden while there is only one account, because a badge
+// saying the same thing on every row is noise. It appears by itself the first
+// time a second number has a conversation.
 
 type Filter = 'attention' | 'all';
 const FILTERS: Filter[] = ['attention', 'all'];
+
+// The number filter, as "all" or a stringified whatsapp.account id.
+const ALL_ACCOUNTS = 'all';
 
 // A reply typed here that Odoo hasn't handed back in the conversation yet.
 type PendingMessage = {
@@ -100,6 +115,18 @@ function statusOf(thread: WhatsappThread): { label: string; tone: 'failed' | 'wa
   return { label: 'Replied', tone: 'clear' };
 }
 
+// Which of our numbers the customer wrote to. Deliberately silent unless
+// there is more than one — with a single business line it would be the same
+// word on every row, and a badge that is always there stops being read.
+function AccountTag({ account, show }: { account: WhatsappAccount | null; show: boolean }) {
+  if (!show || !account) return null;
+  return (
+    <span className="wa-account" title={`Sent to ${account.name}`}>
+      {account.name}
+    </span>
+  );
+}
+
 // WhatsApp's own delivery ticks, so the state of a sent message needs no words.
 function DeliveryTick({ state }: { state: string | null }) {
   if (!state) return null;
@@ -115,9 +142,11 @@ type ChatProps = {
   onBack: () => void;
   draft: string;
   onDraftChange: (text: string) => void;
+  // True once a second business number has conversations — see AccountTag.
+  showAccount: boolean;
 };
 
-const ChatPane = ({ thread, onBack, draft, onDraftChange }: ChatProps) => {
+const ChatPane = ({ thread, onBack, draft, onDraftChange, showAccount }: ChatProps) => {
   const { conversation, error, loading, reload } = useWhatsappConversation(thread.channelId, thread.lastMessageAt);
   const [pending, setPending] = useState<PendingMessage[]>([]);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -208,6 +237,10 @@ const ChatPane = ({ thread, onBack, draft, onDraftChange }: ChatProps) => {
           <span className="wa-chat-name">{thread.customer}</span>
           <span className="wa-chat-sub">
             {thread.phone ? `+${thread.phone}` : ''}
+            {/* Which line they reached us on. It matters here more than on the
+                row: the reply you are about to type goes back out from this
+                number, and Odoo picks it from the channel, not from you. */}
+            <AccountTag account={thread.account} show={showAccount} />
             {thread.replyWindow.open ? (
               <span className="wa-window wa-window-open">Free reply for {formatDuration(thread.replyWindow.minutesLeft)}</span>
             ) : (
@@ -328,20 +361,52 @@ const ChatPane = ({ thread, onBack, draft, onDraftChange }: ChatProps) => {
 };
 
 const WhatsAppInbox = () => {
-  const { inbox, counts, threads, error, loading, refreshing, refresh } = useWhatsappInbox();
+  const { inbox, counts, accounts, threads, error, loading, refreshing, refresh } = useWhatsappInbox();
   const [filter, setFilter] = usePersistedChoice<Filter>('smokerings.whatsapp.filter', 'attention', FILTERS);
+  // Which business number, or all of them. Deliberately NOT persisted, unlike
+  // the attention filter beside it: the safe state to come back to is seeing
+  // everything. A narrowed number remembered from last week would hide a
+  // waiting customer behind a pill nobody remembers pressing.
+  const [accountFilter, setAccountFilter] = useState<string>(ALL_ACCOUNTS);
   // The open chat, by id rather than index, so a refresh that reorders the
   // list can't swap the customer you are typing to.
   const [selectedId, setSelectedId] = useState<number | null>(null);
   // Unsent text per conversation, so hopping to another chat and back keeps it.
   const [drafts, setDrafts] = useState<Record<number, string>>({});
 
+  // One number is not a choice, so there is nothing to show or filter by.
+  const showAccounts = accounts.length > 1;
+  // Resolved rather than stored: an account whose last conversation aged out
+  // of the list would otherwise leave the filter pointing at nothing and the
+  // list empty, with the pill that caused it no longer on screen.
+  const activeAccount =
+    showAccounts && accounts.some((account) => String(account.id) === accountFilter) ? accountFilter : ALL_ACCOUNTS;
+  const activeAccountName = accounts.find((account) => String(account.id) === activeAccount)?.name ?? null;
+
+  const inScope = useMemo(
+    () =>
+      activeAccount === ALL_ACCOUNTS
+        ? threads
+        : threads.filter((thread) => String(thread.account?.id) === activeAccount),
+    [threads, activeAccount],
+  );
+
+  // The attention/all pills count what they would actually show, which is the
+  // number-filtered set — a pill reading "Needs attention (7)" that lands on
+  // two rows is worse than no count.
+  const scopedCounts = useMemo(
+    () => ({ threads: inScope.length, needsAttention: inScope.filter((thread) => thread.needsAttention).length }),
+    [inScope],
+  );
+
   const visible = useMemo(
-    () => (filter === 'attention' ? threads.filter((thread) => thread.needsAttention) : threads),
-    [threads, filter],
+    () => (filter === 'attention' ? inScope.filter((thread) => thread.needsAttention) : inScope),
+    [inScope, filter],
   );
   // Looked up in every thread, not just the filtered ones — replying clears
-  // "needs attention", and the chat must not vanish mid-conversation.
+  // "needs attention", and the chat must not vanish mid-conversation. Same
+  // reason it ignores the number filter: narrowing the list is not a reason to
+  // shut a chat you are halfway through typing into.
   const selected = threads.find((thread) => thread.channelId === selectedId) || null;
 
   const unavailable = Boolean(inbox && !inbox.available);
@@ -359,7 +424,10 @@ const WhatsAppInbox = () => {
             </span>
           ) : null}
         </h2>
-        <p>Customer conversations from Odoo — longest wait first. Reply right here; it goes out from the business number.</p>
+        <p>
+          Customer conversations from Odoo — longest wait first. Reply right here; it goes out from{' '}
+          {showAccounts ? 'whichever of our numbers the customer wrote to' : 'the business number'}.
+        </p>
       </header>
 
       <div className="marketing-content wa-inbox">
@@ -376,14 +444,14 @@ const WhatsAppInbox = () => {
                     className={`wa-filter-pill${filter === 'attention' ? ' is-on' : ''}`}
                     onClick={() => setFilter('attention')}
                   >
-                    Needs attention{counts.needsAttention ? ` (${counts.needsAttention})` : ''}
+                    Needs attention{scopedCounts.needsAttention ? ` (${scopedCounts.needsAttention})` : ''}
                   </button>
                   <button
                     type="button"
                     className={`wa-filter-pill${filter === 'all' ? ' is-on' : ''}`}
                     onClick={() => setFilter('all')}
                   >
-                    All conversations{counts.threads ? ` (${counts.threads})` : ''}
+                    All conversations{scopedCounts.threads ? ` (${scopedCounts.threads})` : ''}
                   </button>
                 </div>
                 <button
@@ -398,6 +466,42 @@ const WhatsAppInbox = () => {
                 </button>
               </div>
 
+              {/* The second row, and only once there is a second number. "All
+                  numbers" leads and is the default, so the combined inbox is
+                  what you get without choosing anything. */}
+              {showAccounts ? (
+                <div className="wa-filter wa-filter-accounts" role="group" aria-label="Filter by business number">
+                  <button
+                    type="button"
+                    className={`wa-filter-pill wa-filter-pill-account${activeAccount === ALL_ACCOUNTS ? ' is-on' : ''}`}
+                    onClick={() => setAccountFilter(ALL_ACCOUNTS)}
+                    aria-pressed={activeAccount === ALL_ACCOUNTS}
+                  >
+                    All numbers{counts.threads ? ` (${counts.threads})` : ''}
+                  </button>
+                  {accounts.map((account) => (
+                    <button
+                      key={account.id}
+                      type="button"
+                      className={`wa-filter-pill wa-filter-pill-account${
+                        activeAccount === String(account.id) ? ' is-on' : ''
+                      }`}
+                      onClick={() => setAccountFilter(String(account.id))}
+                      aria-pressed={activeAccount === String(account.id)}
+                    >
+                      {account.name}
+                      {account.needsAttention ? (
+                        <span className="wa-filter-flag" aria-label={`${account.needsAttention} needing attention`}>
+                          {account.needsAttention}
+                        </span>
+                      ) : (
+                        ` (${account.threads})`
+                      )}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+
               {loading ? <p className="wa-notice">Loading conversations…</p> : null}
 
               {!loading && visible.length === 0 ? (
@@ -405,8 +509,10 @@ const WhatsAppInbox = () => {
                   <span aria-hidden="true">✅</span>
                   <p>
                     {filter === 'attention'
-                      ? 'All caught up — every customer has had a reply.'
-                      : 'No WhatsApp conversations in Odoo yet.'}
+                      ? `All caught up${activeAccountName ? ` on ${activeAccountName}` : ''} — every customer has had a reply.`
+                      : activeAccountName
+                        ? `No conversations on ${activeAccountName} yet.`
+                        : 'No WhatsApp conversations in Odoo yet.'}
                   </p>
                 </div>
               ) : null}
@@ -439,6 +545,13 @@ const WhatsAppInbox = () => {
                             {status.tone !== 'clear' ? (
                               <span className={`wa-status wa-status-${status.tone}`}>{status.label}</span>
                             ) : null}
+                            {/* Only while the number filter is off: inside a
+                                single number the badge repeats the pill above
+                                it on every row. */}
+                            <AccountTag
+                              account={thread.account}
+                              show={showAccounts && activeAccount === ALL_ACCOUNTS}
+                            />
                             {!thread.replyWindow.open ? <span className="wa-window wa-window-shut">Template only</span> : null}
                             {thread.unreadCount > 0 ? <span className="wa-unread">{thread.unreadCount}</span> : null}
                           </span>
@@ -457,6 +570,7 @@ const WhatsAppInbox = () => {
                 onBack={() => setSelectedId(null)}
                 draft={drafts[selected.channelId] || ''}
                 onDraftChange={(text) => setDrafts((all) => ({ ...all, [selected.channelId]: text }))}
+                showAccount={showAccounts}
               />
             ) : (
               <section className="wa-chat wa-chat-empty">

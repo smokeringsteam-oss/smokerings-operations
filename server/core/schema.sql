@@ -511,6 +511,52 @@ CREATE TABLE sales_order (
     updated_at          TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- One row per order whose Porter trip is being watched to its end, so that
+-- "delivered" is set in Odoo off Porter's own word rather than off somebody
+-- remembering to come back to the board (see server/ops/shared/deliveryWatch.js).
+--
+-- The watch lives here rather than in a timer in the server process on
+-- purpose: this server restarts on every backend edit, and a pending
+-- setTimeout would go with it, silently. A row with a next_check_at survives
+-- the restart and fires late instead of never.
+CREATE TABLE delivery_watch (
+    order_id        INTEGER PRIMARY KEY REFERENCES sales_order(order_id),
+    order_name      TEXT NOT NULL,
+    -- The link as saved on the order, and the tracking page it resolved to.
+    -- Both, because the short link is what the board shows and what a re-paste
+    -- would change, while the resolved one is what is actually read.
+    tracking_url    TEXT NOT NULL,
+    track_url       TEXT,
+    crn             TEXT,
+    -- watching  — still polling
+    -- delivered  — Porter ended the trip and Odoo took the status
+    -- cancelled  — Porter cancelled the trip; a human has to decide what next
+    -- given_up   — too many failures, or watched for too long
+    -- stopped    — the order was marked delivered by hand, or the link changed
+    state           TEXT NOT NULL DEFAULT 'watching'
+                      CHECK (state IN ('watching','delivered','cancelled','given_up','stopped')),
+    -- Porter's own status word, as last read.
+    porter_status   TEXT,
+    eta_at          TEXT,
+    eta_basis       TEXT,
+    next_check_at   TEXT NOT NULL,
+    checks          INTEGER NOT NULL DEFAULT 0,
+    errors          INTEGER NOT NULL DEFAULT 0,
+    last_error      TEXT,
+    last_checked_at TEXT,
+    rider           TEXT,
+    -- Porter's delivery timestamp, not the moment this noticed.
+    porter_ended_at TEXT,
+    closed_at       TEXT,
+    closed_reason   TEXT,
+    created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- What every tick asks for: the watching rows that are due. Both columns, so
+-- the common case (nothing due) is answered from the index alone.
+CREATE INDEX delivery_watch_due_idx ON delivery_watch(state, next_check_at);
+
 CREATE TABLE scheduled_task (
     task_id           TEXT PRIMARY KEY,
     day               TEXT NOT NULL,

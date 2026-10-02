@@ -18,6 +18,7 @@ function thread(overrides: Record<string, unknown> = {}) {
     customer: 'Eric Savage',
     phone: '919886751428',
     partnerId: 57,
+    account: { id: 2, name: 'Smokerings BBQ' },
     odooUrl: 'https://smokerings.odoo.com/odoo/discuss/10',
     lastMessageAt: '2026-09-06T11:15:00.000Z',
     lastMessageFrom: 'customer',
@@ -36,11 +37,28 @@ function thread(overrides: Record<string, unknown> = {}) {
   };
 }
 
+// The per-number roll-up the server derives from the threads — rebuilt here
+// the same way, so a fixture can't describe an inbox the server could never
+// produce (a filter pill for a number with no conversations behind it).
+function accountsOf(threads: ReturnType<typeof thread>[]) {
+  const byId = new Map<number, { id: number; name: string; threads: number; needsAttention: number }>();
+  for (const t of threads) {
+    const account = t.account as { id: number; name: string } | null;
+    if (!account) continue;
+    const seen = byId.get(account.id) || { ...account, threads: 0, needsAttention: 0 };
+    seen.threads += 1;
+    if (t.needsAttention) seen.needsAttention += 1;
+    byId.set(account.id, seen);
+  }
+  return [...byId.values()].sort((a, b) => a.name.localeCompare(b.name));
+}
+
 function inbox(threads: ReturnType<typeof thread>[]) {
   return {
     configured: true,
     available: true,
     fetchedAt: NOW.toISOString(),
+    accounts: accountsOf(threads),
     counts: {
       threads: threads.length,
       needsAttention: threads.filter((t) => t.needsAttention).length,
@@ -225,6 +243,100 @@ describe('the inbox screen', () => {
     await mount(inbox([thread({ awaitingReply: false, needsAttention: false, waitingMinutes: null })]));
 
     expect(await screen.findByText(/All caught up/)).toBeInTheDocument();
+  });
+
+  // Two business numbers on the same WABA. The rule under all of these: both
+  // land in ONE list. Anything that split the inbox per number would put "who
+  // is still waiting" in two places, and one of them would go unread.
+  describe('with a second business number', () => {
+    const catering = (overrides: Record<string, unknown> = {}) =>
+      thread({
+        channelId: 11,
+        customer: 'Manjunath D K',
+        account: { id: 3, name: 'Smokerings Catering' },
+        odooUrl: 'https://smokerings.odoo.com/odoo/discuss/11',
+        ...overrides,
+      });
+
+    // Scoped to the filter row on purpose: a thread row carries the same
+    // number as a badge, so an unscoped query would match both.
+    const numberPill = (name: RegExp) =>
+      within(screen.getByRole('group', { name: /business number/i })).getByRole('button', { name });
+
+    it('shows both numbers in one list, each row saying which it came to', async () => {
+      await mount(inbox([thread(), catering()]));
+
+      expect(await screen.findByText('Eric Savage')).toBeInTheDocument();
+      expect(screen.getByText('Manjunath D K')).toBeInTheDocument();
+      const bbq = screen.getByRole('button', { name: /Eric Savage/ });
+      const cat = screen.getByRole('button', { name: /Manjunath D K/ });
+      expect(within(bbq).getByText('Smokerings BBQ')).toBeInTheDocument();
+      expect(within(cat).getByText('Smokerings Catering')).toBeInTheDocument();
+    });
+
+    it('narrows to one number on demand, and back to both', async () => {
+      await mount(inbox([thread(), catering()]));
+      await screen.findByText('Eric Savage');
+
+      fireEvent.click(numberPill(/Smokerings Catering/));
+      expect(screen.queryByText('Eric Savage')).not.toBeInTheDocument();
+      expect(screen.getByText('Manjunath D K')).toBeInTheDocument();
+
+      fireEvent.click(numberPill(/All numbers/));
+      expect(screen.getByText('Eric Savage')).toBeInTheDocument();
+    });
+
+    it('counts the attention pill against the number in view, not the whole inbox', async () => {
+      // Otherwise a pill reading "Needs attention (2)" sits over one row.
+      await mount(inbox([thread(), catering()]));
+      await screen.findByText('Eric Savage');
+      expect(screen.getByRole('button', { name: /Needs attention \(2\)/ })).toBeInTheDocument();
+
+      fireEvent.click(numberPill(/Smokerings Catering/));
+
+      expect(screen.getByRole('button', { name: /Needs attention \(1\)/ })).toBeInTheDocument();
+    });
+
+    it('keeps an open chat open when the number filter moves away from it', async () => {
+      // Narrowing the list is not a reason to shut a conversation someone is
+      // halfway through typing into.
+      await mount(inbox([thread(), catering()]));
+      await screen.findByText('Eric Savage');
+      fireEvent.click(screen.getByRole('button', { name: /Eric Savage/ }));
+      await screen.findByRole('region', { name: /conversation with eric savage/i });
+
+      fireEvent.click(numberPill(/Smokerings Catering/));
+
+      expect(screen.getByRole('region', { name: /conversation with eric savage/i })).toBeInTheDocument();
+    });
+
+    it('names the number in the chat header, since the reply goes back out from it', async () => {
+      await mount(inbox([thread(), catering()]));
+      await screen.findByText('Manjunath D K');
+      fireEvent.click(screen.getByRole('button', { name: /Manjunath D K/ }));
+
+      const chat = await screen.findByRole('region', { name: /conversation with manjunath/i });
+      expect(within(chat).getByTitle('Sent to Smokerings Catering')).toBeInTheDocument();
+    });
+
+    it('says which number is quiet rather than claiming the whole inbox is clear', async () => {
+      await mount(inbox([thread(), catering({ needsAttention: false, awaitingReply: false, waitingMinutes: null })]));
+      await screen.findByText('Eric Savage');
+
+      fireEvent.click(numberPill(/Smokerings Catering/));
+
+      expect(screen.getByText(/All caught up on Smokerings Catering/)).toBeInTheDocument();
+    });
+  });
+
+  it('says nothing about numbers while there is only one', async () => {
+    // A badge repeating the same word on every row stops being read, so none
+    // of the multi-number furniture appears until it means something.
+    await mount(inbox([thread()]));
+    await screen.findByText('Eric Savage');
+
+    expect(screen.queryByRole('group', { name: /business number/i })).not.toBeInTheDocument();
+    expect(screen.queryByText('Smokerings BBQ')).not.toBeInTheDocument();
   });
 
   it('explains itself instead of showing an empty list when the WhatsApp module is missing', async () => {

@@ -34,12 +34,27 @@ const { fetchWhatsappThreads, fetchWhatsappConversation, sendWhatsappReply } = a
 
 function fakeOdoo(model, method, args = []) {
   if (model === 'discuss.channel' && method === 'fields_get') {
-    return { whatsapp_number: { type: 'char' }, whatsapp_partner_id: { type: 'many2one' } };
+    return {
+      whatsapp_number: { type: 'char' },
+      whatsapp_partner_id: { type: 'many2one' },
+      // Which of OUR numbers a channel belongs to. Present on every Odoo that
+      // has the WhatsApp module; probed separately anyway, and the "Odoo
+      // without it" case has its own describe block at the bottom.
+      wa_account_id: { type: 'many2one' },
+    };
   }
   if (model === 'discuss.channel' && method === 'search_read') {
     // A single-channel lookup filters by id; the inbox asks for them all.
     const idClause = args[0]?.find?.((clause) => clause[0] === 'id');
-    return idClause ? channels.filter((channel) => channel.id === idClause[2]) : channels;
+    const rows = idClause ? channels.filter((channel) => channel.id === idClause[2]) : channels;
+    // Projected to the requested fields, the way search_read really answers.
+    // Handing back the whole fixture regardless would make the "Odoo without
+    // the wa_account_id column" case silently pass by reading a field the
+    // code had correctly decided not to ask for.
+    const wanted = args[1] || [];
+    return rows.map((row) =>
+      Object.fromEntries(Object.entries(row).filter(([key]) => key === 'id' || wanted.includes(key))),
+    );
   }
   if (model === 'discuss.channel' && method === 'message_post') return [555];
   if (model === 'ir.model.data' && method === 'check_object_reference') return ['mail.message.subtype', COMMENT_SUBTYPE];
@@ -97,10 +112,41 @@ beforeEach(() => {
       whatsapp_partner_id: [CUSTOMER_PARTNER, 'Eric Savage'],
       whatsapp_channel_valid_until: windowOpen(),
       last_interest_dt: '2026-09-06 08:10:08',
+      wa_account_id: [2, 'Smokerings BBQ'],
     },
   ];
   conversation([['customer', 'received', 60], ['us', 'read', 30]]);
 });
+
+// A second conversation, on whichever of our numbers is named — what the
+// fixture above cannot express, because it is one channel with one account.
+// Appends to the same `messages`/`waRows` the mock serves, so call it after
+// conversation() rather than before.
+function addChannel({ id, customer, account, from = 'customer', minutesAgo = 20 }) {
+  channels.push({
+    id,
+    name: `${customer} (9100000${id})`,
+    whatsapp_number: `9100000${id}`,
+    whatsapp_partner_id: [CUSTOMER_PARTNER + id, customer],
+    whatsapp_channel_valid_until: windowOpen(),
+    last_interest_dt: '2026-09-06 09:00:00',
+    wa_account_id: account,
+  });
+  messages.push({
+    id: 900 + id,
+    res_id: id,
+    date: new Date(Date.now() - minutesAgo * 60_000).toISOString().slice(0, 19).replace('T', ' '),
+    author_id: from === 'customer' ? [CUSTOMER_PARTNER + id, customer] : [SELF_PARTNER, 'us'],
+    body: '<p>hello</p>',
+  });
+  waRows.push({
+    mail_message_id: [900 + id, false],
+    message_type: from === 'customer' ? 'inbound' : 'outbound',
+    state: from === 'customer' ? 'received' : 'read',
+    failure_type: false,
+    failure_reason: false,
+  });
+}
 
 describe('what needs attention', () => {
   it('flags a thread whose last message came from the customer', async () => {
@@ -322,5 +368,89 @@ describe('when Odoo is not set up', () => {
     expect(result.threads).toEqual([]);
     expect(result.counts.needsAttention).toBe(0);
     expect(result.reason).toMatch(/WhatsApp module/);
+  });
+});
+
+// Two business numbers on the same WABA is two whatsapp.account records in
+// Odoo, and every channel points at the one it arrived on. The rule these
+// tests pin is that the inbox stays ONE list: a screen whose job is "who is
+// still waiting" must never quietly answer for only one of our numbers.
+describe('more than one business number', () => {
+  it('tells each thread which of our numbers it came to', async () => {
+    addChannel({ id: 11, customer: 'Manjunath D K', account: [3, 'Smokerings Catering'] });
+
+    const { threads } = await fetchWhatsappThreads();
+
+    const byCustomer = Object.fromEntries(threads.map((thread) => [thread.customer, thread.account]));
+    expect(byCustomer['Eric Savage']).toEqual({ id: 2, name: 'Smokerings BBQ' });
+    expect(byCustomer['Manjunath D K']).toEqual({ id: 3, name: 'Smokerings Catering' });
+  });
+
+  it('lists both numbers in one inbox rather than scoping the query to one', async () => {
+    addChannel({ id: 11, customer: 'Manjunath D K', account: [3, 'Smokerings Catering'] });
+
+    const { threads } = await fetchWhatsappThreads();
+
+    expect(threads).toHaveLength(2);
+    // The guard against the obvious future mistake: adding a wa_account_id
+    // clause here would hide a whole number's worth of waiting customers, and
+    // it would look exactly like a quiet week.
+    const [domain] = execute.mock.calls.find(([model, method]) => model === 'discuss.channel' && method === 'search_read')[2];
+    expect(domain).toEqual([['channel_type', '=', 'whatsapp']]);
+  });
+
+  it('rolls the numbers up with their own waiting counts, for the filter', async () => {
+    // Eric is waiting on BBQ; on Catering one is waiting and one is handled.
+    conversation([['us', 'read', 90], ['customer', 'received', 45]]);
+    addChannel({ id: 11, customer: 'Manjunath D K', account: [3, 'Smokerings Catering'] });
+    addChannel({ id: 12, customer: 'Vyshnavi Vittal', account: [3, 'Smokerings Catering'], from: 'us' });
+
+    const { accounts, counts } = await fetchWhatsappThreads();
+
+    expect(accounts).toEqual([
+      { id: 2, name: 'Smokerings BBQ', threads: 1, needsAttention: 1 },
+      { id: 3, name: 'Smokerings Catering', threads: 2, needsAttention: 1 },
+    ]);
+    // The headline count still spans both — it is what the sidebar bubble
+    // shows, and the bubble is not per number.
+    expect(counts.needsAttention).toBe(2);
+  });
+
+  it('offers only numbers that actually have conversations', async () => {
+    // An account added in Odoo but not yet live would otherwise show as a
+    // filter pill that always lands on an empty list.
+    const { accounts } = await fetchWhatsappThreads();
+
+    expect(accounts).toEqual([{ id: 2, name: 'Smokerings BBQ', threads: 1, needsAttention: 0 }]);
+  });
+
+  it('carries a thread with no account as unlabelled rather than dropping it', async () => {
+    channels[0].wa_account_id = false;
+
+    const { threads, accounts } = await fetchWhatsappThreads();
+
+    expect(threads).toHaveLength(1);
+    expect(threads[0].account).toBeNull();
+    expect(accounts).toEqual([]);
+  });
+
+  it('keeps working on an Odoo whose discuss.channel has no wa_account_id at all', async () => {
+    // Losing the labels is acceptable; losing the inbox is not. The schema
+    // answer is cached per process, so this needs a fresh module.
+    vi.resetModules();
+    execute.mockImplementationOnce(() => ({
+      whatsapp_number: { type: 'char' },
+      whatsapp_partner_id: { type: 'many2one' },
+    }));
+    const { fetchWhatsappThreads: fresh } = await import('./odooWhatsapp.js');
+
+    const { threads, accounts } = await fresh();
+
+    expect(threads).toHaveLength(1);
+    expect(threads[0].account).toBeNull();
+    expect(accounts).toEqual([]);
+    // And it must not have asked for the column it hasn't got.
+    const [, fields] = execute.mock.calls.find(([model, method]) => model === 'discuss.channel' && method === 'search_read')[2];
+    expect(fields).not.toContain('wa_account_id');
   });
 });

@@ -27,6 +27,32 @@ export type PackStatusValue =
 
 export type PackInvoice = { number: string; id: string | null; url: string | null };
 
+// The server-side watch on an order's Porter trip — see
+// server/ops/shared/deliveryWatch.js. The board only reads this: what closes
+// a watch is Porter's own status, never anything clicked here. The one
+// exception is "Check now", which asks for the check to happen sooner than
+// its next due time rather than asking for a different answer.
+export type DeliveryWatchState = 'watching' | 'delivered' | 'cancelled' | 'given_up' | 'stopped';
+
+export type DeliveryWatch = {
+  orderId: string;
+  state: DeliveryWatchState;
+  // Porter's own word — 'live', 'unloading', 'completed'…
+  porterStatus: string | null;
+  etaAt: string | null;
+  // 'rider' (measured from where the rider is), 'pickup', or 'default'.
+  etaBasis: string | null;
+  nextCheckAt: string;
+  checks: number;
+  errors: number;
+  lastError: string | null;
+  lastCheckedAt: string | null;
+  rider: string | null;
+  // Porter's delivery timestamp, not when the watcher noticed.
+  porterEndedAt: string | null;
+  closedReason: string | null;
+};
+
 export type PackingStatus = {
   status: PackStatusValue;
   deliveryPerson: string | null;
@@ -56,6 +82,13 @@ export type PackingStatus = {
   // in for a save that carried no odooFulfilment of its own (Odoo
   // unreachable, or no such field on this database).
   savedHere?: boolean;
+  // The order's fetch-time odooFulfilment as it stood when that save was made
+  // — what tells a stale snapshot from a fresh one. While the order still
+  // carries this value the board has not re-read Odoo since the save, so the
+  // echo above is the newer word. Once a refresh brings something different
+  // — including a stage set in Odoo directly — the fetched value is fresher
+  // again and wins back.
+  odooSeen?: string | null;
 };
 
 export const PENDING_STATUS: PackingStatus = {
@@ -74,6 +107,7 @@ export const PENDING_STATUS: PackingStatus = {
   odooError: null,
   odooFulfilment: null,
   savedHere: false,
+  odooSeen: null,
 };
 
 // The pipeline, in order — badge label/emoji, which PackingStatus field holds
@@ -185,8 +219,18 @@ const STAGE_BY_ODOO_STATUS: Record<string, PackStatusValue> = {
 // using it would re-render the stage the order was on BEFORE the change and
 // read as the save having silently done nothing. The local stage stands in
 // instead, and odooError says so when Odoo is the reason.
-const odooValueFor = (order: FulfilmentOrder, status: PackingStatus | undefined) =>
-  status?.odooFulfilment ?? (status?.savedHere ? null : order.odooFulfilment) ?? null;
+//
+// That only holds while the snapshot really is the older one. The board
+// re-reads Odoo on its own fetch (Refresh, a range or channel change), and
+// once it hands back something other than what the save was made against,
+// that is the fresher word — a stage set in Odoo directly has to be able to
+// win back, or a save from here would pin the card for the rest of the
+// session.
+const odooValueFor = (order: FulfilmentOrder, status: PackingStatus | undefined) => {
+  const fetched = order.odooFulfilment ?? null;
+  if (!status?.savedHere || fetched !== (status.odooSeen ?? null)) return fetched;
+  return status.odooFulfilment ?? null;
+};
 
 // The stage to show and drive the controls from. Odoo wins whenever it holds
 // a value this board understands — including one set in Odoo directly, which
@@ -211,6 +255,7 @@ export const effectiveStatus = (order: FulfilmentOrder, status: PackingStatus | 
 // is identical for both and keyed only by Odoo order id.
 export function useOrderFulfilment(orderIds: number[], channel: 'B2C' | 'B2B' = 'B2C') {
   const [statuses, setStatuses] = useState<Record<string, PackingStatus>>({});
+  const [watches, setWatches] = useState<Record<string, DeliveryWatch>>({});
   const [busy, setBusy] = useState<Record<string, boolean>>({});
   const [errors, setErrors] = useState<Record<string, string>>({});
   const idsKey = useMemo(() => orderIds.join(','), [orderIds]);
@@ -218,17 +263,58 @@ export function useOrderFulfilment(orderIds: number[], channel: 'B2C' | 'B2B' = 
   useEffect(() => {
     if (!idsKey) {
       setStatuses({});
+      setWatches({});
       return;
     }
     let cancelled = false;
-    fetch(`/api/order-packing/status?orderIds=${idsKey}`)
-      .then((resp) => resp.json())
-      .then((json: Record<string, PackingStatus>) => {
-        if (!cancelled) setStatuses(json || {});
-      })
-      .catch(() => {}); // non-fatal — cards just read "not started" until it loads
+    const load = () => {
+      // Both in one pass: the delivery watch can move an order to Delivered
+      // on the server, so a board that refreshed the watches without the
+      // statuses would show "delivered by Porter" next to a stage that still
+      // read Out for Delivery.
+      Promise.all([
+        fetch(`/api/order-packing/status?orderIds=${idsKey}`).then((r) => r.json()),
+        fetch(`/api/order-packing/delivery-watch?orderIds=${idsKey}`).then((r) => r.json()),
+      ])
+        .then(([status, watch]) => {
+          if (cancelled) return;
+          // Merged onto what is already here, not dropped over it. This fetch
+          // reads the local table alone and carries no Odoo value, so
+          // overwriting a saved entry with it would lose that save's
+          // odooFulfilment echo — and with it the fact that the order's
+          // fetch-time snapshot is the older word. The stage would flip back
+          // to whatever Odoo read before the change, a minute after making it.
+          setStatuses((prev) => {
+            const next: Record<string, PackingStatus> = { ...(status || {}) };
+            Object.keys(next).forEach((key) => {
+              const saved = prev[key];
+              if (!saved?.savedHere) return;
+              next[key] = {
+                ...next[key],
+                savedHere: true,
+                odooSeen: saved.odooSeen ?? null,
+                // Only while the row still reads what that save left it on.
+                // If the server has moved the order on since — the delivery
+                // watch marking it delivered — the echo is now the older
+                // word, and the row it moved to stands in instead.
+                odooFulfilment: next[key].status === saved.status ? (saved.odooFulfilment ?? null) : null,
+              };
+            });
+            return next;
+          });
+          setWatches(watch || {});
+        })
+        .catch(() => {}); // non-fatal — cards just read "not started" until it loads
+    };
+    load();
+    // While an order is out with a rider its stage can change without anyone
+    // touching this board, so the board has to come back and look. A minute
+    // matches the server's own tick: polling faster could only show the same
+    // answer sooner than the watcher has one.
+    const timer = window.setInterval(load, 60_000);
     return () => {
       cancelled = true;
+      window.clearInterval(timer);
     };
   }, [idsKey]);
 
@@ -245,7 +331,7 @@ export function useOrderFulfilment(orderIds: number[], channel: 'B2C' | 'B2B' = 
         });
         const json = await resp.json();
         if (!resp.ok) throw new Error(json.error || 'Failed to update status.');
-        setStatuses((prev) => ({ ...prev, [key]: { ...json, savedHere: true } }));
+        setStatuses((prev) => ({ ...prev, [key]: { ...json, savedHere: true, odooSeen: order.odooFulfilment ?? null } }));
       } catch (err) {
         setErrors((prev) => ({ ...prev, [key]: String((err as Error).message || err) }));
       } finally {
@@ -270,11 +356,14 @@ export function useOrderFulfilment(orderIds: number[], channel: 'B2C' | 'B2B' = 
         });
         const json = await resp.json();
         if (!resp.ok) throw new Error(json.error || 'Failed to save the tracking link.');
+        // The watch started by saving the link, so the card can show the ETA
+        // straight away rather than at the next minute's refresh.
+        if (json.watch?.watch) setWatches((prev) => ({ ...prev, [key]: json.watch.watch }));
         setStatuses((prev) => ({
           ...prev,
           // A link-only save carries no Odoo echo; keep the last one so the
           // stage shown doesn't fall back to the fetch-time snapshot.
-          [key]: advance ? { ...json, savedHere: true } : { ...prev[key], ...json },
+          [key]: advance ? { ...json, savedHere: true, odooSeen: order.odooFulfilment ?? null } : { ...prev[key], ...json },
         }));
         // Saved on the board, but Odoo (and so the customer's tracker) missed it.
         if (json.odooTrackingError) {
@@ -306,13 +395,45 @@ export function useOrderFulfilment(orderIds: number[], channel: 'B2C' | 'B2B' = 
       });
       const json = await resp.json();
       if (!resp.ok) throw new Error(json.error || 'Failed to retry invoice.');
-      setStatuses((prev) => ({ ...prev, [key]: { ...json, savedHere: true } }));
+      setStatuses((prev) => ({ ...prev, [key]: { ...json, savedHere: true, odooSeen: order.odooFulfilment ?? null } }));
     } catch (err) {
       setErrors((prev) => ({ ...prev, [key]: String((err as Error).message || err) }));
     } finally {
       setBusy((prev) => ({ ...prev, [key]: false }));
     }
   }, [channel]);
+
+  // Asks the server to check this order against Porter now rather than at its
+  // next due time — for when the rider has phoned to say it's dropped and
+  // nobody wants to wait out the poll. It does not force the order Delivered:
+  // the answer still comes from Porter, so a check on a trip still running
+  // just moves the ETA along.
+  const checkDelivery = useCallback(async (order: FulfilmentOrder) => {
+    const key = String(order.orderId);
+    setBusy((prev) => ({ ...prev, [key]: true }));
+    setErrors((prev) => ({ ...prev, [key]: '' }));
+    try {
+      const resp = await fetch('/api/order-packing/delivery-watch/check', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ orderId: order.orderId }),
+      });
+      const json = await resp.json();
+      if (!resp.ok) throw new Error(json.error || 'Failed to check the delivery.');
+      if (json.watch) setWatches((prev) => ({ ...prev, [key]: json.watch }));
+      // A check that found the order delivered has moved its stage, so the
+      // card's stage has to be re-read rather than left on the value it was
+      // rendered with.
+      if (json.outcome === 'delivered') {
+        const fresh = await fetch(`/api/order-packing/status?orderIds=${order.orderId}`).then((r) => r.json());
+        if (fresh?.[key]) setStatuses((prev) => ({ ...prev, [key]: { ...fresh[key], savedHere: true, odooSeen: order.odooFulfilment ?? null } }));
+      }
+    } catch (err) {
+      setErrors((prev) => ({ ...prev, [key]: String((err as Error).message || err) }));
+    } finally {
+      setBusy((prev) => ({ ...prev, [key]: false }));
+    }
+  }, []);
 
   // Bulk apply — "start every order in this slot" and the like.
   //
@@ -330,7 +451,7 @@ export function useOrderFulfilment(orderIds: number[], channel: 'B2C' | 'B2B' = 
     [setStatus],
   );
 
-  return { statuses, busy, errors, setStatus, setStatusBulk, saveTrackingLink, retryInvoice };
+  return { statuses, watches, busy, errors, setStatus, setStatusBulk, saveTrackingLink, retryInvoice, checkDelivery };
 }
 
 // The current stage as a badge — lives in the order card's header row so the
@@ -368,42 +489,26 @@ export type BulkStatusBarProps = {
   onApply: (orders: FulfilmentOrder[], status: Exclude<PackStatusValue, 'pending'>) => void;
 };
 
-// Whole-slot actions. "Start all" is the one-click common case (everything
-// not yet started goes into the smoker); the picker beside it does the same
-// for any other stage, applied to every order in the slot rather than only
-// the un-started ones.
+// Whole-slot actions. "Start all" is the only one: everything not yet started
+// goes into the smoker in one click. Setting a whole slot to any other stage
+// used to sit beside it; it was taken out, because every stage after the
+// smoker is per-order work (a tracking link, a delivery person, an invoice)
+// and stamping it across a slot wholesale only ever hid that.
 export const BulkStatusBar: React.FC<BulkStatusBarProps> = ({ orders, statuses, busy, onApply }) => {
-  const [bulkStage, setBulkStage] = useState<Exclude<PackStatusValue, 'pending'>>('packed');
   if (!orders.length) return null;
 
   const notStarted = orders.filter((o) => effectiveStatus(o, statuses[String(o.orderId)]) === 'pending');
+  if (!notStarted.length) return null;
 
   return (
     <div className="pack-bulk-bar">
-      {notStarted.length > 0 && (
-        <button
-          type="button"
-          className="primary-button small"
-          disabled={busy}
-          onClick={() => onApply(notStarted, 'in_smoker')}
-        >
-          {busy ? 'Working…' : `🔥 Start all (${notStarted.length})`}
-        </button>
-      )}
-      <span className="pack-bulk-sep">or set all {orders.length} to</span>
-      <select
-        value={bulkStage}
+      <button
+        type="button"
+        className="primary-button small"
         disabled={busy}
-        onChange={(e) => setBulkStage(e.target.value as Exclude<PackStatusValue, 'pending'>)}
+        onClick={() => onApply(notStarted, 'in_smoker')}
       >
-        {STAGES.map((stage) => (
-          <option key={stage.key} value={stage.key}>
-            {stage.emoji} {stage.label}
-          </option>
-        ))}
-      </select>
-      <button type="button" className="secondary-button small" disabled={busy} onClick={() => onApply(orders, bulkStage)}>
-        Apply
+        {busy ? 'Working…' : `🔥 Start all (${notStarted.length})`}
       </button>
     </div>
   );
@@ -412,11 +517,102 @@ export const BulkStatusBar: React.FC<BulkStatusBarProps> = ({ orders, statuses, 
 export type FulfilmentControlProps = {
   order: FulfilmentOrder;
   status: PackingStatus | undefined;
+  // Optional so a board that hasn't been given the watches renders exactly as
+  // it did before — the note simply doesn't appear.
+  watch?: DeliveryWatch;
   busy: boolean;
   error?: string;
   onSetStatus: (order: FulfilmentOrder, status: Exclude<PackStatusValue, 'pending'>, deliveryPerson?: string) => void;
   onSaveTracking: (order: FulfilmentOrder, trackingUrl: string, advance: boolean) => Promise<boolean>;
-  onRetryInvoice: (order: FulfilmentOrder) => void;
+  onCheckDelivery?: (order: FulfilmentOrder) => void;
+};
+
+// The hours-and-minutes of an ISO timestamp, in the browser's own locale.
+const clockOf = (iso: string | null) =>
+  iso ? new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
+
+// Whole minutes from now until an ISO timestamp, floored at zero — "any
+// minute now" rather than a negative countdown on an ETA that has passed.
+const minutesUntil = (iso: string | null) =>
+  iso ? Math.max(0, Math.round((new Date(iso).getTime() - Date.now()) / 60000)) : null;
+
+// What the server's watch on this order is doing, under the tracking link.
+//
+// The point of showing it is that nobody should have to wonder whether the
+// order will get marked. Either it says a time it is next looking, or it says
+// the watch has stopped and why — there is no silent state.
+const DeliveryWatchNote: React.FC<{
+  order: FulfilmentOrder;
+  watch: DeliveryWatch | undefined;
+  busy: boolean;
+  onCheckNow: (order: FulfilmentOrder) => void;
+}> = ({ order, watch, busy, onCheckNow }) => {
+  if (!watch) return null;
+
+  if (watch.state === 'watching') {
+    const mins = minutesUntil(watch.etaAt);
+    return (
+      <div className="pack-watch pack-watch-live">
+        <span className="pack-watch-line">
+          🕒 Marking this delivered when Porter does
+          {watch.etaAt && (
+            <>
+              {' · ETA '}
+              <strong>{clockOf(watch.etaAt)}</strong>
+              {mins !== null && ` (~${mins} min)`}
+            </>
+          )}
+        </span>
+        <span className="pack-watch-detail">
+          {watch.porterStatus ? `Porter: ${watch.porterStatus}` : 'Not read yet'}
+          {watch.rider && ` · ${watch.rider}`}
+          {` · next check ${clockOf(watch.nextCheckAt)}`}
+          {/* An estimate from the kitchen rather than from the rider is a
+              rougher one, and saying so stops it being quoted to a customer. */}
+          {watch.etaBasis === 'pickup' && ' · estimated from the kitchen'}
+          {watch.etaBasis === 'default' && ' · rough estimate'}
+        </span>
+        {watch.errors > 0 && watch.lastError && (
+          <span className="pack-watch-detail">⚠️ Last check failed: {watch.lastError} — retrying.</span>
+        )}
+        <button type="button" className="pack-link-btn" disabled={busy} onClick={() => onCheckNow(order)}>
+          {busy ? 'Checking…' : 'Check now'}
+        </button>
+      </div>
+    );
+  }
+
+  if (watch.state === 'delivered') {
+    return (
+      <div className="pack-watch pack-watch-done">
+        <span className="pack-watch-line">
+          ✅ Porter delivered this{watch.porterEndedAt && ` at ${clockOf(watch.porterEndedAt)}`} — marked in Odoo.
+        </span>
+      </div>
+    );
+  }
+
+  if (watch.state === 'cancelled') {
+    return (
+      <div className="pack-watch pack-watch-alert">
+        <span className="pack-watch-line">🚫 Porter cancelled this trip — the order is NOT delivered.</span>
+        <span className="pack-watch-detail">Book another rider, then paste the new link here.</span>
+      </div>
+    );
+  }
+
+  if (watch.state === 'given_up') {
+    return (
+      <div className="pack-watch pack-watch-alert">
+        <span className="pack-watch-line">⚠️ Stopped watching this delivery — set the stage by hand.</span>
+        <span className="pack-watch-detail">{watch.closedReason || watch.lastError}</span>
+      </div>
+    );
+  }
+
+  // 'stopped' — the order was marked delivered from the board, or the link
+  // was changed. Nothing to say that the stage above doesn't already say.
+  return null;
 };
 
 // The rider's live tracking link. Pasting is the whole interaction: a link
@@ -523,11 +719,12 @@ const TrackingLinkField: React.FC<{
 export const FulfilmentControl: React.FC<FulfilmentControlProps> = ({
   order,
   status,
+  watch,
   busy,
   error,
   onSetStatus,
   onSaveTracking,
-  onRetryInvoice,
+  onCheckDelivery,
 }) => {
   const st = status || PENDING_STATUS;
 
@@ -589,6 +786,10 @@ export const FulfilmentControl: React.FC<FulfilmentControlProps> = ({
         />
       )}
 
+      {showsTracking && onCheckDelivery && (
+        <DeliveryWatchNote order={order} watch={watch} busy={busy} onCheckNow={onCheckDelivery} />
+      )}
+
       {current === 'delivered' && (
         <div className="pack-invoice-box">
           {st.invoice ? (
@@ -603,17 +804,7 @@ export const FulfilmentControl: React.FC<FulfilmentControlProps> = ({
                 </>
               )}
             </span>
-          ) : st.invoiceError ? (
-            <div className="pack-invoice-error">
-              <div>
-                <strong>⚠️ Invoice not raised</strong>
-                <span className="pack-invoice-error-detail">{st.invoiceError}</span>
-              </div>
-              <button type="button" className="secondary-button small" disabled={busy} onClick={() => onRetryInvoice(order)}>
-                {busy ? 'Retrying…' : 'Retry'}
-              </button>
-            </div>
-          ) : st.status === 'delivered' ? (
+          ) : st.status === 'delivered' && !st.invoiceError ? (
             <span>Generating invoice…</span>
           ) : (
             // Odoo was moved to DELIVERED somewhere else, so the invoice step

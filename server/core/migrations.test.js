@@ -233,7 +233,7 @@ describe('migrate', () => {
   });
 
   it('says what it changed the first time and nothing the second', () => {
-    expect(firstRun.length).toBe(14);
+    expect(firstRun.length).toBe(15);
     // Idempotence is what makes it safe to run on every open: the server
     // opens the database on the first request of every restart.
     expect(migrate(legacy)).toEqual([]);

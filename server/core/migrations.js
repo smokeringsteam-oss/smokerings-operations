@@ -329,6 +329,40 @@ function salesOrderTrackingUrl(db) {
   return 'sales_order: tracking_url added';
 }
 
+// The Porter delivery watch — the queue of orders whose trip is being followed
+// to its end so Odoo gets told about the delivery without anyone going back to
+// the board. See server/ops/shared/deliveryWatch.js.
+function deliveryWatchQueue(db) {
+  if (hasTable(db, 'delivery_watch')) return null;
+  db.exec(`
+    CREATE TABLE delivery_watch (
+        order_id        INTEGER PRIMARY KEY REFERENCES sales_order(order_id),
+        order_name      TEXT NOT NULL,
+        tracking_url    TEXT NOT NULL,
+        track_url       TEXT,
+        crn             TEXT,
+        state           TEXT NOT NULL DEFAULT 'watching'
+                          CHECK (state IN ('watching','delivered','cancelled','given_up','stopped')),
+        porter_status   TEXT,
+        eta_at          TEXT,
+        eta_basis       TEXT,
+        next_check_at   TEXT NOT NULL,
+        checks          INTEGER NOT NULL DEFAULT 0,
+        errors          INTEGER NOT NULL DEFAULT 0,
+        last_error      TEXT,
+        last_checked_at TEXT,
+        rider           TEXT,
+        porter_ended_at TEXT,
+        closed_at       TEXT,
+        closed_reason   TEXT,
+        created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX delivery_watch_due_idx ON delivery_watch(state, next_check_at);
+  `);
+  return 'delivery_watch added';
+}
+
 // The AI SEO tracker, removed. Its two tables came out of schema.sql with it,
 // so a database that still has them is no longer the shape a fresh install
 // builds — which is the one thing this file exists to prevent. Dropped rather
@@ -1013,6 +1047,7 @@ const STEPS = [
   weeklyExpensesIntoPurchases,
   purchasePurpose,
   salesOrderTrackingUrl,
+  deliveryWatchQueue,
 ];
 
 // Returns only what it actually changed, so the caller can say so once on

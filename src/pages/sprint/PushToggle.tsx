@@ -14,6 +14,7 @@ import {
   enablePush,
   getDiagnostics,
   getPushState,
+  sendAlarmTest,
   sendTestPush,
   showLocalTestNotification,
   type PushState,
@@ -103,6 +104,21 @@ const PushToggle: React.FC = () => {
             }
           >
             Send now
+          </button>
+        )}
+
+        {on && (
+          <button
+            type="button"
+            className="secondary-button small"
+            disabled={busy}
+            onClick={() =>
+              run(async () => {
+                setNote(await sendAlarmTest());
+              })
+            }
+          >
+            🚨 Test alarm
           </button>
         )}
       </div>

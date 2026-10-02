@@ -29,6 +29,7 @@
 // the pre-save value it fetched and appear to undo the change.
 import { all } from '../../core/db.js';
 import { selectOne, update, upsert } from '../../core/repo.js';
+import { startWatch, stopWatch } from './deliveryWatch.js';
 import {
   tagSaleOrderStatus,
   setFulfilmentStatus,
@@ -169,6 +170,15 @@ async function setPackingStatus({ orderId, orderName, status, deliveryPerson, ch
       console.error(`Failed to create/post Odoo invoice for ${orderName}:`, invoicePatch.invoice_error);
     }
     update('sales_order', { order_id: Number(orderId) }, invoicePatch);
+    // The order is delivered, however it got here, so nothing is left for the
+    // Porter watch to do. Closed rather than left to notice on its own: an
+    // open watch would come back when Porter's trip ends and run this whole
+    // block a second time.
+    try {
+      stopWatch(orderId, 'delivered_on_the_board');
+    } catch (err) {
+      console.error(`Failed to close the delivery watch on ${orderName}:`, err.message || err);
+    }
   }
 
   return { ...rowToStatus(loadOrder(orderId)), odooError: odooError || null, odooFulfilment };
@@ -295,7 +305,29 @@ async function setTrackingLink({ orderId, orderName, trackingUrl, channel, advan
   const result = advance
     ? await setPackingStatus({ orderId, orderName, status: 'out_for_delivery', channel })
     : rowToStatus(loadOrder(orderId));
-  return { ...result, odooTrackingError };
+
+  // Start following the trip. Best-effort in the strongest sense: the link is
+  // already saved and the order already moved, so nothing here is allowed to
+  // turn a successful save into an error the board shows. What it gives back
+  // — the ETA, the rider, whether Porter could be read at all — rides along on
+  // the response so the card can show it straight away.
+  //
+  // Deliberately after the stage change: startWatch reads the order row to
+  // decide what it is looking at, and that read should see the order as it now
+  // stands. A watch is started even for an order already past Out for Delivery
+  // (a link corrected on an order in flight) — the only status it will not
+  // start against is Delivered, which stopWatch has already closed.
+  let watch = null;
+  if (loadOrder(orderId)?.status !== 'delivered') {
+    try {
+      watch = await startWatch({ orderId, orderName, trackingUrl: url });
+    } catch (err) {
+      console.error(`Could not start the delivery watch on ${orderName}:`, err.message || err);
+      watch = { watched: false, reason: err.message || String(err) };
+    }
+  }
+
+  return { ...result, odooTrackingError, watch };
 }
 
 export { getPackingStatuses, setPackingStatus, setTrackingLink, retryInvoice, cleanTrackingUrl, odooTrackingValue };

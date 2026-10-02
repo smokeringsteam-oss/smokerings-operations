@@ -13,7 +13,7 @@
 //   * The delivery phone and address are on the card, from the order's own
 //     shipping partner, because that is what a website customer typed and it
 //     is not the account's.
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import OrderManagement from './OrderManagement';
 import type { PackOrder } from './packing';
@@ -352,11 +352,11 @@ test('puts the farthest drop first, and unmeasured ones after', async () => {
   expect(names()).toEqual(['S00001', 'S00003', 'S00002']);
   expect(screen.getByText(/~2\.1 km · Koramangala/)).toBeInTheDocument();
 
-  fireEvent.click(screen.getByRole('button', { name: /Earliest time/ }));
-  expect(names()).toEqual(['S00001', 'S00002', 'S00003']);
+  fireEvent.click(screen.getByRole('button', { name: /Farthest first/ }));
+  expect(names()).toEqual(['S00001', 'S00003', 'S00002']);
 });
 
-test('reopening the board draws from the browser instead of fetching again', async () => {
+test('reopening the board draws the stored copy at once, then re-reads Odoo behind it', async () => {
   GROUPS = [
     group('satLunch', 'Saturday Lunch', [order(1, { note: 'please deliver by 1pm' })]),
     group('satEvening', 'Saturday Dinner', []),
@@ -373,14 +373,27 @@ test('reopening the board draws from the browser instead of fetching again', asy
   expect(calls('/api/odoo/order-packing?')).toBe(1);
   first.unmount();
 
-  render(<OrderManagement />);
-  await waitForBoard();
-  expect(calls('/api/odoo/order-packing?')).toBe(1);
-  expect(calls('/time-preferences')).toBe(1);
+  // Between the two visits the order is moved to PACKED in Odoo itself, which
+  // is the case this board exists to not miss: it shows Odoo's Fulfilment
+  // Status, and the only place that value arrives is this fetch.
+  GROUPS = [
+    group('satLunch', 'Saturday Lunch', [order(1, { note: 'please deliver by 1pm', odooFulfilment: 'packed' })]),
+    group('satEvening', 'Saturday Dinner', []),
+    group('sunLunch', 'Sunday Lunch', []),
+    group('sunEvening', 'Sunday Dinner', []),
+  ];
 
-  // Refresh is still the way to pull new orders in.
-  fireEvent.click(screen.getByRole('button', { name: /Refresh orders/ }));
+  render(<OrderManagement />);
+  // The stored board is on screen before anything has been fetched — that is
+  // what the browser copy is for, not a reason to skip the re-read.
+  expect(document.querySelector('.pack-order-name')?.textContent).toBe('S00001');
+  await waitForBoard();
   await waitFor(() => expect(calls('/api/odoo/order-packing?')).toBe(2));
+  await waitFor(() => expect(document.querySelector('.pack-status-badge')?.textContent).toContain('Packed'));
+
+  // Refresh still pulls again on demand.
+  fireEvent.click(screen.getByRole('button', { name: /Refresh orders/ }));
+  await waitFor(() => expect(calls('/api/odoo/order-packing?')).toBe(3));
 });
 
 test('Priority puts the customer who asked for a time ahead of a farther drop', async () => {
@@ -429,4 +442,107 @@ test('Priority puts the customer who asked for a time ahead of a farther drop', 
 
   fireEvent.click(screen.getByRole('button', { name: /Farthest first/ }));
   expect(names()).toEqual(['S00001', 'S00002']);
+});
+
+// ---- The stage picker and the board's own minute refresh -----------------
+// The board shows Odoo's Fulfilment Status, and the minute refresh reads the
+// local table alone — it carries no Odoo value of its own. Dropping that
+// refresh over a save's echo lost the one thing saying the order's
+// fetch-time Odoo snapshot was the older word, so the dropdown flicked back
+// to the stage the order was on BEFORE the change, about a minute after
+// making it. Odoo had taken it the whole time, which is what made it read as
+// the board losing the update.
+
+// Board, statuses and the stage save, with the local row kept between calls
+// the way the server keeps it. odooTakes is what Odoo's Fulfilment Status
+// reads back after a save — null for a save Odoo never took.
+const stubPipeline = (fetched: string | null, odooTakes: (status: string) => string | null) => {
+  const row: { orderId: string; status: string } = { orderId: '1', status: 'pending' };
+  let odooNow = fetched;
+  const setOdooDirectly = (value: string | null) => {
+    odooNow = value;
+  };
+  GROUPS = [
+    group('satLunch', 'Saturday Lunch', [order(1, { odooFulfilment: fetched })]),
+    group('satEvening', 'Saturday Dinner', []),
+    group('sunLunch', 'Sunday Lunch', []),
+    group('sunEvening', 'Sunday Dinner', []),
+  ];
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string, init?: RequestInit) => {
+      const href = String(url);
+      const json = (body: unknown) => ({ ok: true, json: async () => body }) as unknown as Response;
+      if (href.includes('/api/order-packing/status')) {
+        if (init?.method !== 'POST') return json({ 1: { ...row } });
+        row.status = JSON.parse(String(init.body)).status;
+        return json({ ...row, odooError: null, odooFulfilment: odooTakes(row.status) });
+      }
+      if (href.includes('/api/order-packing/delivery-watch')) return json({});
+      if (href.includes('/time-preferences')) return json({ preferences: {} });
+      // The board's own Odoo read — its snapshot of the Fulfilment Status.
+      if (href.includes('/order-packing')) {
+        GROUPS[0].orders[0].odooFulfilment = odooNow;
+        return json({ groups: GROUPS, slots: {}, unmatched: [], ordersFound: 1 });
+      }
+      return json({});
+    }),
+  );
+  return { setOdooDirectly };
+};
+
+const stagePicker = () => document.querySelector('.pack-status-select select') as HTMLSelectElement;
+const tickAMinute = async () => {
+  await act(async () => {
+    vi.advanceTimersByTime(60_000);
+  });
+};
+
+test('a stage set here is still on the dropdown after the minute refresh', async () => {
+  stubPipeline('in_smoker', () => 'packed');
+  atClock('2026-09-05T10:00:00');
+  render(<OrderManagement />);
+  await waitForBoard();
+
+  expect(stagePicker().value).toBe('in_smoker');
+  fireEvent.change(stagePicker(), { target: { value: 'packed' } });
+  await waitFor(() => expect(stagePicker().value).toBe('packed'));
+
+  await tickAMinute();
+  expect(stagePicker().value).toBe('packed');
+  expect(document.querySelector('.pack-status-badge')?.textContent).toContain('Packed');
+});
+
+// The other half of the same rule: the save's echo only outranks the board's
+// snapshot while that snapshot is the pre-save one. Refresh re-reads Odoo, so
+// a stage moved on the sale order form afterwards has to win back — pinning
+// the card to the last thing set here would be the same bug facing the other
+// way.
+test('a stage set in Odoo after a save wins back on the next refresh', async () => {
+  const { setOdooDirectly } = stubPipeline('in_smoker', () => 'packed');
+  atClock('2026-09-05T10:00:00');
+  render(<OrderManagement />);
+  await waitForBoard();
+
+  fireEvent.change(stagePicker(), { target: { value: 'packed' } });
+  await waitFor(() => expect(stagePicker().value).toBe('packed'));
+
+  setOdooDirectly('out_for_delivery');
+  fireEvent.click(screen.getByRole('button', { name: /Refresh orders/ }));
+  await waitFor(() => expect(stagePicker().value).toBe('out_for_delivery'));
+});
+
+// A save Odoo never took keeps the stage the board saved, not the stale
+// snapshot — the change stuck locally, and odooError is what says the rest.
+test('a stage Odoo refused still shows the stage that was set', async () => {
+  stubPipeline('in_smoker', () => null);
+  atClock('2026-09-05T10:00:00');
+  render(<OrderManagement />);
+  await waitForBoard();
+
+  fireEvent.change(stagePicker(), { target: { value: 'packed' } });
+  await waitFor(() => expect(stagePicker().value).toBe('packed'));
+
+  await tickAMinute();
+  expect(stagePicker().value).toBe('packed');
 });

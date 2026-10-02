@@ -28,11 +28,25 @@ export type WhatsappMessage = {
   failureReason: string | null;
 };
 
+// One of our own WhatsApp business numbers, as Odoo's whatsapp.account models
+// it. Null on a thread when Odoo left the channel unattached, or on an Odoo
+// without the column at all — see accountOf() in odooWhatsapp.js.
+export type WhatsappAccount = {
+  id: number;
+  name: string;
+};
+
+export type WhatsappAccountSummary = WhatsappAccount & {
+  threads: number;
+  needsAttention: number;
+};
+
 export type WhatsappThread = {
   channelId: number;
   customer: string;
   phone: string | null;
   partnerId: number | null;
+  account: WhatsappAccount | null;
   odooUrl: string | null;
   lastMessageAt: string | null;
   lastMessageFrom: 'customer' | 'us' | null;
@@ -60,6 +74,11 @@ export type WhatsappInbox = {
   reason?: string;
   fetchedAt: string | null;
   counts: WhatsappCounts;
+  // Every business number that actually has conversations, for the number
+  // filter. Optional so a client running against an older server (or a cached
+  // response from before this existed) degrades to "no filter" rather than
+  // throwing on a map over undefined.
+  accounts?: WhatsappAccountSummary[];
   threads: WhatsappThread[];
 };
 
@@ -70,6 +89,10 @@ type Store = {
 };
 
 const EMPTY_COUNTS: WhatsappCounts = { threads: 0, needsAttention: 0, awaitingReply: 0, failedSend: 0, unread: 0 };
+// Frozen module constant rather than a fresh [] per render: this is a
+// dependency of the useMemo that builds the filtered list, and a new array
+// identity every time would rebuild it on every poll.
+const EMPTY_ACCOUNTS: WhatsappAccountSummary[] = [];
 
 // One minute. Fast enough that a message landing mid-service is noticed within
 // the time it takes to walk back to the counter, slow enough to be nothing at
@@ -152,6 +175,7 @@ export function useWhatsappInbox() {
   return {
     inbox: state.data,
     counts: state.data?.counts ?? EMPTY_COUNTS,
+    accounts: state.data?.accounts ?? EMPTY_ACCOUNTS,
     threads: state.data?.threads ?? [],
     error: state.error,
     // Only "loading" before there is anything to show — a background poll must

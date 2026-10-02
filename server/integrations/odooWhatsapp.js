@@ -27,6 +27,16 @@
 //      leave a badge nobody could ever clear. A later successful send in the
 //      same thread means the problem is over.
 //
+// MORE THAN ONE BUSINESS NUMBER. Odoo models each of our own WhatsApp numbers
+// as a `whatsapp.account`, and every channel points at the one it arrived on
+// via `wa_account_id`. Two numbers on the same WABA are two account records,
+// not one. The list here is deliberately NOT scoped to a single account — an
+// inbox that silently hid one of our numbers would be the worst possible
+// failure for a screen whose only job is "who is still waiting" — so both
+// land in one list and each thread carries `account` so the screen can label
+// and filter them. With one account configured, that label is noise and the
+// client hides it; the server behaves identically either way.
+//
 // Also surfaced, because it silently governs what a reply can even be: the
 // 24-hour customer service window. WhatsApp only allows free-form replies
 // within 24h of the customer's last message (Odoo tracks the deadline on
@@ -63,7 +73,7 @@ const DEFAULT_CHANNELS = 30;
 // Each resolved once per process — see the notes on each.
 let selfPartnerIdCache;
 let commentSubtypeIdCache;
-let whatsappAvailableCache;
+let whatsappSchemaCache;
 
 // The partner behind ODOO_USERNAME. Needed because "unread" in Odoo is
 // per-member: the counter lives on the discuss.channel.member row for *our*
@@ -100,11 +110,23 @@ async function resolveCommentSubtypeId() {
 // and asking for a field that isn't there fails the whole search_read. So the
 // schema is checked once rather than assumed — the same reasoning as the
 // Fulfilment Status field in odoo.js.
-async function resolveWhatsappAvailable() {
-  if (whatsappAvailableCache !== undefined) return whatsappAvailableCache;
+//
+// `wa_account_id` — which of OUR numbers a conversation belongs to — is
+// probed separately rather than folded into the availability verdict. It is
+// only needed to label threads once a second whatsapp.account exists, so an
+// Odoo that somehow lacks the column should lose the labels, not the inbox.
+async function resolveWhatsappSchema() {
+  if (whatsappSchemaCache !== undefined) return whatsappSchemaCache;
   const fields = await execute('discuss.channel', 'fields_get', [[], ['type']]);
-  whatsappAvailableCache = Boolean(fields.whatsapp_number && fields.whatsapp_partner_id);
-  return whatsappAvailableCache;
+  whatsappSchemaCache = {
+    available: Boolean(fields.whatsapp_number && fields.whatsapp_partner_id),
+    hasAccount: Boolean(fields.wa_account_id),
+  };
+  return whatsappSchemaCache;
+}
+
+async function resolveWhatsappAvailable() {
+  return (await resolveWhatsappSchema()).available;
 }
 
 // Odoo hands back naive UTC ('2026-09-06 08:03:18'). Everything downstream
@@ -131,6 +153,37 @@ function customerNameOf(channel) {
   if (partnerName) return partnerName;
   const name = channel.name || '';
   return name.replace(/\s*\(\+?\d[\d\s-]*\)\s*$/, '').trim() || name || 'Unknown';
+}
+
+// The business number a conversation arrived on, as Odoo's many2one gives it:
+// [id, "Smokerings BBQ"]. Null on an Odoo whose discuss.channel has no
+// wa_account_id column, and on the odd channel Odoo left unattached — the
+// client treats both the same way, as "no label to show".
+function accountOf(channel) {
+  const account = channel.wa_account_id;
+  if (!Array.isArray(account) || !account[0]) return null;
+  return { id: account[0], name: account[1] || `Account ${account[0]}` };
+}
+
+/**
+ * The distinct business numbers across the given threads, each with its own
+ * counts — what the inbox builds its number filter out of.
+ *
+ * Derived from the threads rather than read from whatsapp.account so the
+ * filter can only ever offer a number that has conversations behind it: an
+ * account added in Odoo but not yet live would otherwise show as a pill that
+ * always filters to nothing.
+ */
+function accountsOf(threads) {
+  const byId = new Map();
+  for (const thread of threads) {
+    if (!thread.account) continue;
+    const seen = byId.get(thread.account.id) || { ...thread.account, threads: 0, needsAttention: 0 };
+    seen.threads += 1;
+    if (thread.needsAttention) seen.needsAttention += 1;
+    byId.set(thread.account.id, seen);
+  }
+  return [...byId.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
 
 // One line of a message, for the collapsed row. The full text stays on the
@@ -326,6 +379,7 @@ async function fetchWhatsappThreads({ limit = DEFAULT_CHANNELS } = {}) {
   const { configured, url } = getConfig();
   const empty = {
     threads: [],
+    accounts: [],
     counts: { threads: 0, needsAttention: 0, awaitingReply: 0, failedSend: 0, unread: 0 },
     fetchedAt: new Date().toISOString(),
   };
@@ -349,10 +403,16 @@ async function fetchWhatsappThreads({ limit = DEFAULT_CHANNELS } = {}) {
   }
 
   const channelLimit = Math.min(Math.max(Number(limit) || DEFAULT_CHANNELS, 1), MAX_CHANNELS);
+  const { hasAccount } = await resolveWhatsappSchema();
   const channels = await execute(
     'discuss.channel',
     'search_read',
     [
+      // Deliberately not scoped to one wa_account_id: with a second business
+      // number on the same WABA, both inboxes are meant to land in this one
+      // list. Which number a thread came to is carried per thread as
+      // `account` and filtered client-side, so nothing can be silently
+      // missing from a screen whose whole job is "who is still waiting".
       [['channel_type', '=', 'whatsapp']],
       [
         'name',
@@ -360,6 +420,7 @@ async function fetchWhatsappThreads({ limit = DEFAULT_CHANNELS } = {}) {
         'whatsapp_partner_id',
         'whatsapp_channel_valid_until',
         'last_interest_dt',
+        ...(hasAccount ? ['wa_account_id'] : []),
       ],
     ],
     // last_interest_dt is Odoo's own "when did anything last happen here"
@@ -431,6 +492,11 @@ async function fetchWhatsappThreads({ limit = DEFAULT_CHANNELS } = {}) {
       customer: customerNameOf(channel),
       phone: channel.whatsapp_number || null,
       partnerId: customerPartnerId,
+      // Which of OUR numbers the customer wrote to. Note `phone` above is the
+      // CUSTOMER's number — before this existed there was nothing on a thread
+      // that said which business line it arrived on, which only stopped being
+      // invisible once there was more than one.
+      account: accountOf(channel),
       // Opens the real conversation in Odoo Discuss — still needed for what
       // the dashboard can't do, like sending a template.
       odooUrl: url ? `${url}/odoo/discuss/${channel.id}` : null,
@@ -464,6 +530,7 @@ async function fetchWhatsappThreads({ limit = DEFAULT_CHANNELS } = {}) {
     configured: true,
     available: true,
     fetchedAt: now.toISOString(),
+    accounts: accountsOf(threads),
     counts: {
       threads: threads.length,
       needsAttention: threads.filter((thread) => thread.needsAttention).length,

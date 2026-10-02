@@ -4,6 +4,7 @@ import {
   FulfilmentBadge,
   FulfilmentControl,
   useOrderFulfilment,
+  type DeliveryWatch,
   type FulfilmentOrder,
   type PackStatusValue,
   type PackingStatus,
@@ -295,8 +296,8 @@ const DeliveryContact: React.FC<{ order: PackOrder }> = ({ order }) => {
 };
 
 // ---- The orders, and where each one is -----------------------------------
-type OrderSort = 'priority' | 'distance' | 'time';
-const ORDER_SORTS: OrderSort[] = ['priority', 'distance', 'time'];
+type OrderSort = 'priority' | 'distance';
+const ORDER_SORTS: OrderSort[] = ['priority', 'distance'];
 
 // Priority (the default) puts customers who asked for a time first, by when the
 // rider has to leave, then everyone else farthest first — see prioritiseOrders
@@ -304,7 +305,6 @@ const ORDER_SORTS: OrderSort[] = ['priority', 'distance', 'time'];
 // and dispatching earliest. Orders with no distance (no address, not found,
 // not looked up yet) go after the measured ones in the server's time order.
 const sortOrders = (orders: PackOrder[], sortBy: OrderSort, preferences: OrderTimePreferences): PackOrder[] => {
-  if (sortBy === 'time') return orders;
   if (sortBy === 'distance') return sortByDistance(orders);
   return prioritiseOrders(orders, preferences);
 };
@@ -332,6 +332,7 @@ type OrdersBoardProps = {
   orders: PackOrder[];
   sortBy: OrderSort;
   statuses: Record<string, PackingStatus>;
+  watches: Record<string, DeliveryWatch>;
   busy: Record<string, boolean>;
   errors: Record<string, string>;
   isBulkBusy: boolean;
@@ -339,7 +340,7 @@ type OrdersBoardProps = {
   onSetStatus: (order: FulfilmentOrder, status: Exclude<PackStatusValue, 'pending'>, deliveryPerson?: string) => void;
   onSaveTracking: (order: FulfilmentOrder, trackingUrl: string, advance: boolean) => Promise<boolean>;
   onBulkApply: (orders: FulfilmentOrder[], status: Exclude<PackStatusValue, 'pending'>) => void;
-  onRetryInvoice: (order: FulfilmentOrder) => void;
+  onCheckDelivery: (order: FulfilmentOrder) => void;
 };
 
 // "[PB-001] Signature Pulled Pork BBQ Burger" -> code + name, so the name
@@ -353,6 +354,7 @@ const OrdersBoard: React.FC<OrdersBoardProps> = ({
   orders,
   sortBy,
   statuses,
+  watches,
   busy,
   errors,
   isBulkBusy,
@@ -360,7 +362,7 @@ const OrdersBoard: React.FC<OrdersBoardProps> = ({
   onSetStatus,
   onSaveTracking,
   onBulkApply,
-  onRetryInvoice,
+  onCheckDelivery,
 }) => {
   const sorted = useMemo(() => sortOrders(orders, sortBy, timePreferences), [orders, sortBy, timePreferences]);
   if (orders.length === 0) return <p className="pack-slot-empty">Nothing for this slot.</p>;
@@ -422,11 +424,12 @@ const OrdersBoard: React.FC<OrdersBoardProps> = ({
               <FulfilmentControl
                 order={order}
                 status={statuses[key]}
+                watch={watches[key]}
                 busy={Boolean(busy[key])}
                 error={errors[key]}
                 onSetStatus={onSetStatus}
                 onSaveTracking={onSaveTracking}
-                onRetryInvoice={onRetryInvoice}
+                onCheckDelivery={onCheckDelivery}
               />
             </div>
           );
@@ -508,9 +511,9 @@ const OrderManagement: React.FC<{ channel?: PackChannel }> = ({ channel = 'B2C' 
   );
 
   // Priority by default — customers who asked for a time, by when the rider
-  // must leave, then farthest first. Plain distance and plain time order are
-  // one tap away. A new storage key, so boards that were left on the old
-  // distance default open on priority rather than keeping it.
+  // must leave, then farthest first. Plain distance order is one tap away. A
+  // new storage key, so boards that were left on the old distance default open
+  // on priority rather than keeping it.
   const [sortBy, setSortBy] = usePersistedState<OrderSort>(
     `smokerings.orderBoard.${channel}.sortBy`,
     'priority',
@@ -546,16 +549,23 @@ const OrderManagement: React.FC<{ channel?: PackChannel }> = ({ channel = 'B2C' 
 
   // Nobody should have to press a button to see the range's orders — the
   // fetch is part of loading the board. Runs on mount and again whenever the
-  // range (or channel) changes, unless the browser already holds this range's
-  // board; the ref keeps StrictMode's double-mount (and a re-render with the
-  // same dates) from firing a second request. Safe to re-run because the
-  // fetch replaces the board rather than adding to it.
-  const autoFetchedRange = useRef(data ? rangeKey : '');
+  // range (or channel) changes; the ref keeps StrictMode's double-mount (and
+  // a re-render with the same dates) from firing a second request. Safe to
+  // re-run because the fetch replaces the board rather than adding to it.
+  //
+  // A stored board is NOT a reason to skip this, only a reason not to show an
+  // empty screen while it runs: the cache is drawn immediately and Odoo is
+  // re-read behind it. Skipping the fetch whenever the cache matched the range
+  // is what let a stage set in Odoo directly (an order moved to PACKED on the
+  // sale order form) never reach the card — the card reads Odoo's Fulfilment
+  // Status off THIS fetch (orderFulfilment.tsx effectiveStatus), and
+  // /api/order-packing/status carries no Odoo value of its own, so a reopened
+  // board went on showing whatever Odoo said the last time Refresh was pressed.
+  const autoFetchedRange = useRef('');
   useEffect(() => {
     if (!odooFrom || !odooTo) return;
     if (autoFetchedRange.current === rangeKey) return;
     autoFetchedRange.current = rangeKey;
-    if (boardCache?.rangeKey === rangeKey) return;
     void handleFetch();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rangeKey]);
@@ -776,8 +786,8 @@ const OrderManagement: React.FC<{ channel?: PackChannel }> = ({ channel = 'B2C' 
             {hasResult && !error && (
               <p className="status-message">
                 Found {data!.ordersFound} order{data!.ordersFound === 1 ? '' : 's'} in that range
-                {boardCache?.fetchedAt ? ` · fetched ${formatFetchedAt(boardCache.fetchedAt)}` : ''}. Refresh to
-                pull in new orders.
+                {boardCache?.fetchedAt ? ` · fetched ${formatFetchedAt(boardCache.fetchedAt)}` : ''}. Re-read from
+                Odoo every time this board opens; Refresh pulls again now.
               </p>
             )}
           </div>
@@ -861,7 +871,7 @@ const OrderManagement: React.FC<{ channel?: PackChannel }> = ({ channel = 'B2C' 
                 <p className="pack-guide-note">📍 Measuring delivery distances for {pendingDistanceCount} new address{pendingDistanceCount === 1 ? '' : 'es'}…</p>
               )}
               {locateError && <p className="chat-error">📍 Couldn't measure every distance: {locateError}</p>}
-              {data && data.kitchenLocated === false && sortBy !== 'time' && (
+              {data && data.kitchenLocated === false && (
                 <p className="pack-guide-note">
                   📍 Distance sort needs the kitchen's location — set <code>KITCHEN_LAT</code> and{' '}
                   <code>KITCHEN_LON</code> in <code>.env</code> and restart the server. Showing time order until then.
@@ -888,14 +898,6 @@ const OrderManagement: React.FC<{ channel?: PackChannel }> = ({ channel = 'B2C' 
                   >
                     📍 Farthest first
                   </button>
-                  <button
-                    type="button"
-                    className={sortBy === 'time' ? 'active' : ''}
-                    aria-pressed={sortBy === 'time'}
-                    onClick={() => setSortBy('time')}
-                  >
-                    🕒 Earliest time
-                  </button>
                 </div>
               </div>
               <OrdersBoard
@@ -903,13 +905,14 @@ const OrderManagement: React.FC<{ channel?: PackChannel }> = ({ channel = 'B2C' 
                 onSaveTracking={fulfilment.saveTrackingLink}
                 orders={activeGroup?.orders || []}
                 statuses={fulfilment.statuses}
+                watches={fulfilment.watches}
                 busy={fulfilment.busy}
                 errors={fulfilment.errors}
                 isBulkBusy={isBulkBusy}
                 timePreferences={timePreferences}
                 onSetStatus={fulfilment.setStatus}
                 onBulkApply={handleBulkApply}
-                onRetryInvoice={fulfilment.retryInvoice}
+                onCheckDelivery={fulfilment.checkDelivery}
               />
             </>
           )}

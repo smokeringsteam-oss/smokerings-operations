@@ -308,3 +308,19 @@ export async function sendTestPush(): Promise<string> {
   if (!resp.ok) throw new Error(data.error || 'Could not send the test notification.');
   return data.message || 'Sent.';
 }
+
+// Fires a WhatsApp-alarm push immediately — the noisy kind, with the vibrate
+// pattern and the flag that makes an open page start the audio loop.
+//
+// Separate from sendTestPush() because it proves a different half of the
+// system. That one proves delivery; this one proves the noise, which depends
+// on things no server can see: the Android notification channel's sound, the
+// handset's media volume, and whether a page was open to play the file at all.
+// When the alarm is "not loud enough", this is the button that narrows down
+// which of those it is.
+export async function sendAlarmTest(): Promise<string> {
+  const resp = await fetch('/api/push/alarm-test', { method: 'POST' });
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok) throw new Error(data.error || 'Could not send the test alarm.');
+  return data.message || 'Sent.';
+}

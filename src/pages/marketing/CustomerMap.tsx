@@ -2,8 +2,36 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { REPORT_START } from '../reportRange';
+import CompetitorMap from './CompetitorMap';
+import {
+  CHANNEL_LABELS,
+  COLOR_B2B,
+  COLOR_B2C,
+  DEFAULT_CENTRE,
+  DEFAULT_ZOOM,
+  PRECISION_NOTE,
+  TILE_ATTRIBUTION,
+  TILE_URL,
+  dayLabel,
+  escapeHtml,
+  grouped,
+  iso,
+  money,
+  ordersOn,
+  radiusFor,
+  revenueOn,
+  shortMoney,
+  weeksAgo,
+  type Area,
+  type Channel,
+  type LocateResult,
+  type OdooSource,
+  type Point,
+  type Tally,
+  type Unlocated,
+} from './mapShared';
 
-// Customer Map — where the orders actually come from.
+// Customer Map — where the orders actually come from, and who else is there.
 //
 // Every other report on this dashboard is about time or about money. This one
 // is about place, and it is the only screen that can answer the questions a
@@ -12,6 +40,16 @@ import { REPORT_START } from '../reportRange';
 // direction the Saturday run should go, and whether the wholesale accounts
 // sit anywhere near the weekend ones.
 //
+// TWO VIEWS, ONE RANGE. The mode switch at the top is the biggest control on
+// the screen, because the two views answer two different questions and one
+// map showing both at once would answer neither:
+//   Our customers  this file. Where our orders come from.
+//   Competitors    CompetitorMap.tsx. Who else is selling smoked meat, and
+//                  how close they are to the neighbourhoods above.
+// The date range is owned here and handed down, so switching view never
+// quietly changes the window — a competitor “within 3 km of eleven orders”
+// is within 3 km of the same eleven orders the other view was just showing.
+//
 // The map is a proportional-symbol map, not a heatmap. A heatmap of forty
 // orders is a picture of a blur; a circle per address, sized by how many
 // orders came from it, is a picture of the actual customers — and it can be
@@ -19,11 +57,11 @@ import { REPORT_START } from '../reportRange';
 // the square root of the count), because a radius scaled linearly makes four
 // orders look sixteen times as big as one.
 //
-// Two views of the same orders, and both are needed:
+// Two ways of grouping the same orders, and both are needed:
 //   Addresses  one circle per address. This is the honest picture — it shows
 //              the spread, the outliers, and the streets that come up twice.
 //   Areas      one circle per neighbourhood. This is the picture you plan
-//              from, because "eleven orders in HSR Layout" is an action and
+//              from, because “eleven orders in HSR Layout” is an action and
 //              eleven separate pins are not.
 //
 // PRECISION IS DRAWN, NOT HIDDEN. Bengaluru addresses are landmarks and
@@ -33,80 +71,22 @@ import { REPORT_START } from '../reportRange';
 // only locality- or PIN-code-accurate is drawn hollow with a dashed edge and
 // says so on its tooltip. What can be fixed by hand is offered as a pin drop.
 //
-// Backend: server/marketing/customerGeography.js for the counting rules, and
+// Backend: server/marketing/customerGeography.js for the counting rules,
+// server/marketing/competitors.js for the roster behind the other view, and
 // server/core/geocode.js for the one that matters most — an address is sent
-// to a geocoder at most once, ever, and only when somebody presses the
-// button on this screen.
+// to a geocoder at most once, ever, and only when somebody presses the button
+// on this screen.
 
-// The two sides of the business, as the same colours Sales by Item uses.
-// Ember is the weekend kitchen on every screen that splits the business in
-// two; purple is wholesale. Validated against this screen's white surface
-// with the dataviz palette validator: adjacent CVD separation 24.8 (protan)
-// against a floor of 8, normal vision 28.8, both inside the lightness band
-// and over 3:1 on contrast. Do not swap these for eyeballed values.
-const COLOR_B2C = '#d9480f';
-const COLOR_B2B = '#6b3fa0';
-
-// Where the map opens when there is nothing to fit it to. The kitchen's city,
-// not the customers' — with no orders on screen this is a starting point, not
-// a claim about anybody.
-const DEFAULT_CENTRE: [number, number] = [12.9716, 77.5946];
-const DEFAULT_ZOOM = 11;
-
-type Channel = 'both' | 'B2C' | 'B2B';
 type View = 'addresses' | 'areas';
-type Precision = 'address' | 'locality' | 'postcode';
 
-type Tally = {
-  orders: number;
-  revenue: number;
-  b2cOrders: number;
-  b2bOrders: number;
-  b2cRevenue: number;
-  b2bRevenue: number;
-};
-
-type Point = Tally & {
-  key: string;
-  address: string;
-  latitude: number;
-  longitude: number;
-  precision: Precision;
-  provider: string;
-  area: string;
-  customers: number;
-  names: string[];
-  otherNames: number;
-  lastOrder: string;
-};
-
-type Area = Tally & {
-  key: string;
-  name: string;
-  locality: string;
-  postcode: string;
-  customers: number;
-  repeatCustomers: number;
-  addresses: number;
-  latitude: number;
-  longitude: number;
-  sharePct: number;
-};
-
-type Unlocated = Tally & {
-  address: string;
-  street: string;
-  street2: string;
-  city: string;
-  zip: string;
-  status: 'pending' | 'not_found';
-  customers: number;
-};
+// Which of the two views is on screen. Held here rather than in a parent
+// because the range controls sit above the switch and belong to both.
+type Mode = 'customers' | 'competitors';
 
 type Report = {
   range: { from: string; to: string; days: number };
   sources: {
-    odoo: { configured: boolean; url: string; error: string; reachable: boolean; ordersRead: number };
+    odoo: OdooSource;
     geocoder: { provider: string; cached: number };
   };
   totals: Tally & {
@@ -123,73 +103,15 @@ type Report = {
   noAddress: (Tally & { customer: string })[];
 };
 
-type LocateResult = { attempted: number; located: number; notFound: number; remaining: number; error: string };
-
-const grouped = new Intl.NumberFormat('en-IN', { maximumFractionDigits: 0 });
-const money = (value: number) => `₹${grouped.format(Math.round(value))}`;
-const shortMoney = (value: number) => {
-  if (!value) return '₹0';
-  if (Math.abs(value) >= 100000) return `₹${(value / 100000).toFixed(value % 100000 === 0 ? 0 : 1)}L`;
-  if (Math.abs(value) >= 1000) return `₹${(value / 1000).toFixed(value % 1000 === 0 ? 0 : 1)}k`;
-  return `₹${Math.round(value)}`;
-};
-
-const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-const dayLabel = (iso: string) => {
-  if (!iso) return '—';
-  const [y, m, d] = iso.split('-').map(Number);
-  return `${d} ${MONTHS[m - 1]} ${String(y).slice(2)}`;
-};
-
-const pad = (n: number) => String(n).padStart(2, '0');
-const iso = (date: Date) => `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
-const weeksAgo = (n: number) => {
-  const date = new Date();
-  date.setDate(date.getDate() - n * 7);
-  return iso(date);
-};
-
-const escapeHtml = (value: string) =>
-  value.replace(/[&<>"']/g, (ch) =>
-    ch === '&' ? '&amp;' : ch === '<' ? '&lt;' : ch === '>' ? '&gt;' : ch === '"' ? '&quot;' : '&#39;',
-  );
-
-// Orders on the side of the business currently being shown. One function, so
-// the tiles, the circles and the table can never end up reading different
-// sides from each other.
-const ordersOn = (row: Tally, channel: Channel) =>
-  channel === 'B2C' ? row.b2cOrders : channel === 'B2B' ? row.b2bOrders : row.orders;
-const revenueOn = (row: Tally, channel: Channel) =>
-  channel === 'B2C' ? row.b2cRevenue : channel === 'B2B' ? row.b2bRevenue : row.revenue;
-
-// Radius in pixels for a circle carrying `orders` of them, against the
-// busiest circle on the map. Area-proportional (hence the square roots), with
-// a floor of 6px so a single order is still a target worth clicking and a
-// ceiling that keeps the busiest street from swallowing its neighbours.
-const MIN_RADIUS = 6;
-const MAX_RADIUS = 26;
-const radiusFor = (orders: number, max: number) => {
-  if (orders <= 0) return 0;
-  if (max <= 1) return MIN_RADIUS + 6;
-  const scale = Math.sqrt(orders) / Math.sqrt(max);
-  return MIN_RADIUS + (MAX_RADIUS - MIN_RADIUS) * scale;
-};
-
-const PRECISION_NOTE: Record<Precision, string> = {
-  address: '',
-  locality: 'Placed at the middle of the neighbourhood — the street itself could not be found.',
-  postcode: 'Placed at the middle of the PIN code, which is a few kilometres across.',
-};
-
-const CHANNEL_LABELS: Record<Channel, string> = {
-  both: 'Both sides',
-  B2C: 'B2C weekend',
-  B2B: 'B2B wholesale',
+const MODE_LABELS: Record<Mode, string> = {
+  customers: 'Our customers',
+  competitors: 'Competitors',
 };
 
 const CustomerMap = () => {
   const [from, setFrom] = useState(REPORT_START);
   const [to, setTo] = useState(iso(new Date()));
+  const [mode, setMode] = useState<Mode>('customers');
   const [channel, setChannel] = useState<Channel>('both');
   const [view, setView] = useState<View>('addresses');
 
@@ -233,9 +155,14 @@ const CustomerMap = () => {
     }
   }, [from, to]);
 
+  // Only while this view is the one on screen. The competitor view builds its
+  // own report — which carries our side, computed by the same code — so
+  // loading this one behind it would be a second Odoo round trip for figures
+  // nobody is looking at.
   useEffect(() => {
+    if (mode !== 'customers') return;
     load();
-  }, [load]);
+  }, [load, mode]);
 
   const preset = (weeks: number) => {
     setFrom(weeksAgo(weeks - 1));
@@ -273,13 +200,14 @@ const CustomerMap = () => {
 
   // ---- The map ------------------------------------------------------------
 
+  // Depends on `mode` because this view's map div only exists while this view
+  // is rendered: leaving for the competitors unmounts it, and Leaflet holding
+  // on to a detached element is a map that never draws again.
   useEffect(() => {
+    if (mode !== 'customers') return undefined;
     if (mapRef.current || !mapElRef.current) return undefined;
     const map = L.map(mapElRef.current, { center: DEFAULT_CENTRE, zoom: DEFAULT_ZOOM, scrollWheelZoom: true });
-    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      maxZoom: 19,
-      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
-    }).addTo(map);
+    L.tileLayer(TILE_URL, { maxZoom: 19, attribution: TILE_ATTRIBUTION }).addTo(map);
     markersRef.current = L.layerGroup().addTo(map);
     map.on('click', (event: L.LeafletMouseEvent) => {
       if (!pinningRef.current) return;
@@ -287,11 +215,16 @@ const CustomerMap = () => {
     });
     mapRef.current = map;
     return () => {
+      // Cancel any pan or zoom still animating. Leaving for the competitors
+      // tears this map down, and a fitBounds part-way through its animation
+      // wakes up on the next frame to find its container gone — Leaflet then
+      // throws reading _leaflet_pos off nothing.
+      map.stop();
       map.remove();
       mapRef.current = null;
       markersRef.current = null;
     };
-  }, []);
+  }, [mode]);
 
   // Redraw the circles whenever the data, the side or the view changes.
   useEffect(() => {
@@ -348,7 +281,7 @@ const CustomerMap = () => {
       );
       layer.addLayer(marker);
     });
-  }, [drawn, channel, view, busiest]);
+  }, [drawn, channel, view, busiest, mode]);
 
   // Fit the view to what is drawn — but only when the SET of places changes,
   // not on every render. Refitting on a re-render would yank the map back
@@ -366,7 +299,7 @@ const CustomerMap = () => {
       { padding: [40, 40], maxZoom: 15 },
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fitKey]);
+  }, [fitKey, mode]);
 
   // The provisional pin, shown while somebody is placing one.
   useEffect(() => {
@@ -386,7 +319,7 @@ const CustomerMap = () => {
     })
       .addTo(map)
       .bindTooltip('The pin goes here', { permanent: true, direction: 'top' });
-  }, [pinAt]);
+  }, [pinAt, mode]);
 
   const flyTo = (lat: number, lon: number) => {
     const map = mapRef.current;
@@ -453,10 +386,35 @@ const CustomerMap = () => {
       <div className="mkt-head">
         <h3>Customer Map</h3>
         <p>
-          Where the orders come from. One circle per address — or per neighbourhood — sized by how many orders came
-          from it. Addresses are looked up once and remembered; nothing is sent to the geocoder unless you press the
-          button.
+          {mode === 'customers'
+            ? 'Where the orders come from. One circle per address — or per neighbourhood — sized by how many orders came from it. Addresses are looked up once and remembered; nothing is sent to the geocoder unless you press the button.'
+            : 'Who else is selling smoked meat, and how close they are to the neighbourhoods our orders come from. A hand-kept list, not a live feed — every rating is a snapshot of the day somebody looked it up.'}
         </p>
+      </div>
+
+      {/* The biggest control on the screen, because it changes what the map
+          is OF rather than how it is drawn. Two views, one date range: the
+          range below applies to both. */}
+      <div className="cmap-modes" role="group" aria-label="Which map">
+        {(['customers', 'competitors'] as const).map((option) => (
+          <button
+            key={option}
+            type="button"
+            className={`cmap-mode${mode === option ? ' is-active' : ''}`}
+            onClick={() => setMode(option)}
+            aria-pressed={mode === option}
+          >
+            <span className="cmap-mode-icon" aria-hidden="true">
+              {option === 'customers' ? '📍' : '🍖'}
+            </span>
+            <span className="cmap-mode-body">
+              <span className="cmap-mode-label">{MODE_LABELS[option]}</span>
+              <span className="cmap-mode-sub">
+                {option === 'customers' ? 'Where our orders come from' : 'Who else is already there'}
+              </span>
+            </span>
+          </button>
+        ))}
       </div>
 
       <div className="mkt-toolbar">
@@ -482,6 +440,7 @@ const CustomerMap = () => {
           </div>
         </div>
 
+        {mode === 'customers' ? (
         <div className="cmap-toggles">
           <div className="mkt-tabs fin-side-tabs" role="group" aria-label="Side of the business">
             {(['both', 'B2C', 'B2B'] as const).map((option) => (
@@ -510,8 +469,13 @@ const CustomerMap = () => {
             ))}
           </div>
         </div>
+        ) : null}
       </div>
 
+      {mode === 'competitors' ? (
+        <CompetitorMap from={from} to={to} />
+      ) : (
+        <>
       {error ? <div className="mkt-alert mkt-alert-error">{error}</div> : null}
 
       {odoo && !odoo.configured ? (
@@ -773,6 +737,8 @@ const CustomerMap = () => {
           </div>
         </div>
       ) : null}
+        </>
+      )}
     </div>
   );
 };
