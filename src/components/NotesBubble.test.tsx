@@ -379,3 +379,118 @@ test('a browser that cannot record shows no mic', async () => {
   await openPanel();
   expect(screen.queryByRole('button', { name: 'Speak a to-do' })).not.toBeInTheDocument();
 });
+
+// "Hey Smokey". The room's loudness is under the test's control: a fake
+// analyser reports talk or silence, and the wake endpoint answers from the
+// fetch stub. What is pinned is the handover — speech detected on the device,
+// one clip checked by the server, and the panel opening on a yes.
+let roomIsTalking = false;
+
+class FakeAudioContext {
+  state = 'running';
+  currentTime = 0;
+  destination = {};
+  resume = async () => undefined;
+  close = async () => undefined;
+  createAnalyser() {
+    return {
+      fftSize: 512,
+      smoothingTimeConstant: 0,
+      getByteTimeDomainData(samples: Uint8Array) {
+        samples.forEach((_, i) => {
+          samples[i] = roomIsTalking ? (i % 2 ? 200 : 56) : 128;
+        });
+      },
+    };
+  }
+  createMediaStreamSource() {
+    return { connect: () => undefined, disconnect: () => undefined };
+  }
+  createOscillator() {
+    return { type: '', frequency: { value: 0 }, connect: (node: any) => node, start() {}, stop() {} };
+  }
+  createGain() {
+    return {
+      gain: { setValueAtTime() {}, exponentialRampToValueAtTime() {} },
+      connect: (node: any) => node,
+    };
+  }
+}
+
+const withWakeMic = (answer: { wake: boolean; command: string }) => {
+  roomIsTalking = false;
+  vi.stubGlobal('MediaRecorder', FakeRecorder);
+  vi.stubGlobal('AudioContext', FakeAudioContext);
+  Object.defineProperty(navigator, 'mediaDevices', {
+    configurable: true,
+    value: { getUserMedia: vi.fn(async () => ({ getTracks: () => [{ stop: vi.fn() }] })) },
+  });
+  const realFetch = globalThis.fetch as any;
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string, options?: RequestInit) => {
+      if (url === '/api/notes/wake') {
+        calls.push({ url, method: 'POST' });
+        return { ok: true, json: async () => answer };
+      }
+      return realFetch(url, options);
+    }),
+  );
+};
+
+const say = async (ms: number) => {
+  roomIsTalking = true;
+  await new Promise((resolve) => setTimeout(resolve, ms));
+  roomIsTalking = false;
+};
+
+test('"Hey Smokey, order more gas" opens the board with the words in the box', async () => {
+  withWakeMic({ wake: true, command: 'order more gas' });
+  try {
+    await openPanel();
+    fireEvent.click(screen.getByRole('button', { name: 'Hey Smokey' }));
+    expect(screen.getByRole('button', { name: 'Hey Smokey' })).toHaveAttribute('aria-pressed', 'true');
+    fireEvent.click(screen.getAllByRole('button', { name: 'Close shared notes' })[0]);
+    await waitFor(() => expect(screen.queryByLabelText('Add a to-do')).not.toBeInTheDocument());
+
+    await say(600);
+    await waitFor(() => expect(calls.some((call) => call.url === '/api/notes/wake')).toBe(true), { timeout: 3000 });
+    await waitFor(() => expect((screen.getByLabelText('Add a to-do') as HTMLTextAreaElement).value).toBe('order more gas'));
+    // Still a human's call to post it.
+    expect(calls.some((call) => call.url === '/api/notes' && call.method === 'POST')).toBe(false);
+    // Remembered on this device.
+    expect(window.localStorage.getItem('notes.heySmokey')).toBe('true');
+  } finally {
+    delete (navigator as any).mediaDevices;
+  }
+});
+
+test('"Hey Smokey" on its own opens the big mic, hands-free', async () => {
+  withWakeMic({ wake: true, command: '' });
+  try {
+    await openPanel();
+    fireEvent.click(screen.getByRole('button', { name: 'Hey Smokey' }));
+    await say(600);
+    await waitFor(() => expect(screen.getByRole('dialog', { name: 'Voice input' })).toBeInTheDocument(), {
+      timeout: 3000,
+    });
+    expect(screen.getByText(/I’ll stop when you pause/)).toBeInTheDocument();
+  } finally {
+    delete (navigator as any).mediaDevices;
+  }
+});
+
+test('talk that is not "Hey Smokey" does nothing', async () => {
+  withWakeMic({ wake: false, command: '' });
+  try {
+    await openPanel();
+    fireEvent.click(screen.getByRole('button', { name: 'Hey Smokey' }));
+    fireEvent.click(screen.getAllByRole('button', { name: 'Close shared notes' })[0]);
+    await say(600);
+    await waitFor(() => expect(calls.some((call) => call.url === '/api/notes/wake')).toBe(true), { timeout: 3000 });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(screen.queryByLabelText('Add a to-do')).not.toBeInTheDocument();
+  } finally {
+    delete (navigator as any).mediaDevices;
+  }
+});

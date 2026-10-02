@@ -7,6 +7,7 @@ import {
   baseAudioMimeType,
   normaliseNoteReading,
   normaliseTaskPlacement,
+  normaliseWakeReading,
   repairTruncatedJSON,
 } from './geminiContent.js';
 
@@ -175,5 +176,24 @@ describe('baseAudioMimeType', () => {
     expect(baseAudioMimeType('video/webm')).toBe('audio/webm');
     expect(baseAudioMimeType('')).toBe('audio/webm');
     expect(baseAudioMimeType('application/octet-stream')).toBe('audio/webm');
+  });
+});
+
+describe('normaliseWakeReading', () => {
+  it('passes a wake with what was said after it', () => {
+    expect(normaliseWakeReading({ wake: true, command: ', order more gas' })).toEqual({
+      wake: true,
+      command: 'order more gas',
+    });
+  });
+  it('drops a command that came without a wake, so chatter is never shown', () => {
+    expect(normaliseWakeReading({ wake: false, command: 'the brisket is smoky today' })).toEqual({
+      wake: false,
+      command: '',
+    });
+  });
+  it('treats anything but an explicit true as no wake', () => {
+    expect(normaliseWakeReading({ wake: 'true' })).toEqual({ wake: false, command: '' });
+    expect(normaliseWakeReading(null)).toEqual({ wake: false, command: '' });
   });
 });

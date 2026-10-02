@@ -22,6 +22,23 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 // does not upload ten minutes of kitchen noise.
 const MAX_RECORDING_MS = 2 * 60 * 1000;
 
+// Hands-free: how long a quiet spell ends the note, and how long to wait for
+// the first word before giving up on a wake that nobody followed up.
+const SILENCE_END_MS = 1600;
+const NO_SPEECH_GIVE_UP_MS = 7000;
+const HANDS_FREE_FALLBACK_MS = 8000;
+
+// Root-mean-square level of the mic right now, 0 silent to ~1 clipping.
+export function micLevel(analyser: AnalyserNode, samples: Uint8Array<ArrayBuffer>): number {
+  analyser.getByteTimeDomainData(samples);
+  let sum = 0;
+  for (let i = 0; i < samples.length; i += 1) {
+    const v = (samples[i] - 128) / 128;
+    sum += v * v;
+  }
+  return Math.sqrt(sum / samples.length);
+}
+
 // In order of preference. iOS records only mp4; Chrome and Android record webm.
 const MIME_CANDIDATES = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg;codecs=opus'];
 
@@ -98,11 +115,15 @@ export interface VoiceInput {
   listening: boolean;
   // Recording finished; waiting for the words to come back.
   transcribing: boolean;
+  // This recording was opened by voice and ends itself on a pause.
+  handsFree: boolean;
   error: string | null;
   // Live level of the microphone while recording, for the overlay's rings.
   // Null when not recording or where the browser has no Web Audio.
   analyser: AnalyserNode | null;
-  start(): void;
+  // `handsFree` ends the recording on its own once the speaker goes quiet,
+  // for when it was opened by "Hey Smokey" and nobody has a hand free to tap.
+  start(options?: { handsFree?: boolean }): void;
   // Ends the recording and writes down what was said.
   stop(): void;
   // Ends the recording and throws it away.
@@ -119,12 +140,15 @@ export function useVoiceInput(onText: (text: string) => void): VoiceInput {
   const [transcribing, setTranscribing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [analyser, setAnalyser] = useState<AnalyserNode | null>(null);
+  const [handsFree, setHandsFree] = useState(false);
   const audioCtxRef = useRef<AudioContext | null>(null);
   const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
+  const levelNodeRef = useRef<AnalyserNode | null>(null);
   const discardRef = useRef(false);
   const recorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const silenceRef = useRef<ReturnType<typeof setInterval> | null>(null);
   // Set while starting, so a double tap does not open the mic twice.
   const startingRef = useRef(false);
   // Cleared on unmount, so a reply that lands after the panel is gone is
@@ -136,11 +160,14 @@ export function useVoiceInput(onText: (text: string) => void): VoiceInput {
   const releaseMic = useCallback(() => {
     if (timerRef.current) clearTimeout(timerRef.current);
     timerRef.current = null;
+    if (silenceRef.current) clearInterval(silenceRef.current);
+    silenceRef.current = null;
     // Stopping the tracks is what turns the phone's mic indicator off.
     streamRef.current?.getTracks().forEach((track) => track.stop());
     streamRef.current = null;
     sourceRef.current?.disconnect();
     sourceRef.current = null;
+    levelNodeRef.current = null;
   }, []);
 
   const stop = useCallback(() => {
@@ -153,10 +180,11 @@ export function useVoiceInput(onText: (text: string) => void): VoiceInput {
     stop();
   }, [stop]);
 
-  const start = useCallback(async () => {
+  const start = useCallback(async (options?: { handsFree?: boolean }) => {
     if (!isSupported() || recorderRef.current || startingRef.current) return;
     startingRef.current = true;
     discardRef.current = false;
+    setHandsFree(!!options?.handsFree);
     setError(null);
     // Made (or woken) here, inside the tap, before anything is awaited:
     // iOS only lets a page make a sound from a context started by a gesture.
@@ -234,6 +262,7 @@ export function useVoiceInput(onText: (text: string) => void): VoiceInput {
         node.smoothingTimeConstant = 0.6;
         source.connect(node);
         sourceRef.current = source;
+        levelNodeRef.current = node;
         setAnalyser(node);
       } catch {
         setAnalyser(null);
@@ -244,7 +273,35 @@ export function useVoiceInput(onText: (text: string) => void): VoiceInput {
     setListening(true);
     chime(ctx, true);
     timerRef.current = setTimeout(() => stop(), MAX_RECORDING_MS);
-  }, [releaseMic, stop]);
+
+    const node = levelNodeRef.current;
+    if (options?.handsFree && !node) {
+      // No level to watch (no Web Audio): stop on a fixed clock instead.
+      timerRef.current = setTimeout(() => stop(), HANDS_FREE_FALLBACK_MS);
+    } else if (options?.handsFree && node) {
+      const samples = new Uint8Array(node.fftSize);
+      const began = Date.now();
+      let heardAt = 0;
+      let floor = 0.01;
+      silenceRef.current = setInterval(() => {
+        const now = Date.now();
+        // Opened by voice rather than a tap, the audio context can be held
+        // suspended by the browser and read as silence; fall back to a clock
+        // rather than give up on someone who is talking.
+        if (ctx?.state !== 'running') {
+          if (now - began > HANDS_FREE_FALLBACK_MS) stop();
+          return;
+        }
+        const level = micLevel(node, samples);
+        // Speech is whatever stands well clear of the room's own hum, which
+        // in a kitchen with the exhaust running is far from silence.
+        if (level > Math.max(0.03, floor * 2.5)) heardAt = now;
+        else floor = floor * 0.95 + level * 0.05;
+        if (heardAt && now - heardAt > SILENCE_END_MS) stop();
+        else if (!heardAt && now - began > NO_SPEECH_GIVE_UP_MS) cancel();
+      }, 100);
+    }
+  }, [releaseMic, stop, cancel]);
 
   const toggle = useCallback(() => {
     if (recorderRef.current) stop();
@@ -271,9 +328,10 @@ export function useVoiceInput(onText: (text: string) => void): VoiceInput {
     supported,
     listening,
     transcribing,
+    handsFree,
     error,
     analyser,
-    start: () => void start(),
+    start: (options?: { handsFree?: boolean }) => void start(options),
     stop,
     cancel,
     toggle,

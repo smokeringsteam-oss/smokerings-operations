@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import type { VoiceInput } from '../lib/useVoiceInput';
+import { micLevel, type VoiceInput } from '../lib/useVoiceInput';
 
 // The listening screen, in the manner of Google's voice search: the panel
 // gives way to one big mic in the middle, with rings that swell with your
@@ -36,14 +36,8 @@ const VoiceOverlay = ({ voice }: { voice: VoiceInput }) => {
     let frame = 0;
     let smoothed = 0;
     const tick = () => {
-      analyser.getByteTimeDomainData(samples);
-      let sum = 0;
-      for (let i = 0; i < samples.length; i += 1) {
-        const v = (samples[i] - 128) / 128;
-        sum += v * v;
-      }
       // Speech sits low on this scale; stretched so a normal voice fills it.
-      const level = Math.min(1, Math.sqrt(sum / samples.length) * 4);
+      const level = Math.min(1, micLevel(analyser, samples) * 4);
       // Quick to rise, slow to fall, so the rings breathe rather than flicker.
       smoothed = level > smoothed ? level : smoothed * 0.88 + level * 0.12;
       stage.style.setProperty('--voice-level', smoothed.toFixed(3));
@@ -57,7 +51,13 @@ const VoiceOverlay = ({ voice }: { voice: VoiceInput }) => {
 
   const state = error ? 'error' : transcribing ? 'transcribing' : 'listening';
   const heading = error ? 'Didn’t get that' : transcribing ? 'Writing it down…' : 'Listening…';
-  const hint = error ?? (transcribing ? 'One moment' : 'Speak now — tap the mic when you’re done');
+  const hint =
+    error ??
+    (transcribing
+      ? 'One moment'
+      : voice.handsFree
+        ? 'Speak now — I’ll stop when you pause'
+        : 'Speak now — tap the mic when you’re done');
 
   return (
     <div

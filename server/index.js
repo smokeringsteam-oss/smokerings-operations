@@ -8,6 +8,7 @@ import { fileURLToPath } from 'url';
 import {
   extractWeekendOrders,
   readOrderTimePreferences,
+  checkWakePhrase,
   suggestTaskPlacement,
   transcribeVoiceNote,
 } from './integrations/geminiContent.js';
@@ -2881,6 +2882,21 @@ app.post('/api/notes/transcribe', readVoiceUpload, async (req, res) => {
     res.json(await transcribeVoiceNote({ audioBase64: file.buffer.toString('base64'), mimeType: file.mimetype }));
   } catch (err) {
     console.error('Error in POST /api/notes/transcribe:', err);
+    res.status(err.status || 500).json({ error: err.message || String(err) });
+  }
+});
+
+// The "Hey Smokey" check. The tablet only sends a clip here when its own
+// voice detector heard speech, a few seconds at a time; this answers whether
+// the wake phrase was in it and, if the speaker carried on, what they said.
+// Writes nothing and keeps nothing — the clip is read once and dropped.
+app.post('/api/notes/wake', readVoiceUpload, async (req, res) => {
+  try {
+    const file = req.file;
+    if (!file?.buffer?.length) return res.status(400).json({ error: 'No recording was uploaded.' });
+    res.json(await checkWakePhrase({ audioBase64: file.buffer.toString('base64'), mimeType: file.mimetype }));
+  } catch (err) {
+    console.error('Error in POST /api/notes/wake:', err);
     res.status(err.status || 500).json({ error: err.message || String(err) });
   }
 });

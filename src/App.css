@@ -13426,3 +13426,81 @@ body.wa-alarm-open .app-shell {
 .notes-panel:has(.voice-overlay) {
   min-height: min(440px, 80vh);
 }
+
+/* "Hey Smokey" switch in the panel header. A pill that says what it is rather
+   than an icon, because it opens the mic in the background and nobody should
+   have to guess what turned it on. Green dot when listening, like a call. */
+.notes-wake {
+  margin-left: auto;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(243, 233, 222, 0.8);
+  font-family: var(--font-body);
+  font-size: 0.72rem;
+  font-weight: 700;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.notes-wake + .notes-close {
+  margin-left: 0;
+}
+
+.notes-wake:focus-visible {
+  outline: 2px solid var(--color-ember);
+  outline-offset: 2px;
+}
+
+.notes-wake-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: rgba(243, 233, 222, 0.35);
+}
+
+.notes-wake.is-on {
+  border-color: transparent;
+  background: var(--color-ember);
+  color: #1a1206;
+}
+
+.notes-wake.is-on .notes-wake-dot {
+  background: #2fbf5b;
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.7);
+}
+
+/* On the bubble itself while the panel is closed: the mic is open. */
+.notes-wake-live {
+  position: absolute;
+  bottom: 1px;
+  right: 1px;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: #2fbf5b;
+  border: 2px solid var(--color-charcoal);
+  animation: notes-wake-live 2s ease-in-out infinite;
+}
+
+@keyframes notes-wake-live {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .notes-wake-live {
+    animation: none;
+  }
+}

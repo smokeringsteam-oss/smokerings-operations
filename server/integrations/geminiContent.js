@@ -848,3 +848,61 @@ export async function transcribeVoiceNote({ audioBase64, mimeType }) {
   const text = (response.text || '').trim().replace(/^["“]|["”]$/g, '').trim();
   return { text };
 }
+
+const WAKE_SYSTEM_PROMPT = `You listen for a wake phrase on the kitchen tablet at Smoke Rings BBQ, a barbecue cloud kitchen in Bengaluru, India. The wake phrase is "Hey Smokey". Accept close variants an Indian-accented speaker would say: "Hey Smoky", "Hi Smokey", "Hey Smokie", "Okay Smokey", "Ay Smokey", or just "Smokey" said as a call to the device. The recording is cut by a voice detector, so the first syllable may be clipped — "...ey Smokey" still counts.
+
+The recording is usually kitchen chatter that has nothing to do with you. Only answer wake=true when someone is clearly calling "Smokey" as an address to the device — not when "smoke", "smoking", "smoked" or "smoky flavour" comes up in ordinary talk.
+
+If wake is true and the speaker carried on after the wake phrase ("Hey Smokey, order more gas"), put what they said after it in command, in plain English (translate any Kannada, Hindi, Tamil or Malayalam), without the wake phrase and without filler. Otherwise command is an empty string. If wake is false, command must be an empty string — never transcribe conversation that was not addressed to you.`;
+
+// Never trusts the model's shape: anything but an explicit true is no wake,
+// and a command without a wake is dropped rather than shown.
+export function normaliseWakeReading(row) {
+  const wake = row?.wake === true;
+  const command = wake && typeof row?.command === 'string' ? row.command.trim().replace(/^[,.\s]+/, '') : '';
+  return { wake, command };
+}
+
+export async function checkWakePhrase({ audioBase64, mimeType }) {
+  const ai = requireClient();
+  if (!audioBase64) {
+    const err = new Error('No recording was uploaded.');
+    err.status = 400;
+    throw err;
+  }
+
+  const response = await ai.models.generateContent({
+    model: MODEL,
+    contents: [
+      {
+        role: 'user',
+        parts: [
+          { inlineData: { mimeType: baseAudioMimeType(mimeType), data: audioBase64 } },
+          { text: 'Was "Hey Smokey" said in this clip?' },
+        ],
+      },
+    ],
+    config: {
+      systemInstruction: WAKE_SYSTEM_PROMPT,
+      maxOutputTokens: 600,
+      thinkingConfig: { thinkingBudget: 0 },
+      responseMimeType: 'application/json',
+      responseSchema: {
+        type: Type.OBJECT,
+        properties: {
+          wake: { type: Type.BOOLEAN },
+          command: { type: Type.STRING },
+        },
+        required: ['wake', 'command'],
+      },
+    },
+  });
+
+  let parsed = null;
+  try {
+    parsed = JSON.parse(response.text || '{}');
+  } catch {
+    parsed = null;
+  }
+  return normaliseWakeReading(parsed);
+}

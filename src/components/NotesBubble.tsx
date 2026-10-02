@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { readNotesAuthor, useSharedNotes, writeNotesAuthor, type SharedNote } from '../lib/useSharedNotes';
 import { useTodayTasks, type TodayTask } from '../lib/useTodayTasks';
+import { usePersistedState } from '../lib/usePersistedState';
 import { useVoiceInput } from '../lib/useVoiceInput';
+import { useWakeWord, wakeWordSupported } from '../lib/useWakeWord';
 import VoiceOverlay from './VoiceOverlay';
 import {
   createScheduleTask,
@@ -257,6 +259,27 @@ const NotesBubble = () => {
       return joined.slice(0, repeatWeekly ? 140 : 2000);
     });
     if (taskAdded) setTaskAdded('');
+  });
+  // "Hey Smokey" — per device, because it is the kitchen tablet that should
+  // be listening and not everybody's phone. Off until someone turns it on.
+  const [heySmokey, setHeySmokey] = usePersistedState<boolean>('notes.heySmokey', false, (stored) =>
+    typeof stored === 'boolean' ? stored : undefined,
+  );
+  const [canWake] = useState(wakeWordSupported);
+  const wake = useWakeWord({
+    enabled: heySmokey && canWake,
+    paused: voice.listening || voice.transcribing,
+    onWake: (command) => {
+      setOpen(true);
+      if (command) {
+        // "Hey Smokey, order more gas" — said in one breath, so it goes
+        // straight into the box. Still waits for Add, like every voice note.
+        setDraft((current) => (current.trim() ? `${current.trimEnd()} ${command}` : command));
+        if (taskAdded) setTaskAdded('');
+      } else {
+        voice.start({ handsFree: true });
+      }
+    },
   });
   const stopVoice = voice.stop;
   // The panel closing is the person done with it; a mic left live behind a
@@ -844,10 +867,16 @@ const NotesBubble = () => {
         aria-label={
           unread > 0 ? `Shared notes, ${unread} new` : open ? 'Close shared notes' : 'Open shared notes'
         }
+        title={heySmokey && wake.state === 'listening' ? 'Listening for “Hey Smokey”' : undefined}
         aria-expanded={open}
         onClick={() => setOpen((wasOpen) => !wasOpen)}
       >
         <span aria-hidden="true">💬</span>
+        {/* The mic is open in the background: said on the button itself, so
+            it is never live without anyone being able to see that it is. */}
+        {heySmokey && (wake.state === 'listening' || wake.state === 'paused') ? (
+          <span className="notes-wake-live" aria-hidden="true" />
+        ) : null}
         {unread > 0 ? (
           <span className="notes-badge" aria-hidden="true">
             {unread > MAX_BADGE ? `${MAX_BADGE}+` : unread}
@@ -870,6 +899,22 @@ const NotesBubble = () => {
               <h2>Shared notes</h2>
               <p>{summary}</p>
             </div>
+            {canWake ? (
+              <button
+                type="button"
+                className={`notes-wake${heySmokey ? ' is-on' : ''}`}
+                aria-pressed={heySmokey}
+                title={
+                  heySmokey
+                    ? 'Listening for “Hey Smokey” on this device — tap to stop'
+                    : 'Say “Hey Smokey” to add a note hands-free on this device'
+                }
+                onClick={() => setHeySmokey((on) => !on)}
+              >
+                <span className="notes-wake-dot" aria-hidden="true" />
+                Hey Smokey
+              </button>
+            ) : null}
             <button type="button" className="notes-close" aria-label="Close shared notes" onClick={() => setOpen(false)}>
               <span aria-hidden="true">✕</span>
             </button>
@@ -880,6 +925,7 @@ const NotesBubble = () => {
               reach the server" are the same picture otherwise. */}
           {error ? <p className="notes-alert">Could not refresh — {error}</p> : null}
           {actionError ? <p className="notes-alert">{actionError}</p> : null}
+          {heySmokey && wake.error ? <p className="notes-alert">{wake.error}</p> : null}
           {tasksError ? <p className="notes-alert">Could not load today's tasks — {tasksError}</p> : null}
 
           {/* Only once there is something to search. On an empty board the row
