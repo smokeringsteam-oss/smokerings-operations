@@ -1,0 +1,10 @@
+[{
+  "relation": ["delegate_permission/common.handle_all_urls"],
+  "target": {
+    "namespace": "android_app",
+    "package_name": "in.smokerings.ops",
+    "sha256_cert_fingerprints": [
+      "BB:E9:4F:30:27:9E:19:2F:14:77:56:77:BA:5C:0B:17:C3:24:2A:FB:6F:C4:63:91:AC:1B:BC:B8:23:E7:67:8C"
+    ]
+  }
+}]
