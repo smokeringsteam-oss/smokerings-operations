@@ -45,7 +45,7 @@ const MAX_BADGE = 99;
 
 // The two people who work the board. A fixed pair rather than free text, so a
 // typo ("sowmya ", "Adarsh K") never splits one person across two name chips.
-const TEAM = ['Adarsh', 'Sowmya'];
+export const TEAM = ['Adarsh', 'Sowmya'];
 
 // The team, plus a name already on a row or in storage that is not one of
 // them — so a select never silently shows the wrong person for an old value.

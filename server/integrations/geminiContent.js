@@ -803,3 +803,151 @@ export async function suggestTaskPlacement({ title, epics = [], assignees = [], 
   }
   return normaliseTaskPlacement(parsed, { epics, assignees, statuses });
 }
+
+// ---- Voice commands: a spoken sentence into a purchase or a to-do --------
+// The mic button in the app shell (src/components/VoiceCommand.tsx). Hands are
+// usually full when the thing worth logging happens — unloading the pork, or
+// remembering the gas halfway through a smoke — so this takes it as speech.
+//
+// Same split as the bill scan above: this is the read, and it stops at "here
+// is what I heard". normaliseVoiceCommand in server/ops/shared/voiceCommand.js
+// checks every id and number, and nothing is written until the draft has been
+// confirmed on screen.
+const WEEKDAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+
+const VOICE_SYSTEM_PROMPT = `You are the voice assistant for Smoke Rings BBQ, a barbecue cloud kitchen in Bengaluru, India. A member of the kitchen team has spoken (or typed) one short command into the operations dashboard. The speech is Indian English and may mix in Kannada, Hindi or Tamil words. Work out what they want and return it as structured data. You can do exactly two things:
+
+1. LOG A PURCHASE — they are telling you about something that was bought ("bought 5 kg pork shoulder from SK Pork at 540 a kilo", "add purchase, 2 packets burger buns, 120 rupees each").
+2. ADD TASKS — they want one or more to-dos put on the team's board ("remind Sowmya to call the gas vendor", "add a task to post the reel every Friday").
+
+One command may contain both, or several tasks. Anything else (a question, small talk, silence, noise) is neither: return no lines and no tasks, and say what you heard in "notes".
+
+Return:
+- "transcript": what was said, verbatim, in the words spoken. Empty string if nothing intelligible.
+- "vendorName": for a purchase, the vendor it was bought from — the name from the vendor list below when one is clearly meant, otherwise the name as spoken. Empty string if no vendor was said.
+- "purchaseDate": for a purchase, the date as YYYY-MM-DD, resolved against today's date given below ("yesterday", "on Friday"). Empty string if no date was said — do not fill in today yourself.
+- "channel": "B2B" only if they said the buy was for a B2B / corporate / catering client; otherwise "B2C".
+- "lines": one entry per item bought. Empty array when the command is not a purchase.
+- "tasks": one entry per to-do. Empty array when the command has none.
+- "notes": at most one short sentence about anything you were unsure of. Empty string otherwise.
+
+Each purchase line has:
+- "itemName": the item as spoken.
+- "materialId": the id of the matching item in the kitchen catalogue below, when one is clearly the same physical thing. "" when nothing matches. Never invent an id.
+- "quantity": how much was bought, as a number.
+- "unit": the unit as spoken ("kg", "packet", "litre"), or "".
+- "unitPrice": rupees per unit, when they gave a per-unit price ("540 a kilo", "120 each"). Otherwise 0.
+- "lineTotal": rupees for the whole line, when they gave a total ("for 2700", "2700 rupees total"). Otherwise 0.
+Never compute one price from the other, and never make up a price that was not said — 0 for both is fine.
+
+Each task has:
+- "title": the to-do as a short imperative line ("Call the gas vendor"), without the "remind X to" / "add a task to" wrapper.
+- "assignee": one of the team names below when the speaker named who it is for; "" otherwise.
+- "repeatsWeekly": true only if they said it recurs ("every Friday", "weekly"). A one-off is false.
+- "day": for a repeating task, the weekday it repeats on. "" otherwise.
+- "time": a time of day if one was said, as spoken ("9 AM"). "" otherwise.`;
+
+// Either `audioBase64` (what the mic button sends) or `text` (the typed
+// fallback, and what makes this callable without a microphone). `catalogue`
+// and `vendors` are passed in for the same reason readPurchaseBill takes its
+// catalogue: they are database reads, and a copy baked in here would go stale.
+export async function readVoiceCommand({ audioBase64, mimeType, text, catalogue = [], vendors = [], team = [], today }) {
+  const ai = requireClient();
+  const typed = typeof text === 'string' ? text.trim() : '';
+  if (!audioBase64 && !typed) {
+    const err = new Error('Nothing was recorded.');
+    err.status = 400;
+    throw err;
+  }
+
+  const catalogueText = catalogue
+    .map((m) => `- ${m.material_id} — ${m.item_name}${m.category ? ` — ${m.category}` : ''}`)
+    .join('\n');
+  const context = [
+    `Today is ${today}.`,
+    `Team: ${team.length ? team.join(', ') : '(unknown — leave every assignee empty)'}`,
+    `Vendors:\n${vendors.map((name) => `- ${name}`).join('\n') || '(none on file)'}`,
+    `Kitchen catalogue (id — name — category):\n${catalogueText || '(catalogue unavailable — leave every materialId empty)'}`,
+  ].join('\n\n');
+
+  const response = await ai.models.generateContent({
+    model: MODEL,
+    contents: [
+      {
+        role: 'user',
+        parts: audioBase64
+          ? [
+              { inlineData: { mimeType: mimeType || 'audio/wav', data: audioBase64 } },
+              { text: 'This is the spoken command.' },
+            ]
+          : [{ text: `The command, typed: "${typed}"` }],
+      },
+    ],
+    config: {
+      systemInstruction: `${VOICE_SYSTEM_PROMPT}\n\n${context}`,
+      // A sentence of speech is a few lines of JSON; the thinking budget
+      // shares this ceiling — see readPurchaseBill above.
+      maxOutputTokens: 6000,
+      thinkingConfig: { thinkingBudget: 1024 },
+      responseMimeType: 'application/json',
+      responseSchema: {
+        type: Type.OBJECT,
+        properties: {
+          transcript: { type: Type.STRING },
+          vendorName: { type: Type.STRING },
+          purchaseDate: { type: Type.STRING, description: 'YYYY-MM-DD, or empty string.' },
+          channel: { type: Type.STRING, enum: ['B2C', 'B2B'] },
+          notes: { type: Type.STRING },
+          lines: {
+            type: Type.ARRAY,
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                itemName: { type: Type.STRING },
+                materialId: { type: Type.STRING, description: 'A catalogue id, or empty string when nothing matches.' },
+                quantity: { type: Type.NUMBER },
+                unit: { type: Type.STRING },
+                unitPrice: { type: Type.NUMBER },
+                lineTotal: { type: Type.NUMBER },
+              },
+              required: ['itemName', 'quantity'],
+            },
+          },
+          tasks: {
+            type: Type.ARRAY,
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                title: { type: Type.STRING },
+                assignee: { type: Type.STRING },
+                repeatsWeekly: { type: Type.BOOLEAN },
+                // Not an enum: the honest answer for a one-off is "", and an
+                // empty enum member is a schema the API rejects. The weekday
+                // is checked in normaliseVoiceCommand instead.
+                day: { type: Type.STRING, description: `One of ${WEEKDAYS.join(', ')}, or empty string.` },
+                time: { type: Type.STRING },
+              },
+              required: ['title'],
+            },
+          },
+        },
+        required: ['transcript', 'lines', 'tasks'],
+      },
+    },
+  });
+
+  const finishReason = response.candidates?.[0]?.finishReason;
+  if (finishReason && finishReason !== 'STOP') {
+    const err = new Error(`Gemini cut off before it finished with that command (${finishReason}). Try again, a little shorter.`);
+    err.status = 502;
+    throw err;
+  }
+
+  try {
+    return JSON.parse(response.text || '{}');
+  } catch {
+    const err = new Error('Gemini did not return a structured command. Try again.');
+    err.status = 502;
+    throw err;
+  }
+}

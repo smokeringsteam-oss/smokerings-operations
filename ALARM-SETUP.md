@@ -63,6 +63,28 @@ knowing so it doesn't look like something left unfinished:
 Once a page *is* open (or the moment you tap the notification), the mp3 loops
 at full volume and the page vibrates on its own timer until you press Stop.
 
+## The Android app (APK)
+
+The app is a Trusted Web Activity built from the `Website-Hoster` repo: it runs
+this site inside Chrome's engine, and Chrome hands the site's notifications to
+the app, so the same push shows under the app's name and icon. Nothing extra is
+sent — it is the web push above, displayed by the app. Three things have to
+line up or the notifications stay under Chrome:
+
+- **The APK must be built with the URL the site is really served on**
+  (`https://smokerings-ops.tail946602.ts.net/`). A domain that only redirects
+  there does not count: the app is then on an origin it was not built for.
+- **`public/.well-known/assetlinks.json` must carry that build's package name
+  and signing fingerprint.** The build prints the JSON. Without a permanent
+  signing key the fingerprint changes on every build, and this file has to be
+  replaced each time.
+- **Notifications must be switched on from inside the app** (Daily View), once.
+
+Built with `alarm_sound` and `alarm_tag: whatsapp-`, the app puts the WhatsApp
+alarm on its own **Alarms** channel with the laugh bundled as its sound — so in
+the app the laugh plays closed, and the manual step below is only needed for
+plain Chrome.
+
 ## The one manual step (about three minutes)
 
 1. Copy `public/whatsapp-alert.mp3` to the phone, into its **`Ringtones`** or

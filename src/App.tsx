@@ -6,6 +6,7 @@ import FinanceDashboard, { type FinanceSub, financeTools } from './pages/finance
 import { usePersistedChoice } from './lib/usePersistedChoice';
 import { useWhatsappAttentionCount } from './lib/useWhatsappAttention';
 import NotesBubble from './components/NotesBubble';
+import VoiceCommand from './components/VoiceCommand';
 import WhatsappAlarm from './components/WhatsappAlarm';
 
 // Weekend Prep Planner used to be its own top-level "Kitchen Prep Automation"
@@ -168,6 +169,9 @@ const App = () => {
           Fixed, so the same bubble is in the same corner on both, and so a
           note stays one tap away however far down a page you have scrolled. */}
       <NotesBubble />
+
+      {/* The mic beside it: say a purchase or a to-do instead of typing it. */}
+      <VoiceCommand />
 
       {/* Renders nothing until a WhatsApp alarm is actually sounding. Mounted
           at the shell for the same reason the badge is: the message that needs

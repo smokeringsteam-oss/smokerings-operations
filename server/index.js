@@ -68,6 +68,7 @@ import {
   addInventoryAdjustment,
 } from './ops/shared/purchasing.js';
 import { MAX_IMAGE_BYTES as MAX_BILL_BYTES, scanPurchaseBill } from './ops/shared/purchaseScan.js';
+import { MAX_AUDIO_BYTES as MAX_VOICE_BYTES, interpretVoiceCommand } from './ops/shared/voiceCommand.js';
 import { suggestMatchesForPurchase } from './ops/shared/materialMatch.js';
 import {
   getMeatItems,
@@ -253,6 +254,20 @@ const readBillUpload = (req, res, next) =>
       return res.status(413).json({ error: 'That file is over 10 MB — take the photo again at a smaller size.' });
     }
     console.error('Error uploading a bill scan:', err);
+    return res.status(400).json({ error: err.message || String(err) });
+  });
+
+// A voice command is the same shape of upload as a bill: read once by Gemini
+// and thrown away, so memory storage and a cap answered in words.
+const voiceUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: MAX_VOICE_BYTES } });
+
+const readVoiceUpload = (req, res, next) =>
+  voiceUpload.single('audio')(req, res, (err) => {
+    if (!err) return next();
+    if (err.code === 'LIMIT_FILE_SIZE') {
+      return res.status(413).json({ error: 'That recording is too long — keep a command under a minute.' });
+    }
+    console.error('Error uploading a voice command:', err);
     return res.status(400).json({ error: err.message || String(err) });
   });
 
@@ -1046,6 +1061,27 @@ app.post('/api/purchasing/scan-bill', readBillUpload, async (req, res) => {
     res.json(result);
   } catch (err) {
     console.error('Error in POST /api/purchasing/scan-bill:', err);
+    res.status(err.status || 500).json({ error: err.message || String(err) });
+  }
+});
+
+// Reads a spoken (or typed) command into a draft purchase and/or draft
+// to-dos. Read-only for the same reason scan-bill above is: the mic button
+// shows what was heard, and a confirmed draft is saved through the ordinary
+// purchase, note and schedule endpoints. See server/ops/shared/voiceCommand.js.
+app.post('/api/voice/command', readVoiceUpload, async (req, res) => {
+  try {
+    const file = req.file;
+    const result = await interpretVoiceCommand({
+      buffer: file?.buffer,
+      mimeType: file?.mimetype,
+      size: file?.size,
+      text: req.body?.text,
+      team: req.body?.team,
+    });
+    res.json(result);
+  } catch (err) {
+    console.error('Error in POST /api/voice/command:', err);
     res.status(err.status || 500).json({ error: err.message || String(err) });
   }
 });
