@@ -12560,10 +12560,69 @@ span.purch-purpose-pill {
   cursor: not-allowed;
 }
 
+/* Dictation. Sits beside Add rather than inside the box so it is a thumb's
+   worth of target on a phone, and turns ember while it is listening — the
+   one thing it must never be is live without looking it. */
+.notes-mic {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 36px;
+  padding: 0;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-text);
+  cursor: pointer;
+}
+
+.notes-mic:focus-visible {
+  outline: 2px solid var(--color-ember);
+  outline-offset: 1px;
+}
+
+.notes-mic.is-listening {
+  border-color: transparent;
+  background: var(--color-ember);
+  color: #ffffff;
+  animation: notes-mic-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes notes-mic-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(224, 165, 38, 0.5);
+  }
+  50% {
+    box-shadow: 0 0 0 6px rgba(224, 165, 38, 0);
+  }
+}
+
+.notes-voice-status {
+  margin: 6px 0 0;
+  font-size: 0.74rem;
+  color: var(--color-text-muted);
+}
+
+.notes-voice-status em {
+  font-style: normal;
+  color: var(--color-text);
+}
+
+.notes-voice-status.is-error {
+  color: var(--color-ember-dark);
+}
+
 @media (prefers-reduced-motion: reduce) {
   .notes-toggle,
   .notes-item-delete {
     transition: none;
+  }
+
+  .notes-mic.is-listening {
+    animation: none;
   }
 }
 

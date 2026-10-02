@@ -16,7 +16,7 @@
 //     one, and reads as an empty day by evening;
 //   * a search narrows both halves. Tasks are filtered in the browser and
 //     notes on the server, so this is the one place the two can disagree.
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, expect, test, vi } from 'vitest';
 import NotesBubble from './NotesBubble';
 
@@ -258,4 +258,70 @@ test('a search narrows the jobs as well as the notes', async () => {
   // useSharedNotes.ts.
   fireEvent.change(screen.getByLabelText(/search notes, tasks and names/i), { target: { value: '' } });
   await waitFor(() => expect(screen.getByText('Order more charcoal')).toBeInTheDocument());
+});
+
+// Voice input. The browser's recogniser is faked: what matters here is that a
+// settled phrase joins whatever was already typed rather than replacing it,
+// and that nothing is posted until someone presses Add.
+class FakeRecognition {
+  static last: FakeRecognition | null = null;
+  lang = '';
+  continuous = false;
+  interimResults = false;
+  onresult: ((event: any) => void) | null = null;
+  onerror: ((event: any) => void) | null = null;
+  onend: (() => void) | null = null;
+  started = false;
+  constructor() {
+    FakeRecognition.last = this;
+  }
+  start() {
+    this.started = true;
+  }
+  stop() {
+    this.started = false;
+    this.onend?.();
+  }
+  abort() {
+    this.stop();
+  }
+  say(text: string, isFinal: boolean) {
+    this.onresult?.({ resultIndex: 0, results: [{ isFinal, 0: { transcript: text } }] });
+  }
+}
+
+test('the mic adds spoken words to what is typed, and waits for Add', async () => {
+  (window as any).webkitSpeechRecognition = FakeRecognition;
+  try {
+    await openPanel();
+    const box = screen.getByLabelText('Add a to-do') as HTMLTextAreaElement;
+    fireEvent.change(box, { target: { value: 'Order' } });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Speak a to-do' }));
+    const rec = FakeRecognition.last!;
+    expect(rec.started).toBe(true);
+    expect(screen.getByRole('button', { name: 'Stop voice input' })).toHaveAttribute('aria-pressed', 'true');
+
+    act(() => rec.say('more gas', false));
+    expect(screen.getByText('more gas')).toBeInTheDocument();
+    expect(box.value).toBe('Order');
+
+    act(() => rec.say('more gas', true));
+    expect(box.value).toBe('Order more gas');
+    expect(calls.some((call) => call.url === '/api/notes' && call.method === 'POST')).toBe(false);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add' }));
+    await waitFor(() => expect(calls.some((call) => call.url === '/api/notes' && call.method === 'POST')).toBe(true));
+    expect(calls.find((call) => call.method === 'POST')?.body).toMatchObject({ body: 'Order more gas' });
+    // Sending ends the dictation, so the next thing said is not quietly
+    // written into an empty box.
+    expect(rec.started).toBe(false);
+  } finally {
+    delete (window as any).webkitSpeechRecognition;
+  }
+});
+
+test('a browser without speech recognition shows no mic', async () => {
+  await openPanel();
+  expect(screen.queryByRole('button', { name: 'Speak a to-do' })).not.toBeInTheDocument();
 });

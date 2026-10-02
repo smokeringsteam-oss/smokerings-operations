@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { readNotesAuthor, useSharedNotes, writeNotesAuthor, type SharedNote } from '../lib/useSharedNotes';
 import { useTodayTasks, type TodayTask } from '../lib/useTodayTasks';
+import { useVoiceInput } from '../lib/useVoiceInput';
 import {
   createScheduleTask,
   fetchRecurringSchedule,
@@ -244,6 +245,24 @@ const NotesBubble = () => {
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  // Dictation into the composer. Each settled phrase is added to the end of
+  // whatever is already in the box, so speaking and typing mix freely — say
+  // most of it, fix a word by hand, say the rest. Nothing is sent on its own:
+  // a recogniser that mishears "gas" as "glass" must still pass a human eye
+  // before it lands on the board.
+  const voice = useVoiceInput((text) => {
+    setDraft((current) => {
+      const joined = current && !/\s$/.test(current) ? `${current} ${text}` : `${current}${text}`;
+      return joined.slice(0, repeatWeekly ? 140 : 2000);
+    });
+    if (taskAdded) setTaskAdded('');
+  });
+  const stopVoice = voice.stop;
+  // The panel closing is the person done with it; a mic left live behind a
+  // closed panel would keep writing into a box nobody can see.
+  useEffect(() => {
+    if (!open) stopVoice();
+  }, [open, stopVoice]);
   const panelRef = useRef<HTMLDivElement>(null);
   const toggleRef = useRef<HTMLButtonElement>(null);
 
@@ -462,6 +481,7 @@ const NotesBubble = () => {
   const submit = async () => {
     const body = draft.trim();
     if (!body || posting) return;
+    voice.stop();
     setPosting(true);
     setActionError(null);
     try {
@@ -604,6 +624,7 @@ const NotesBubble = () => {
   const submitTask = async () => {
     const label = draft.trim();
     if (!label || addingTask) return;
+    voice.stop();
     setAddingTask(true);
     setActionError(null);
     try {
@@ -1013,6 +1034,26 @@ const NotesBubble = () => {
                   }
                 }}
               />
+              {voice.supported ? (
+                <button
+                  type="button"
+                  className={`notes-mic${voice.listening ? ' is-listening' : ''}`}
+                  aria-pressed={voice.listening}
+                  aria-label={voice.listening ? 'Stop voice input' : 'Speak a to-do'}
+                  title={voice.listening ? 'Stop voice input' : 'Speak a to-do'}
+                  onClick={() => {
+                    voice.toggle();
+                    inputRef.current?.focus();
+                  }}
+                >
+                  <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+                    <path
+                      fill="currentColor"
+                      d="M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3Zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2Z"
+                    />
+                  </svg>
+                </button>
+              ) : null}
               <button
                 type="submit"
                 className="notes-send"
@@ -1021,6 +1062,16 @@ const NotesBubble = () => {
                 {posting || addingTask ? 'Saving…' : 'Add'}
               </button>
             </div>
+
+            {voice.listening || voice.error ? (
+              <p className={`notes-voice-status${voice.error ? ' is-error' : ''}`} role="status" aria-live="polite">
+                {voice.error
+                  ? voice.error
+                  : voice.interim
+                    ? <>Listening… <em>{voice.interim}</em></>
+                    : 'Listening… speak now, tap the mic to stop.'}
+              </p>
+            ) : null}
 
             {/* The one real difference between the two things this box can
                 write, asked as one question instead of a pair of mode tabs:
