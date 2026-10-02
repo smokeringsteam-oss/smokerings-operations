@@ -318,10 +318,13 @@ test('the mic records, and the words join what is typed and wait for Add', async
       expect(screen.getByRole('button', { name: 'Stop voice input' })).toHaveAttribute('aria-pressed', 'true'),
     );
     expect(FakeRecorder.last?.state).toBe('recording');
-    expect(screen.getByText(/Recording/)).toBeInTheDocument();
+    // The big mic in the middle of the panel, Google-style, is what ends it.
+    expect(screen.getByRole('dialog', { name: 'Voice input' })).toBeInTheDocument();
+    expect(screen.getByText('Listening…')).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Stop voice input' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Done speaking' }));
     await waitFor(() => expect(box.value).toBe('Order more gas'));
+    expect(screen.queryByRole('dialog', { name: 'Voice input' })).not.toBeInTheDocument();
     // The phone's mic light goes off with the recording, not with the panel.
     expect(track.stop).toHaveBeenCalled();
     expect(calls.some((call) => call.url === '/api/notes' && call.method === 'POST')).toBe(false);
@@ -331,6 +334,21 @@ test('the mic records, and the words join what is typed and wait for Add', async
     expect(calls.find((call) => call.url === '/api/notes' && call.method === 'POST')?.body).toMatchObject({
       body: 'Order more gas',
     });
+  } finally {
+    delete (navigator as any).mediaDevices;
+  }
+});
+
+test('the cross throws the recording away', async () => {
+  withMic();
+  try {
+    await openPanel();
+    fireEvent.click(screen.getByRole('button', { name: 'Speak a to-do' }));
+    await waitFor(() => expect(screen.getByRole('dialog', { name: 'Voice input' })).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel voice input' }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Voice input' })).not.toBeInTheDocument());
+    expect(calls.some((call) => call.url === '/api/notes/transcribe')).toBe(false);
+    expect((screen.getByLabelText('Add a to-do') as HTMLTextAreaElement).value).toBe('');
   } finally {
     delete (navigator as any).mediaDevices;
   }

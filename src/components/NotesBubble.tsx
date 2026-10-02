@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { readNotesAuthor, useSharedNotes, writeNotesAuthor, type SharedNote } from '../lib/useSharedNotes';
 import { useTodayTasks, type TodayTask } from '../lib/useTodayTasks';
 import { useVoiceInput } from '../lib/useVoiceInput';
+import VoiceOverlay from './VoiceOverlay';
 import {
   createScheduleTask,
   fetchRecurringSchedule,
@@ -1059,16 +1060,6 @@ const NotesBubble = () => {
               </button>
             </div>
 
-            {voice.listening || voice.transcribing || voice.error ? (
-              <p className={`notes-voice-status${voice.error ? ' is-error' : ''}`} role="status" aria-live="polite">
-                {voice.error
-                  ? voice.error
-                  : voice.transcribing
-                    ? 'Writing down what you said…'
-                    : 'Recording… speak now, tap the mic again when done.'}
-              </p>
-            ) : null}
-
             {/* The one real difference between the two things this box can
                 write, asked as one question instead of a pair of mode tabs:
                 does it come back next week. Off by default, because most of
@@ -1137,6 +1128,7 @@ const NotesBubble = () => {
               </>
             ) : null}
           </form>
+          <VoiceOverlay voice={voice} />
         </div>
       ) : null}
     </div>

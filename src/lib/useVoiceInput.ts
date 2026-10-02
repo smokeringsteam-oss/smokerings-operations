@@ -49,6 +49,39 @@ function describeMicError(err: unknown): string {
   return 'Could not start the microphone.';
 }
 
+type AudioCtor = typeof AudioContext;
+
+function audioContextCtor(): AudioCtor | null {
+  if (typeof window === 'undefined') return null;
+  const w = window as unknown as { AudioContext?: AudioCtor; webkitAudioContext?: AudioCtor };
+  return w.AudioContext ?? w.webkitAudioContext ?? null;
+}
+
+// The two-note chime Google's voice search plays: up when the mic opens, down
+// when it closes. Heard rather than seen, so someone who tapped the mic and
+// looked away at the grill still knows it is listening.
+function chime(ctx: AudioContext | null, rising: boolean) {
+  if (!ctx) return;
+  try {
+    const notes = rising ? [660, 880] : [880, 587];
+    notes.forEach((freq, i) => {
+      const at = ctx.currentTime + i * 0.11;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.value = freq;
+      gain.gain.setValueAtTime(0.0001, at);
+      gain.gain.exponentialRampToValueAtTime(0.35, at + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, at + 0.16);
+      osc.connect(gain).connect(ctx.destination);
+      osc.start(at);
+      osc.stop(at + 0.18);
+    });
+  } catch {
+    // A chime that cannot play is not worth a message.
+  }
+}
+
 async function transcribe(blob: Blob): Promise<string> {
   const ext = blob.type.includes('mp4') ? 'm4a' : blob.type.includes('ogg') ? 'ogg' : 'webm';
   const form = new FormData();
@@ -66,9 +99,16 @@ export interface VoiceInput {
   // Recording finished; waiting for the words to come back.
   transcribing: boolean;
   error: string | null;
+  // Live level of the microphone while recording, for the overlay's rings.
+  // Null when not recording or where the browser has no Web Audio.
+  analyser: AnalyserNode | null;
   start(): void;
+  // Ends the recording and writes down what was said.
   stop(): void;
+  // Ends the recording and throws it away.
+  cancel(): void;
   toggle(): void;
+  clearError(): void;
 }
 
 // `onText` is called once per recording with what was said. Held in a ref so
@@ -78,6 +118,10 @@ export function useVoiceInput(onText: (text: string) => void): VoiceInput {
   const [listening, setListening] = useState(false);
   const [transcribing, setTranscribing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [analyser, setAnalyser] = useState<AnalyserNode | null>(null);
+  const audioCtxRef = useRef<AudioContext | null>(null);
+  const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
+  const discardRef = useRef(false);
   const recorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -95,6 +139,8 @@ export function useVoiceInput(onText: (text: string) => void): VoiceInput {
     // Stopping the tracks is what turns the phone's mic indicator off.
     streamRef.current?.getTracks().forEach((track) => track.stop());
     streamRef.current = null;
+    sourceRef.current?.disconnect();
+    sourceRef.current = null;
   }, []);
 
   const stop = useCallback(() => {
@@ -102,10 +148,27 @@ export function useVoiceInput(onText: (text: string) => void): VoiceInput {
     if (recorder && recorder.state !== 'inactive') recorder.stop();
   }, []);
 
+  const cancel = useCallback(() => {
+    discardRef.current = true;
+    stop();
+  }, [stop]);
+
   const start = useCallback(async () => {
     if (!isSupported() || recorderRef.current || startingRef.current) return;
     startingRef.current = true;
+    discardRef.current = false;
     setError(null);
+    // Made (or woken) here, inside the tap, before anything is awaited:
+    // iOS only lets a page make a sound from a context started by a gesture.
+    const AudioCtx = audioContextCtor();
+    if (AudioCtx && !audioCtxRef.current) {
+      try {
+        audioCtxRef.current = new AudioCtx();
+      } catch {
+        audioCtxRef.current = null;
+      }
+    }
+    void audioCtxRef.current?.resume?.().catch(() => undefined);
     let stream: MediaStream;
     try {
       stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -139,6 +202,9 @@ export function useVoiceInput(onText: (text: string) => void): VoiceInput {
       releaseMic();
       if (!aliveRef.current) return;
       setListening(false);
+      setAnalyser(null);
+      chime(audioCtxRef.current, false);
+      if (discardRef.current) return;
       const blob = new Blob(chunks, { type: recorder.mimeType || mimeType || 'audio/webm' });
       if (blob.size === 0) {
         setError("Didn't catch anything — tap the mic and try again.");
@@ -159,9 +225,24 @@ export function useVoiceInput(onText: (text: string) => void): VoiceInput {
 
     streamRef.current = stream;
     recorderRef.current = recorder;
+    const ctx = audioCtxRef.current;
+    if (ctx) {
+      try {
+        const source = ctx.createMediaStreamSource(stream);
+        const node = ctx.createAnalyser();
+        node.fftSize = 512;
+        node.smoothingTimeConstant = 0.6;
+        source.connect(node);
+        sourceRef.current = source;
+        setAnalyser(node);
+      } catch {
+        setAnalyser(null);
+      }
+    }
     recorder.start();
     startingRef.current = false;
     setListening(true);
+    chime(ctx, true);
     timerRef.current = setTimeout(() => stop(), MAX_RECORDING_MS);
   }, [releaseMic, stop]);
 
@@ -179,8 +260,23 @@ export function useVoiceInput(onText: (text: string) => void): VoiceInput {
       recorderRef.current = null;
       if (recorder && recorder.state !== 'inactive') recorder.stop();
       releaseMic();
+      void audioCtxRef.current?.close?.().catch(() => undefined);
+      audioCtxRef.current = null;
     };
   }, [releaseMic]);
 
-  return { supported, listening, transcribing, error, start: () => void start(), stop, toggle };
+  const clearError = useCallback(() => setError(null), []);
+
+  return {
+    supported,
+    listening,
+    transcribing,
+    error,
+    analyser,
+    start: () => void start(),
+    stop,
+    cancel,
+    toggle,
+    clearError,
+  };
 }

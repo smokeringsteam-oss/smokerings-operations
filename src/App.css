@@ -12605,20 +12605,171 @@ span.purch-purpose-pill {
   }
 }
 
-.notes-voice-status {
-  margin: 6px 0 0;
-  font-size: 0.74rem;
-  color: var(--color-text-muted);
+/* The listening screen (VoiceOverlay.tsx). Covers the whole panel, with the
+   mic dead centre and big enough to hit without looking — the Google voice
+   search layout, because it is the one everybody already knows. */
+.voice-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  padding: 24px;
+  background: var(--color-surface);
+  text-align: center;
+  animation: voice-overlay-in 160ms ease-out;
 }
 
-.notes-voice-status em {
-  font-style: normal;
+@keyframes voice-overlay-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.voice-overlay-close {
+  position: absolute;
+  top: 10px;
+  right: 12px;
+  width: 40px;
+  height: 40px;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--color-text-muted);
+  font-size: 1.8rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.voice-overlay-close:focus-visible,
+.voice-mic:focus-visible {
+  outline: 3px solid var(--color-ember);
+  outline-offset: 3px;
+}
+
+.voice-overlay-heading {
+  margin: 0;
+  font-family: var(--font-body);
+  font-size: 1.5rem;
+  font-weight: 700;
   color: var(--color-text);
 }
 
-.notes-voice-status.is-error {
+.voice-overlay-hint,
+.voice-overlay-retry {
+  margin: 0;
+  max-width: 28ch;
+  font-size: 0.9rem;
+  color: var(--color-text-muted);
+}
+
+.voice-overlay.is-error .voice-overlay-hint {
   color: var(--color-ember-dark);
 }
+
+.voice-stage {
+  --voice-level: 0;
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 220px;
+  height: 220px;
+}
+
+.voice-ring {
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  border-radius: 50%;
+  background: var(--color-ember);
+  pointer-events: none;
+}
+
+/* Grown by the voice itself: --voice-level is written every frame from the
+   microphone, 0 silent to 1 loud. */
+.voice-ring-inner {
+  width: 120px;
+  height: 120px;
+  opacity: 0.28;
+  transform: scale(calc(1 + var(--voice-level) * 0.55));
+  transition: transform 80ms linear;
+}
+
+.voice-ring-outer {
+  width: 120px;
+  height: 120px;
+  opacity: 0.14;
+  transform: scale(calc(1 + var(--voice-level) * 0.95));
+  transition: transform 120ms linear;
+}
+
+/* A slow breath underneath, so the rings show the mic is live even in a
+   silent room, or where the browser cannot report a level at all. */
+.voice-overlay.is-listening .voice-ring-outer {
+  animation: voice-breathe 1.6s ease-in-out infinite;
+}
+
+@keyframes voice-breathe {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(224, 165, 38, 0.35);
+  }
+  50% {
+    box-shadow: 0 0 0 18px rgba(224, 165, 38, 0);
+  }
+}
+
+.voice-overlay.is-transcribing .voice-ring,
+.voice-overlay.is-error .voice-ring {
+  transform: none;
+  opacity: 0.1;
+}
+
+.voice-mic {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 108px;
+  height: 108px;
+  border: none;
+  border-radius: 50%;
+  background: linear-gradient(180deg, var(--color-ember) 0%, var(--color-ember-dark) 100%);
+  color: #ffffff;
+  box-shadow: var(--shadow-lg);
+  cursor: pointer;
+}
+
+.voice-mic:disabled {
+  cursor: progress;
+}
+
+.voice-overlay.is-error .voice-mic {
+  background: var(--color-surface);
+  color: var(--color-ember-dark);
+  border: 2px solid var(--color-ember);
+}
+
+.voice-spinner {
+  width: 40px;
+  height: 40px;
+  border: 4px solid rgba(255, 255, 255, 0.35);
+  border-top-color: #ffffff;
+  border-radius: 50%;
+  animation: voice-spin 0.8s linear infinite;
+}
+
+@keyframes voice-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 
 @media (prefers-reduced-motion: reduce) {
   .notes-toggle,
@@ -12626,8 +12777,14 @@ span.purch-purpose-pill {
     transition: none;
   }
 
-  .notes-mic.is-listening {
+  .notes-mic.is-listening,
+  .voice-overlay,
+  .voice-overlay.is-listening .voice-ring-outer {
     animation: none;
+  }
+
+  .voice-ring {
+    transition: none;
   }
 }
 
@@ -13263,4 +13420,9 @@ body.wa-alarm-open .app-shell {
 
 @media (max-width: 560px) {
   body.wa-alarm-open .app-shell { padding-top: 56px; }
+}
+
+/* Room for the listening screen even when the board behind it is short. */
+.notes-panel:has(.voice-overlay) {
+  min-height: min(440px, 80vh);
 }
