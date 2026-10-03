@@ -255,12 +255,24 @@ export function listen(): void {
     });
   }
 
+  // 1 again, inside the Android app. Its pushes come through Firebase, not the
+  // service worker, so the app hands each one to the open page as a
+  // `nativepush` event instead. FCM data is all strings, hence the Number().
+  window.addEventListener('nativepush', onNativePush);
+
   // Prime the element on the first interaction of the session, whatever it is.
   window.addEventListener('pointerdown', unlock, { once: true, capture: true });
   window.addEventListener('keydown', unlock, { once: true, capture: true });
 
   // 3: a cold start from a notification tap.
   consumeUrlAlarm();
+}
+
+function onNativePush(event: Event): void {
+  const data = (event as CustomEvent<Record<string, string> | null>).detail;
+  if (data?.alarm !== 'whatsapp') return;
+  const channelId = data.channelId && /^\d+$/.test(data.channelId) ? Number(data.channelId) : null;
+  start({ channelId, customer: data.customer || data.title || '', body: data.body || '' });
 }
 
 // Reads ?alarm=whatsapp&channel=N and then removes it from the address bar.
@@ -335,6 +347,7 @@ export function __reset(): void {
     audio = null;
   }
   unlocked = false;
+  if (typeof window !== 'undefined') window.removeEventListener('nativepush', onNativePush);
   listening = false;
   state = IDLE;
   subscribers.clear();
