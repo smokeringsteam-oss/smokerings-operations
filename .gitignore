@@ -14,3 +14,6 @@ server/data
 # copy here silently overrides the real config.
 vite.config.js
 vite.config.d.ts
+
+# Firebase service account key (FIREBASE_SERVICE_ACCOUNT) — can send pushes as the project
+server/secrets/

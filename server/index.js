@@ -89,11 +89,14 @@ import {
 } from './ops/shared/smoking.js';
 import { getStageLog } from './ops/shared/smokingStageLog.js';
 import {
+  deleteAppToken as deletePushAppToken,
   deleteSubscription as deletePushSubscription,
   getPublicKey as getPushPublicKey,
+  isAppConfigured as isAppPushConfigured,
   isConfigured as isPushConfigured,
   listSubscriptions as listPushSubscriptions,
   pruneDeliveries as prunePushDeliveries,
+  saveAppToken as savePushAppToken,
   saveSubscription as savePushSubscription,
 } from './core/pushNotify.js';
 import { listNotes, addNote, setNoteDone, assignNote, deleteNote } from './core/sharedNotes.js';
@@ -2974,6 +2977,9 @@ app.get('/api/push/status', (req, res) => {
   try {
     res.json({
       configured: isPushConfigured(),
+      // The Android app pushes through Firebase, not VAPID, so it is ready or
+      // not independently of the browser half.
+      appConfigured: isAppPushConfigured(),
       publicKey: getPushPublicKey(),
       subscriptions: listPushSubscriptions(),
       digestTime: pushDigestLabel(),
@@ -3009,6 +3015,33 @@ app.post('/api/push/unsubscribe', (req, res) => {
     res.json(deletePushSubscription((req.body || {}).endpoint));
   } catch (err) {
     console.error('Error in POST /api/push/unsubscribe:', err);
+    res.status(err.status || 500).json({ error: err.message || String(err) });
+  }
+});
+
+// The Android app's equivalent of /subscribe: it has no service worker or web
+// push (it is a WebView), so it registers its Firebase token instead, and the
+// same timers reach it through FCM. See server/core/fcmSend.js.
+app.post('/api/push/app/subscribe', (req, res) => {
+  try {
+    if (!isAppPushConfigured()) {
+      return res.status(503).json({
+        error: 'Push to the Android app is not set up on the server — set FIREBASE_SERVICE_ACCOUNT in .env.',
+      });
+    }
+    const { token, label } = req.body || {};
+    res.status(201).json(savePushAppToken({ token, label }));
+  } catch (err) {
+    console.error('Error in POST /api/push/app/subscribe:', err);
+    res.status(err.status || 500).json({ error: err.message || String(err) });
+  }
+});
+
+app.post('/api/push/app/unsubscribe', (req, res) => {
+  try {
+    res.json(deletePushAppToken((req.body || {}).token));
+  } catch (err) {
+    console.error('Error in POST /api/push/app/unsubscribe:', err);
     res.status(err.status || 500).json({ error: err.message || String(err) });
   }
 });

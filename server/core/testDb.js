@@ -476,6 +476,14 @@ CREATE TABLE push_delivery (
   sent_at    TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE push_app_token (
+  token         TEXT PRIMARY KEY,
+  label         TEXT,
+  created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+  last_sent_at  TEXT,
+  failure_count INTEGER NOT NULL DEFAULT 0
+);
+
 -- The shared note bubble. The CHECK is carried over from the real schema on
 -- purpose: refusing a blank body is the store's one rule, and a fixture that
 -- dropped it would let a regression in the trim() guard pass here.

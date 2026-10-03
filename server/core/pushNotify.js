@@ -22,7 +22,13 @@
 // They identify this server to the push service; regenerating them silently
 // invalidates every existing subscription, so every phone would have to turn
 // notifications on again.
+//
+// The Android app (Smoke Rings Ops, built in native mode) can't use web push:
+// it is a WebView, not Chrome. It registers a Firebase token instead
+// (push_app_token), and sendToAll() delivers to those through fcmSend.js
+// alongside the browser subscriptions.
 import webpush from 'web-push';
+import { isFcmConfigured, sendFcm } from './fcmSend.js';
 import { count, remove, select, update, upsert } from './repo.js';
 
 // Rows in push_delivery older than this are dropped on startup. They exist to
@@ -107,35 +113,72 @@ function deleteSubscription(endpoint) {
   return { removed: remove('push_subscription', { endpoint }, { required: false }) };
 }
 
-// Endpoints are long and reveal which push service a device uses, so the list
-// the UI gets back is trimmed to what it needs to show: a label, when it was
-// added, and enough of a fingerprint to tell two phones apart.
+// ---- Android app tokens -------------------------------------------------
+
+// Whether the server can push to the Android app at all (a Firebase service
+// account is configured). Separate from isConfigured(), which is web push.
+function isAppConfigured() {
+  return isFcmConfigured();
+}
+
+// Same upsert-and-reset as saveSubscription: the app re-registers its token
+// every time the page loads with reminders on, and that should refresh the row,
+// not fail on the key.
+function saveAppToken({ token, label } = {}) {
+  if (!token || typeof token !== 'string') {
+    const err = new Error('An app registration needs a token.');
+    err.status = 400;
+    throw err;
+  }
+  upsert('push_app_token', ['token'], { token, label: label || null, failure_count: 0 });
+  return { id: token.slice(-12), label: label || '' };
+}
+
+function deleteAppToken(token) {
+  if (!token) return { removed: 0 };
+  return { removed: remove('push_app_token', { token }, { required: false }) };
+}
+
+// Endpoints and tokens are long and reveal which push service a device uses,
+// so the list the UI gets back is trimmed to what it needs to show: a label,
+// when it was added, and enough of a fingerprint to tell two phones apart.
+// `kind` lets the page tell a browser subscription from the app's.
 function listSubscriptions() {
-  return select('push_subscription', {}, { orderBy: 'created_at' }).map((row) => ({
-    id: row.endpoint.slice(-12),
+  const describe = (row, key, kind) => ({
+    id: row[key].slice(-12),
+    kind,
     label: row.label || '',
     createdAt: row.created_at,
     lastSentAt: row.last_sent_at || '',
     failureCount: row.failure_count || 0,
-  }));
+  });
+  return [
+    ...select('push_subscription').map((row) => describe(row, 'endpoint', 'browser')),
+    ...select('push_app_token').map((row) => describe(row, 'token', 'app')),
+  ].sort((a, b) => (a.createdAt || '').localeCompare(b.createdAt || ''));
 }
 
+// Everything that can receive a push: browsers and app installs alike, so the
+// timers' "is anyone listening?" check counts the app too.
 function subscriptionCount() {
-  return count('push_subscription');
+  return count('push_subscription') + count('push_app_token');
 }
 
 // ---- Sending ------------------------------------------------------------
 
-// Sends one payload to every subscribed browser.
+// Sends one payload to every subscribed browser and every registered app.
 //
 // Returns a summary rather than throwing: the caller is usually a timer, which
 // wants to know what happened, and one dead phone must not stop the others
 // being told. The payload is JSON the service worker reads — see public/sw.js
-// for the shape it expects.
+// for the shape it expects — and the app receives the same keys as FCM data.
 async function sendToAll(payload) {
-  if (!ensureConfigured()) return { sent: 0, failed: 0, removed: 0, skipped: 'not configured' };
-  const rows = select('push_subscription');
-  if (!rows.length) return { sent: 0, failed: 0, removed: 0, skipped: 'no subscriptions' };
+  const webReady = ensureConfigured();
+  const appReady = isFcmConfigured();
+  if (!webReady && !appReady) return { sent: 0, failed: 0, removed: 0, skipped: 'not configured' };
+  const rows = webReady ? select('push_subscription') : [];
+  const appRows = appReady ? select('push_app_token') : [];
+  if (!rows.length && !appRows.length) return { sent: 0, failed: 0, removed: 0, skipped: 'no subscriptions' };
 
   const body = JSON.stringify(payload);
   const now = new Date().toISOString();
@@ -143,8 +186,30 @@ async function sendToAll(payload) {
   let failed = 0;
   let removed = 0;
 
-  await Promise.all(
-    rows.map(async (row) => {
+  const toApps = appRows.map(async (row) => {
+    const result = await sendFcm(row.token, payload);
+    if (result.ok) {
+      sent += 1;
+      update('push_app_token', { token: row.token }, { last_sent_at: now, failure_count: 0 }, { required: false });
+      return;
+    }
+    // Same rules as a browser: gone for good is dropped at once, anything else
+    // is counted and only dropped after MAX_CONSECUTIVE_FAILURES in a row.
+    const next = (row.failure_count || 0) + 1;
+    if (result.gone || next >= MAX_CONSECUTIVE_FAILURES) {
+      remove('push_app_token', { token: row.token }, { required: false });
+      removed += 1;
+      if (!result.gone) failed += 1;
+      return;
+    }
+    failed += 1;
+    console.error(`[push] app push failed (${next}/${MAX_CONSECUTIVE_FAILURES}) — ${result.error}`);
+    update('push_app_token', { token: row.token }, { failure_count: next }, { required: false });
+  });
+
+  await Promise.all([
+    ...toApps,
+    ...rows.map(async (row) => {
       const subscription = {
         endpoint: row.endpoint,
         keys: { p256dh: row.p256dh, auth: row.auth },
@@ -184,7 +249,7 @@ async function sendToAll(payload) {
         }
       }
     }),
-  );
+  ]);
 
   return { sent, failed, removed };
 }
@@ -218,11 +283,14 @@ function pruneDeliveries(now = new Date()) {
 
 export {
   claimDelivery,
+  deleteAppToken,
   deleteSubscription,
   getPublicKey,
+  isAppConfigured,
   isConfigured,
   listSubscriptions,
   pruneDeliveries,
+  saveAppToken,
   saveSubscription,
   sendToAll,
   subscriptionCount,

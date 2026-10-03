@@ -865,6 +865,22 @@ CREATE TABLE push_delivery (
     sent_at    TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- The Android app's Firebase registration tokens, one per install.
+--
+-- The app (Website-Hoster's native build) is a WebView, which has no web push,
+-- so it registers this instead and the server sends to it through FCM — see
+-- fcmSend.js. Same lifecycle as push_subscription: upserted on every
+-- re-register, dropped when FCM says the token is gone (app uninstalled), and
+-- failure_count for anything transient.
+CREATE TABLE push_app_token (
+    token         TEXT PRIMARY KEY,
+    -- "Android app", so it is recognisable in the device list.
+    label         TEXT,
+    created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+    last_sent_at  TEXT,
+    failure_count INTEGER NOT NULL DEFAULT 0
+);
+
 -- ---------------------------------------------------------------------------
 -- Shared notes
 --
