@@ -1,8 +1,15 @@
-[{
-  "relation": ["delegate_permission/common.handle_all_urls"],
-  "target": {
-    "namespace": "android_app",
-    "package_name": "in.smokerings.ops",
-    "sha256_cert_fingerprints": ["78:A5:7B:43:84:D4:50:F3:D1:CE:FD:BE:75:DD:5D:E4:C2:95:53:C2:56:F4:90:32:0D:E0:D7:96:D3:9F:72:F8"]
+[
+  {
+    "relation": [
+      "delegate_permission/common.handle_all_urls"
+    ],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "in.smokerings.ops",
+      "sha256_cert_fingerprints": [
+        "78:A5:7B:43:84:D4:50:F3:D1:CE:FD:BE:75:DD:5D:E4:C2:95:53:C2:56:F4:90:32:0D:E0:D7:96:D3:9F:72:F8",
+        "2D:69:07:45:FC:4D:39:93:C4:35:19:BC:1C:B7:73:B5:72:45:6C:35:1E:1A:D9:2A:AB:5C:4C:EF:60:29:F6:D7"
+      ]
+    }
   }
-}]
+]
