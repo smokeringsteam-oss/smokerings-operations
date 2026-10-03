@@ -44,7 +44,19 @@ function recognitionClass(): (new () => Recognition) | null {
   return w.SpeechRecognition || w.webkitSpeechRecognition || null;
 }
 
-export const wakeWordSupported = (): boolean => recognitionClass() !== null;
+// Not inside the Android app (see isNativeApp in push.ts). Its WebView exposes
+// the API but has no speech service behind it, so every session fails at once,
+// is restarted by onend below, and asks for the microphone again — a mic
+// prompt popping up over and over. Tapping the mic still works there.
+const inNativeApp = (): boolean => typeof window !== 'undefined' && 'NativePush' in window;
+
+export const wakeWordSupported = (): boolean => !inNativeApp() && recognitionClass() !== null;
+
+// Sessions that end this soon after starting are failures, not Chrome's usual
+// timeout after a stretch of quiet. This many in a row and listening gives up
+// rather than grabbing the microphone every 400ms for the rest of the day.
+const FAST_END_MS = 1500;
+const MAX_FAST_ENDS = 5;
 
 // Listens until the wake phrase is heard, calls onWake once with whatever was
 // said after it, and stops — the microphone is about to be wanted by the
@@ -65,6 +77,8 @@ export function listenForWakeWord({
 
   let stopped = false;
   let restart: ReturnType<typeof setTimeout> | null = null;
+  let startedAt = Date.now();
+  let fastEnds = 0;
   const recognition = new Ctor();
   recognition.lang = 'en-IN';
   recognition.continuous = true;
@@ -108,9 +122,16 @@ export function listenForWakeWord({
   // "always listening" is really "restarted every time it stops".
   recognition.onend = () => {
     if (stopped) return;
+    fastEnds = Date.now() - startedAt < FAST_END_MS ? fastEnds + 1 : 0;
+    if (fastEnds >= MAX_FAST_ENDS) {
+      stop();
+      onError('Listening for “Hey Smokey” keeps failing — tap the mic instead.');
+      return;
+    }
     restart = setTimeout(() => {
       if (stopped) return;
       try {
+        startedAt = Date.now();
         recognition.start();
       } catch {
         // Still winding down; the next onend tries again.
