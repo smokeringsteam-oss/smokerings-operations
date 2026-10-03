@@ -25,6 +25,162 @@ export type PushState = {
 
 const SW_URL = '/sw.js';
 
+// ---- Inside the Android app ------------------------------------------------
+//
+// The Smoke Rings Ops app (Website-Hoster's native build) shows this page in a
+// WebView, which has no service worker push and no Notification API. It hands
+// the page a `NativePush` bridge instead: ask it for the state, get back the
+// app's Firebase token, and register that with the server, which pushes to it
+// through FCM (server/core/fcmSend.js). Everything below the native branch in
+// each function is the browser path, unchanged.
+
+type NativeState = {
+  type: 'state';
+  available: boolean;
+  permission: 'granted' | 'denied' | 'default';
+  token: string;
+  error?: string;
+};
+
+type NativeBridge = {
+  postMessage(message: string): void;
+  onmessage: ((event: { data: string }) => void) | null;
+};
+
+// Remembers that reminders were turned on in the app, so a rotated Firebase
+// token is re-registered on the next load instead of silently going quiet.
+const NATIVE_ON_KEY = 'nativePushOn';
+
+function nativeBridge(): NativeBridge | null {
+  return (window as unknown as { NativePush?: NativeBridge }).NativePush ?? null;
+}
+
+export function isNativeApp(): boolean {
+  return nativeBridge() !== null;
+}
+
+let nativeWaiting: Array<(state: NativeState) => void> = [];
+
+// Every request gets a state reply, in order, so whoever is waiting gets the
+// latest one.
+function askNative(type: 'state' | 'enable'): Promise<NativeState> {
+  const bridge = nativeBridge();
+  if (!bridge) return Promise.reject(new Error('Not running in the app.'));
+  bridge.onmessage = (event) => {
+    let state: NativeState;
+    try {
+      state = JSON.parse(event.data);
+    } catch {
+      return;
+    }
+    if (state?.type !== 'state') return;
+    const waiting = nativeWaiting;
+    nativeWaiting = [];
+    waiting.forEach((resolve) => resolve(state));
+  };
+  return new Promise((resolve) => {
+    nativeWaiting.push(resolve);
+    bridge.postMessage(JSON.stringify({ type }));
+  });
+}
+
+function rememberNativeOn(on: boolean) {
+  try {
+    if (on) localStorage.setItem(NATIVE_ON_KEY, '1');
+    else localStorage.removeItem(NATIVE_ON_KEY);
+  } catch {
+    // Storage unavailable: the only cost is no automatic re-register.
+  }
+}
+
+function wasNativeOn(): boolean {
+  try {
+    return localStorage.getItem(NATIVE_ON_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+async function registerAppToken(token: string): Promise<void> {
+  const resp = await fetch('/api/push/app/subscribe', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ token, label: 'Android app' }),
+  });
+  if (!resp.ok) {
+    const data = await resp.json().catch(() => ({}));
+    throw new Error(data.error || 'The server refused the app registration.');
+  }
+}
+
+const NATIVE_DENIED =
+  'Notifications are off for this app — turn them on in Android Settings → Apps → Smoke Rings Ops → Notifications, then try again.';
+
+async function getNativePushState(): Promise<PushState> {
+  const [state, status] = await Promise.all([
+    askNative('state'),
+    fetch('/api/push/status')
+      .then((r) => r.json())
+      .catch(() => ({})),
+  ]);
+  if (!state.available) {
+    return {
+      supported: false,
+      permission: 'unsupported',
+      subscribed: false,
+      blockedReason: state.error || "This build of the app can't receive notifications.",
+    };
+  }
+  const tail = state.token ? state.token.slice(-12) : '';
+  let subscribed = !!tail && (status.subscriptions || []).some(
+    (sub: { kind?: string; id?: string }) => sub.kind === 'app' && sub.id === tail,
+  );
+  // Firebase rotates tokens now and then. If reminders were on, register the
+  // new one rather than showing the switch as off for no visible reason.
+  if (!subscribed && tail && state.permission === 'granted' && status.appConfigured && wasNativeOn()) {
+    try {
+      await registerAppToken(state.token);
+      subscribed = true;
+    } catch {
+      // Shown as off; tapping the switch will surface the actual error.
+    }
+  }
+  return {
+    supported: true,
+    permission: state.permission,
+    subscribed,
+    blockedReason: state.permission === 'denied' ? NATIVE_DENIED : state.error || '',
+  };
+}
+
+async function enableNativePush(): Promise<void> {
+  const state = await askNative('enable');
+  if (!state.available) throw new Error(state.error || "This build of the app can't receive notifications.");
+  if (state.permission !== 'granted') {
+    throw new Error(
+      state.permission === 'denied'
+        ? NATIVE_DENIED
+        : 'The permission prompt closed without an answer — tap the button again.',
+    );
+  }
+  if (!state.token) {
+    throw new Error(state.error || 'The app has no push token yet — check the phone is online and try again.');
+  }
+  await registerAppToken(state.token);
+  rememberNativeOn(true);
+}
+
+async function disableNativePush(): Promise<void> {
+  rememberNativeOn(false);
+  const state = await askNative('state');
+  if (!state.token) return;
+  await fetch('/api/push/app/unsubscribe', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ token: state.token }),
+  }).catch(() => undefined);
+}
+
 // VAPID keys travel as base64url text and the subscribe() call wants bytes.
 //
 // The ArrayBuffer is allocated explicitly rather than letting Uint8Array.from
@@ -80,6 +236,18 @@ async function getRegistration(): Promise<ServiceWorkerRegistration> {
 // What the toggle should be showing right now. Never throws — a broken state
 // still has to render something.
 export async function getPushState(): Promise<PushState> {
+  if (isNativeApp()) {
+    try {
+      return await getNativePushState();
+    } catch (err) {
+      return {
+        supported: true,
+        permission: 'default',
+        subscribed: false,
+        blockedReason: (err as Error).message || 'Could not read the notification state.',
+      };
+    }
+  }
   if (!isSupported()) {
     return {
       supported: false,
@@ -119,6 +287,7 @@ export async function getPushState(): Promise<PushState> {
 // subscription to the server. Throws with a readable message on any failure —
 // the caller shows it verbatim.
 export async function enablePush(): Promise<void> {
+  if (isNativeApp()) return enableNativePush();
   if (!isSupported()) throw new Error('This browser cannot receive push notifications.');
 
   // FIRST, before anything that awaits.
@@ -201,6 +370,7 @@ export async function enablePush(): Promise<void> {
 // would leave a row the server still pushes to for a browser that has already
 // dropped the subscription — notifications from a switch that says Off.
 export async function disablePush(): Promise<void> {
+  if (isNativeApp()) return disableNativePush();
   if (!isSupported()) return;
   const registration = await navigator.serviceWorker.getRegistration(SW_URL);
   const subscription = registration ? await registration.pushManager.getSubscription() : null;
@@ -225,6 +395,28 @@ export async function disablePush(): Promise<void> {
 // service worker that never activated — and they need different fixes.
 export async function getDiagnostics(): Promise<Record<string, string>> {
   const out: Record<string, string> = {};
+  if (isNativeApp()) {
+    out.surface = 'Android app (Firebase push)';
+    out.origin = window.location.origin;
+    try {
+      const state = await askNative('state');
+      out.pushAvailable = String(state.available);
+      out.permission = state.permission;
+      out.token = state.token ? `yes (${state.token.slice(-12)})` : 'none';
+      if (state.error) out.error = state.error;
+      const status = await fetch('/api/push/status').then((r) => r.json());
+      out.serverAppPush = status.appConfigured ? 'configured' : 'NOT configured (FIREBASE_SERVICE_ACCOUNT)';
+      out.serverKnowsToken = String(
+        (status.subscriptions || []).some(
+          (sub: { kind?: string; id?: string }) => sub.kind === 'app' && sub.id === state.token.slice(-12),
+        ),
+      );
+    } catch (err) {
+      out.error = (err as Error).message;
+    }
+    out.browser = navigator.userAgent;
+    return out;
+  }
   out.permission = 'Notification' in window ? Notification.permission : 'no Notification API';
   out.origin = window.location.origin;
   out.secureContext = String(window.isSecureContext);
@@ -275,6 +467,7 @@ export async function getDiagnostics(): Promise<Record<string, string>> {
 // permission and the worker are both fine and the fault is in delivery; if it
 // does not, nothing server-side is worth investigating yet.
 export async function showLocalTestNotification(): Promise<string> {
+  if (isNativeApp()) throw new Error('Not available in the app — use "Send now" to test a real push.');
   if (Notification.permission !== 'granted') {
     throw new Error(`Permission is "${Notification.permission}" — nothing can be shown until it is granted.`);
   }

@@ -14,6 +14,7 @@ import {
   enablePush,
   getDiagnostics,
   getPushState,
+  isNativeApp,
   sendAlarmTest,
   sendTestPush,
   showLocalTestNotification,
@@ -42,7 +43,8 @@ const PushToggle: React.FC = () => {
     fetch('/api/push/status')
       .then((r) => r.json())
       .then((data) => {
-        setConfigured(!!data.configured);
+        // The app pushes through Firebase, a browser through VAPID web push.
+        setConfigured(isNativeApp() ? !!data.appConfigured : !!data.configured);
         setDigestTime(data.digestTime || '');
       })
       .catch(() => setConfigured(false));
@@ -71,7 +73,9 @@ const PushToggle: React.FC = () => {
       <p className="inv-section-hint">
         🔕{' '}
         {!configured
-          ? 'Reminders are not set up on the server yet — run `npm run push:keys` and add the keys to .env.'
+          ? isNativeApp()
+            ? 'Reminders to the app are not set up on the server yet — set FIREBASE_SERVICE_ACCOUNT in .env.'
+            : 'Reminders are not set up on the server yet — run `npm run push:keys` and add the keys to .env.'
           : state.blockedReason}
       </p>
     );
@@ -148,7 +152,7 @@ const PushToggle: React.FC = () => {
         >
           {diagnostics ? 'Hide details' : 'Troubleshoot'}
         </button>
-        {diagnostics && (
+        {diagnostics && !isNativeApp() && (
           <button
             type="button"
             className="secondary-button small"

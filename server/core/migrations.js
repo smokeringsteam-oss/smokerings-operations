@@ -1048,7 +1048,24 @@ const STEPS = [
   purchasePurpose,
   salesOrderTrackingUrl,
   deliveryWatchQueue,
+  appPushTokens,
 ];
+
+// Firebase tokens for the Android app (native build), which can't use web push.
+// One new table beside push_subscription; nothing existing changes.
+function appPushTokens(db) {
+  if (hasTable(db, 'push_app_token')) return null;
+  db.exec(`
+      CREATE TABLE push_app_token (
+          token         TEXT PRIMARY KEY,
+          label         TEXT,
+          created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+          last_sent_at  TEXT,
+          failure_count INTEGER NOT NULL DEFAULT 0
+      )
+  `);
+  return 'push_app_token: created';
+}
 
 // Returns only what it actually changed, so the caller can say so once on
 // startup rather than have every step announce itself into a silent log.
