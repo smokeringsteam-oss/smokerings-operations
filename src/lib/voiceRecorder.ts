@@ -56,7 +56,55 @@ async function toWav(clip: Blob): Promise<Blob> {
   }
 }
 
-export async function startRecording(): Promise<Recording> {
+// How long a pause ends a hands-free command, and how long to wait for one to
+// start at all before giving up on it.
+const SILENCE_MS = 1800;
+const NO_SPEECH_MS = 8000;
+
+// Calls onSilence once, when the speaker has said something and then stopped
+// (or never started). "Loud" is measured against the room rather than against
+// a fixed level, because the room here has a smoker's fan in it. Returns the
+// function that stops watching.
+function watchForSilence(stream: MediaStream, onSilence: () => void): () => void {
+  const ctx = new AudioContext();
+  const analyser = ctx.createAnalyser();
+  analyser.fftSize = 2048;
+  ctx.createMediaStreamSource(stream).connect(analyser);
+  const samples = new Float32Array(analyser.fftSize);
+  const started = Date.now();
+  let floor = Infinity;
+  let heard = false;
+  let lastLoud = started;
+
+  const timer = setInterval(() => {
+    analyser.getFloatTimeDomainData(samples);
+    let sum = 0;
+    for (let i = 0; i < samples.length; i += 1) sum += samples[i] * samples[i];
+    const level = Math.sqrt(sum / samples.length);
+    // The quietest the room has been, allowed to drift up slowly so one dead
+    // moment at the start does not set the bar for the whole clip.
+    floor = Math.min(level, floor * 1.02 + 0.0001);
+    const now = Date.now();
+    if (level > Math.max(0.015, floor * 3)) {
+      heard = true;
+      lastLoud = now;
+    }
+    if (heard ? now - lastLoud > SILENCE_MS : now - started > NO_SPEECH_MS) {
+      end();
+      onSilence();
+    }
+  }, 100);
+
+  const end = () => {
+    clearInterval(timer);
+    void ctx.close().catch(() => {});
+  };
+  return end;
+}
+
+// onSilence: for a recording nobody is going to tap to stop (the "Hey Smokey"
+// path) — called once when the speaker has finished.
+export async function startRecording({ onSilence }: { onSilence?: () => void } = {}): Promise<Recording> {
   if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
     throw new Error('This browser cannot record audio.');
   }
@@ -74,7 +122,11 @@ export async function startRecording(): Promise<Recording> {
   recorder.start();
 
   // The tab's "recording" indicator stays lit until every track is stopped.
-  const release = () => stream.getTracks().forEach((track) => track.stop());
+  const unwatch = onSilence ? watchForSilence(stream, onSilence) : () => {};
+  const release = () => {
+    unwatch();
+    stream.getTracks().forEach((track) => track.stop());
+  };
 
   return {
     stop: () =>

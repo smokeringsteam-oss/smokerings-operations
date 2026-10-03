@@ -12589,6 +12589,20 @@ span.purch-purpose-pill {
   animation: voice-pulse 1.4s ease-out infinite;
 }
 
+/* Waiting for "Hey Smokey": a small steady dot, so an open ear is never
+   invisible, without the alarm of the recording red. */
+.voice-toggle.is-listening::after {
+  content: '';
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: var(--color-ember);
+  border: 2px solid var(--color-charcoal);
+}
+
 @keyframes voice-pulse {
   0% {
     box-shadow: 0 0 0 0 rgba(214, 69, 69, 0.55);
