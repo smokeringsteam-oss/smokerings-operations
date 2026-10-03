@@ -3,6 +3,6 @@
   "target": {
     "namespace": "android_app",
     "package_name": "in.smokerings.ops",
-    "sha256_cert_fingerprints": ["BB:E9:4F:30:27:9E:19:2F:14:77:56:77:BA:5C:0B:17:C3:24:2A:FB:6F:C4:63:91:AC:1B:BC:B8:23:E7:67:8C"]
+    "sha256_cert_fingerprints": ["78:A5:7B:43:84:D4:50:F3:D1:CE:FD:BE:75:DD:5D:E4:C2:95:53:C2:56:F4:90:32:0D:E0:D7:96:D3:9F:72:F8"]
   }
 }]
