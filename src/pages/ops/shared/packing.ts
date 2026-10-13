@@ -406,9 +406,9 @@ export type MeatByItem = Record<string, MeatByItemLine[]>;
 // smoke, so it goes on well after the shoulders and flipping both at once
 // would stamp a chicken-only order with the wrong time.
 //
-// A category missing from every group here simply has no switch (jackfruit
-// today); those orders are still driven one at a time from Order Management's
-// per-order dropdown, which is unchanged.
+// A category missing from every group here simply has no switch; those orders
+// are still driven one at a time from Order Management's per-order dropdown,
+// which is unchanged. Wings and both Cajun categories ride the chicken switch.
 export type SmokerLoad = {
   id: 'pork' | 'beef' | 'chicken';
   label: string;
@@ -418,8 +418,8 @@ export type SmokerLoad = {
 
 export const SMOKER_LOADS: SmokerLoad[] = [
   { id: 'pork', label: 'Pork', emoji: '🐖', categories: ['pulledPork', 'ribs', 'porkBelly'] },
-  { id: 'beef', label: 'Beef', emoji: '🐄', categories: ['beefRibs'] },
-  { id: 'chicken', label: 'Chicken', emoji: '🐔', categories: ['chicken'] },
+  { id: 'beef', label: 'Beef', emoji: '🐄', categories: ['brisket'] },
+  { id: 'chicken', label: 'Chicken', emoji: '🐔', categories: ['chicken', 'wings', 'cajunLegs', 'cajunBirds'] },
 ];
 
 // The meat categories one order actually needs, deduped across its line

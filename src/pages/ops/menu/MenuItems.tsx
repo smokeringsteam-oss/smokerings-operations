@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import MenuItemRecipe from './MenuItemRecipe';
+import { parseIsoDay, todayIso } from '../../../lib/localDay';
 
 // Menu items — editing the dishes themselves, as opposed to picking which of
 // them a week sells (that's ServiceWeeks).
@@ -22,7 +23,14 @@ import MenuItemRecipe from './MenuItemRecipe';
 // `csv` on the response — when it couldn't find a row to update, the note
 // below says so rather than letting the two quietly disagree.
 //
-// Deliberately not here: archiving, availability toggles and the raw Odoo
+// The one switch on the row itself is the till's: "Taking orders" flips
+// Odoo's available_in_pos, so a dish that has sold out can be closed on the
+// POS mid-service without opening its card and without taking it off the
+// menu. Dishes that are off the menu altogether (sale_ok false — the old
+// tacos, quesadillas and glaze burgers) are hidden by default, behind a
+// "show" link, so the list is what's actually being sold.
+//
+// Deliberately not here: archiving, the on/off-menu flag and the raw Odoo
 // product form. Taking a dish off a weekend is a decision about a service
 // week rather than about the dish, and the full product record belongs in
 // Odoo itself — both were noise on the screen where a price gets changed.
@@ -44,13 +52,21 @@ export type MenuItem = {
   category: string;
   isArchived: boolean;
   isAvailable: boolean;
+  // Odoo's available_in_pos: whether the till takes orders for it right now.
+  isInPos: boolean;
   image: string | null; // data: URI of the Odoo thumbnail, or null
   // The knowledge-base menu.csv row this Odoo product matched, resolved
   // server-side (server/ops/menu/menuCsvMirror.js resolveMenuIds). It's what the
   // recipe section hangs off; null means no CSV row matched, so this dish has
   // no recipe the prep planner can see.
   menuId: string | null;
+  // What smokerings.in says about this dish, read from its public menu feed.
+  // The site keeps its own sold-out date and ignores isInPos, so the two can
+  // disagree. null = the feed couldn't be read (or a save reply, which
+  // doesn't carry it — replaceItem keeps the last known value).
+  site?: SiteStatus | null;
 };
+type SiteStatus = { listed: boolean; soldOutThrough: string | null };
 type MenuItemsResponse = {
   items: MenuItem[];
   editable: boolean;
@@ -92,6 +108,31 @@ async function readJson<T extends { error?: string }>(resp: Response, fallbackMe
   return json;
 }
 
+// A sold-out date already behind us means the dish is back on sale, so the
+// date alone isn't the state. The feed sends YYYY-MM-DD, compared as text.
+const SiteBadge: React.FC<{ site: SiteStatus }> = ({ site }) => {
+  if (!site.listed) {
+    return (
+      <em className="menu-item-tag is-site-off" title="Not in the smokerings.in menu feed">
+        not on website
+      </em>
+    );
+  }
+  if (site.soldOutThrough && site.soldOutThrough >= todayIso()) {
+    const until = parseIsoDay(site.soldOutThrough).toLocaleDateString('en-IN', {
+      weekday: 'short',
+      day: 'numeric',
+      month: 'short',
+    });
+    return (
+      <em className="menu-item-tag is-site-off" title="Set on the website, not from this screen">
+        website: sold out till {until}
+      </em>
+    );
+  }
+  return <em className="menu-item-tag is-site-on">website: on sale</em>;
+};
+
 const MenuItems: React.FC<{ channel?: MenuChannel }> = ({ channel = 'b2c' }) => {
   const [items, setItems] = useState<MenuItem[]>([]);
   const [editable, setEditable] = useState(true);
@@ -99,6 +140,7 @@ const MenuItems: React.FC<{ channel?: MenuChannel }> = ({ channel = 'b2c' }) => 
   const [hasLoaded, setHasLoaded] = useState(false);
   const [error, setError] = useState('');
   const [search, setSearch] = useState('');
+  const [showOffMenu, setShowOffMenu] = useState(false);
 
   // One card open at a time. It holds unsaved drafts for two different stores
   // (the Odoo product and the recipe CSV), and two open at once is two sets
@@ -143,13 +185,17 @@ const MenuItems: React.FC<{ channel?: MenuChannel }> = ({ channel = 'b2c' }) => 
 
   // Typing filters on everything printed on a row, so a word from the name,
   // the code or the blurb all find the dish.
+  const onMenu = useMemo(() => items.filter((item) => item.isAvailable), [items]);
+  const offMenuCount = items.length - onMenu.length;
+
   const visible = useMemo(() => {
+    const pool = showOffMenu ? items : onMenu;
     const needle = search.trim().toLowerCase();
-    if (!needle) return items;
-    return items.filter((item) =>
+    if (!needle) return pool;
+    return pool.filter((item) =>
       `${item.name} ${item.code} ${item.description} ${item.category}`.toLowerCase().includes(needle),
     );
-  }, [items, search]);
+  }, [items, onMenu, showOffMenu, search]);
 
   const grouped = useMemo(() => {
     const groups = new Map<string, MenuItem[]>();
@@ -211,7 +257,10 @@ const MenuItems: React.FC<{ channel?: MenuChannel }> = ({ channel = 'b2c' }) => 
 
   // Odoo's version of a record takes the place of the row it came from.
   const replaceItem = useCallback(
-    (updated: MenuItem) => setItems((prev) => prev.map((row) => (row.id === updated.id ? updated : row))),
+    (updated: MenuItem) =>
+      setItems((prev) =>
+        prev.map((row) => (row.id === updated.id ? { ...updated, site: updated.site ?? row.site } : row)),
+      ),
     [],
   );
 
@@ -243,6 +292,20 @@ const MenuItems: React.FC<{ channel?: MenuChannel }> = ({ channel = 'b2c' }) => 
     } finally {
       setSavingId(null);
     }
+  };
+
+  // Saves straight away, independent of the card's drafts — closing a sold-out
+  // dish on the till shouldn't wait on (or discard) a half-typed price.
+  const handleTogglePos = async (item: MenuItem) => {
+    if (savingId !== null) return;
+    setSaveNote('');
+    const ok = await applyWrite(
+      item,
+      { isInPos: !item.isInPos },
+      '/api/ops/menu-items/update',
+      'Odoo rejected the change.',
+    );
+    if (ok) setSaveNote(item.isInPos ? `${item.name} closed on the POS.` : `${item.name} is taking orders on the POS.`);
   };
 
   const handleSaveDish = async (item: MenuItem) => {
@@ -314,9 +377,19 @@ const MenuItems: React.FC<{ channel?: MenuChannel }> = ({ channel = 'b2c' }) => 
         <div className="menu-items-head-text">
           <h3 className="inv-section-title">
             {title}
-            {items.length > 0 && <span className="menu-items-count">{items.length} dishes</span>}
+            {onMenu.length > 0 && <span className="menu-items-count">{onMenu.length} dishes</span>}
           </h3>
-          <p className="inv-section-hint">Tap a dish to edit its picture, name, price, blurb and recipe.</p>
+          <p className="inv-section-hint">
+            Tap a dish to edit its picture, name, price, blurb and recipe. The switch opens or closes the dish on the
+            Odoo POS only — the website's sold-out state is set on the website and shown on each row.
+          </p>
+          {offMenuCount > 0 && (
+            <button type="button" className="menu-items-offmenu-toggle" onClick={() => setShowOffMenu((v) => !v)}>
+              {showOffMenu
+                ? `Hide ${offMenuCount} off-menu ${offMenuCount === 1 ? 'dish' : 'dishes'}`
+                : `Show ${offMenuCount} off-menu ${offMenuCount === 1 ? 'dish' : 'dishes'}`}
+            </button>
+          )}
         </div>
         <button
           type="button"
@@ -389,7 +462,9 @@ const MenuItems: React.FC<{ channel?: MenuChannel }> = ({ channel = 'b2c' }) => 
       ) : !error && !items.length && hasLoaded ? (
         <p className="status-message">No menu items found in Odoo.</p>
       ) : items.length && !grouped.length ? (
-        <p className="status-message">Nothing matches “{search.trim()}”.</p>
+        <p className="status-message">
+          {search.trim() ? `Nothing matches “${search.trim()}”.` : 'Every dish is off the menu right now.'}
+        </p>
       ) : (
         grouped.map(([category, categoryItems]) => (
           <div key={category} id={categoryAnchor(category)} className="menu-item-group">
@@ -407,51 +482,86 @@ const MenuItems: React.FC<{ channel?: MenuChannel }> = ({ channel = 'b2c' }) => 
                 <article
                   key={item.id}
                   id={`menu-item-${item.id}`}
-                  className={`menu-item-row${isOpen ? ' is-open' : ''}`}
+                  className={`menu-item-row${isOpen ? ' is-open' : ''}${item.isInPos ? '' : ' is-pos-closed'}${
+                    item.isAvailable ? '' : ' is-off-menu'
+                  }`}
                 >
-                  <button
-                    type="button"
-                    className="menu-item-open"
-                    onClick={() => toggleCard(item)}
-                    aria-expanded={isOpen}
-                  >
-                    {item.image ? (
-                      <img className="menu-item-thumb" src={item.image} alt="" loading="lazy" />
-                    ) : (
-                      <span className="menu-item-thumb is-empty" aria-hidden="true">
-                        🍽
-                      </span>
-                    )}
-
-                    <span className="menu-item-main">
-                      <span className="menu-item-name">{item.name}</span>
-                      {(item.code || !item.menuId) && (
-                        <span className="menu-item-meta">
-                          {item.code && <em className="menu-item-code">{item.code}</em>}
-                          {!item.menuId && (
-                            <em className="menu-item-tag" title="No knowledge-base menu.csv row, so it has no recipe">
-                              no recipe
-                            </em>
-                          )}
+                  <div className="menu-item-head">
+                    <button
+                      type="button"
+                      className="menu-item-open"
+                      onClick={() => toggleCard(item)}
+                      aria-expanded={isOpen}
+                    >
+                      {item.image ? (
+                        <img className="menu-item-thumb" src={item.image} alt="" loading="lazy" />
+                      ) : (
+                        <span className="menu-item-thumb is-empty" aria-hidden="true">
+                          🍽
                         </span>
                       )}
-                      {item.description && <span className="menu-item-desc">{item.description}</span>}
-                    </span>
 
-                    <span className="menu-item-side">
-                      <span className="menu-item-price">{inrFormat(item.price)}</span>
-                      <svg className="menu-item-chevron" viewBox="0 0 20 20" width="18" height="18" aria-hidden="true">
-                        <path
-                          d="M7 4l6 6-6 6"
-                          fill="none"
-                          stroke="currentColor"
-                          strokeWidth="2"
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                        />
-                      </svg>
-                    </span>
-                  </button>
+                      <span className="menu-item-main">
+                        <span className="menu-item-name">{item.name}</span>
+                        {(item.code || !item.menuId || item.site) && (
+                          <span className="menu-item-meta">
+                            {item.code && <em className="menu-item-code">{item.code}</em>}
+                            {item.site && <SiteBadge site={item.site} />}
+                            {!item.menuId && (
+                              <em className="menu-item-tag" title="No knowledge-base menu.csv row, so it has no recipe">
+                                no recipe
+                              </em>
+                            )}
+                          </span>
+                        )}
+                        {item.description && <span className="menu-item-desc">{item.description}</span>}
+                      </span>
+
+                      <span className="menu-item-side">
+                        <span className="menu-item-price">{inrFormat(item.price)}</span>
+                        <svg
+                          className="menu-item-chevron"
+                          viewBox="0 0 20 20"
+                          width="18"
+                          height="18"
+                          aria-hidden="true"
+                        >
+                          <path
+                            d="M7 4l6 6-6 6"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="2"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                          />
+                        </svg>
+                      </span>
+                    </button>
+                    {/* A sibling of the row button rather than inside it: a
+                      switch nested in a button is invalid markup, and a tap on
+                      it must not also open the card. */}
+                    <label
+                      className="menu-item-pos"
+                      title={
+                        item.isInPos
+                          ? 'On in the Odoo POS — tap to close. Does not change the website.'
+                          : 'Off in the Odoo POS — tap to reopen. Does not change the website.'
+                      }
+                    >
+                      <input
+                        type="checkbox"
+                        role="switch"
+                        checked={item.isInPos}
+                        onChange={() => handleTogglePos(item)}
+                        disabled={!editable || savingId !== null}
+                        aria-label={`${item.name} available in the Odoo POS`}
+                      />
+                      <span className="menu-item-pos-track" aria-hidden="true" />
+                      <span className="menu-item-pos-label">
+                        {busy ? 'Saving…' : item.isInPos ? 'POS on' : 'POS off'}
+                      </span>
+                    </label>
+                  </div>
 
                   {isOpen && (
                     <div className="menu-item-card">

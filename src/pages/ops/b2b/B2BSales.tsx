@@ -24,6 +24,13 @@ import { REPORT_START } from '../../reportRange';
 // somewhere else. The lump-sum path stays because it is the one that still
 // works when Odoo is down and the food has already gone out.
 //
+// The same component is the B2B Dashboard's Create Invoice screen, handed
+// mode="invoice": just the itemised form, and its one button logs the sale and
+// posts its Odoo invoice in a single go, ending on the PDF. It is the two
+// steps this screen already has — log, then "Invoice in Odoo" — run back to
+// back, so the sale still lands in this book and its receivable starts the
+// moment the invoice exists.
+//
 // Backend is server/ops/b2b/b2bSales.js.
 
 type SaleLine = {
@@ -165,6 +172,12 @@ const pad = (n: number) => String(n).padStart(2, '0');
 const isoDate = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 
 const today = () => isoDate(new Date());
+// The store's own addDays, so the due date quoted before posting is the one
+// the invoice gets.
+const addDays = (iso: string, days: number) => {
+  const [y, m, d] = iso.split('-').map(Number);
+  return isoDate(new Date(y, m - 1, d + days));
+};
 const daysAgo = (days: number) => {
   const d = new Date();
   d.setDate(d.getDate() - days);
@@ -219,13 +232,25 @@ const unbillableLines = (lines: LineDraft[]) => startedLines(lines).filter((l) =
 // and rate. This mirrors consolidateLines in server/ops/b2b/b2bSales.js —
 // that function decides the grouping, this only counts it, so the roll-up can
 // be seen before the button that posts it is pressed.
-const invoiceLineCount = (lines: SaleLine[]) =>
+const invoiceLineCount = (lines: Pick<SaleLine, 'productId' | 'description' | 'unitPrice'>[]) =>
   new Set(
     lines.map((l) => {
       const key = l.productId ?? `t:${l.description.trim().toLowerCase().replace(/\s+/g, ' ')}`;
       return `${key}@${Math.round(l.unitPrice * 100) / 100}`;
     }),
   ).size;
+
+// The question asked before anything is posted to Odoo, from either button.
+// Posting is the one write on this screen that cannot be undone from here —
+// Odoo's answer to a wrong posted invoice is a credit note.
+const confirmInvoice = (clientName: string, amount: number, dueOn: string, deliveryLines: number, invoiceLines: number) =>
+  window.confirm(
+    `Raise and post an invoice in Odoo for ${clientName}, ${rupees(amount)}, due ${formatDate(dueOn)}?\n\n` +
+      (invoiceLines < deliveryLines
+        ? `The ${deliveryLines} delivery lines go on it as ${invoiceLines}, one per product and rate. Sales & Payments keeps all ${deliveryLines}.\n\n`
+        : '') +
+      'This posts it to your accounts. Undoing it means a credit note in Odoo.',
+  );
 
 // What a row says about itself in one word, next to how late it is.
 const statusNote = (sale: Sale) => {
@@ -235,7 +260,12 @@ const statusNote = (sale: Sale) => {
   return `Due in ${sale.daysToDue} day${sale.daysToDue === 1 ? '' : 's'}`;
 };
 
-const B2BSales: React.FC = () => {
+// 'book' is the full Sales & Payments screen; 'invoice' is the dashboard's
+// Create Invoice screen — see the note at the top of this file.
+type B2BSalesProps = { mode?: 'book' | 'invoice' };
+
+const B2BSales: React.FC<B2BSalesProps> = ({ mode = 'book' }) => {
+  const invoiceOnly = mode === 'invoice';
   const [data, setData] = useState<SalesResponse | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState('');
@@ -249,7 +279,8 @@ const B2BSales: React.FC = () => {
   const [clientFilter, setClientFilter] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
 
-  const [showForm, setShowForm] = useState(false);
+  // The Create Invoice screen is nothing but the form, so it starts open.
+  const [showForm, setShowForm] = useState(invoiceOnly);
   const [isCreating, setIsCreating] = useState(false);
   const [form, setForm] = useState({
     clientId: '',
@@ -284,6 +315,14 @@ const B2BSales: React.FC = () => {
   // the one action that can take several seconds and must not be clickable
   // twice — the second click would be a second invoice.
   const [invoicingId, setInvoicingId] = useState<string | null>(null);
+
+  // Create Invoice only. `raised` is the sale whose invoice just posted, shown
+  // with its PDF in place of the form. `unraised` is one that was logged but
+  // whose invoice Odoo refused: the form is not shown again for it, because
+  // filling it in a second time would log the delivery twice — retrying the
+  // invoice is what's wanted.
+  const [raised, setRaised] = useState<Sale | null>(null);
+  const [unraised, setUnraised] = useState<Sale | null>(null);
 
   // Which invoice's payment box is open, and what has been typed into it.
   // Seeded from the row on open, so closing it discards the edit.
@@ -417,6 +456,29 @@ const B2BSales: React.FC = () => {
       }
     }
 
+    // Asked before the sale is logged, not after: saying no here must leave
+    // nothing behind, not a sale waiting for an invoice nobody wanted.
+    if (invoiceOnly) {
+      const usable = usableLines(draftLines);
+      const clientName = clients.find((c) => c.id === form.clientId)?.name || 'this client';
+      const asInvoiced = usable.map((l) => ({
+        productId: l.productId ? Number(l.productId) : null,
+        description: l.description,
+        unitPrice: Number(l.unitPrice),
+      }));
+      if (
+        !confirmInvoice(
+          clientName,
+          draftsTotal(usable),
+          addDays(form.deliveredOn, termsForForm),
+          usable.length,
+          invoiceLineCount(asInvoiced),
+        )
+      ) {
+        return;
+      }
+    }
+
     setIsCreating(true);
     try {
       const resp = await fetch('/api/b2b/sales', {
@@ -438,10 +500,14 @@ const B2BSales: React.FC = () => {
             : undefined,
         }),
       });
-      await readJson<{ error?: string }>(resp, 'Could not log that sale.');
+      const { sale } = await readJson<{ sale: Sale; error?: string }>(resp, 'Could not log that sale.');
       setForm({ clientId: form.clientId, deliveredOn: today(), amount: '', invoiceNumber: '', orderRef: '', notes: '' });
       setDraftLines([blankLine()]);
-      setShowForm(false);
+      if (invoiceOnly) {
+        await issueInvoice(sale);
+      } else {
+        setShowForm(false);
+      }
       await load();
     } catch (err) {
       setSaveError(String((err as Error).message || err));
@@ -538,31 +604,51 @@ const B2BSales: React.FC = () => {
     // Never down to nothing: an empty editor with no row is a dead end.
     setDraftLines((lines) => (lines.length === 1 ? [blankLine()] : lines.filter((_, i) => i !== index)));
 
-  // Creates AND posts the invoice in Odoo. Confirmed first because it is the
-  // one action here that writes to the accounts and cannot be undone from
-  // this screen — Odoo's answer to a wrong posted invoice is a credit note.
+  // Creates AND posts the invoice in Odoo, and hands back the sale as it now
+  // stands — with Odoo's invoice number on it.
+  const postInvoice = async (id: string) => {
+    const resp = await fetch('/api/b2b/sales/invoice', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id }),
+    });
+    return (await readJson<{ sale: Sale; error?: string }>(resp, 'Could not raise the invoice in Odoo.')).sale;
+  };
+
+  // Create Invoice's second half, and its retry. Confirmed by the caller.
+  const issueInvoice = async (sale: Sale) => {
+    setInvoicingId(sale.id);
+    setSaveError('');
+    try {
+      setRaised(await postInvoice(sale.id));
+      setUnraised(null);
+    } catch (err) {
+      setUnraised(sale);
+      setSaveError(String((err as Error).message || err));
+    } finally {
+      setInvoicingId(null);
+    }
+  };
+
+  // Starts the Create Invoice screen over for the next one.
+  const startAnotherInvoice = () => {
+    setRaised(null);
+    setUnraised(null);
+    setSaveError('');
+  };
+
+  // The list's "Invoice in Odoo" button. Confirmed first because it is the
+  // one action here that writes to the accounts — see confirmInvoice.
   const sendToOdoo = async (sale: Sale) => {
-    const rolled = invoiceLineCount(sale.lines);
     if (
-      !window.confirm(
-        `Raise and post an invoice in Odoo for ${sale.clientName}, ${rupees(sale.amount)}, due ${formatDate(sale.paymentDueOn)}?\n\n` +
-          (rolled < sale.lines.length
-            ? `The ${sale.lines.length} delivery lines go on it as ${rolled}, one per product and rate. This screen keeps all ${sale.lines.length}.\n\n`
-            : '') +
-          'This posts it to your accounts. Undoing it means a credit note in Odoo.',
-      )
+      !confirmInvoice(sale.clientName, sale.amount, sale.paymentDueOn, sale.lines.length, invoiceLineCount(sale.lines))
     ) {
       return;
     }
     setInvoicingId(sale.id);
     setSaveError('');
     try {
-      const resp = await fetch('/api/b2b/sales/invoice', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: sale.id }),
-      });
-      await readJson<{ error?: string }>(resp, 'Could not raise the invoice in Odoo.');
+      await postInvoice(sale.id);
       await load();
     } catch (err) {
       setSaveError(String((err as Error).message || err));
@@ -597,6 +683,8 @@ const B2BSales: React.FC = () => {
 
   return (
     <div className="b2b-clients b2b-sales">
+      {!invoiceOnly && (
+      <>
       <section className="b2b-summary">
         <div className="b2b-summary-tiles">
           <div className="b2b-stat">
@@ -713,10 +801,63 @@ const B2BSales: React.FC = () => {
           </button>
         </div>
       </div>
+      </>
+      )}
 
       {saveError && <p className="status-message error">{saveError}</p>}
 
-      {showForm && (
+      {invoiceOnly && raised && (
+        <section className="b2b-panel b2b-invoice-done">
+          <h4>
+            Invoice {raised.invoiceNumber || ''} posted in Odoo
+          </h4>
+          <p className="b2b-panel-hint">
+            {raised.clientName} · {rupees(raised.amount)} · due {formatDate(raised.paymentDueOn)}. It is in Sales &amp;
+            Payments too, where its payment gets recorded.
+          </p>
+          <div className="b2b-panel-actions">
+            <a className="b2b-chip" href={`/api/b2b/sales/${raised.id}/invoice.pdf`} download>
+              ⬇ Invoice PDF
+            </a>
+            <button type="button" className="primary-button" onClick={startAnotherInvoice}>
+              + Create another invoice
+            </button>
+          </div>
+        </section>
+      )}
+
+      {invoiceOnly && unraised && (
+        <section className="b2b-panel b2b-invoice-done is-failed">
+          <h4>Sale logged, but the invoice did not post</h4>
+          <p className="b2b-panel-hint">
+            {unraised.clientName} · {rupees(unraised.amount)} is saved in Sales &amp; Payments. Odoo&rsquo;s reason is
+            above — fix that and retry here, or later from that sale&rsquo;s &ldquo;Invoice in Odoo&rdquo; button. Do
+            not fill the form in again: that would log the delivery twice.
+          </p>
+          <div className="b2b-panel-actions">
+            <button
+              type="button"
+              className="primary-button"
+              disabled={invoicingId === unraised.id}
+              onClick={() => issueInvoice(unraised)}
+            >
+              {invoicingId === unraised.id ? 'Sending…' : 'Retry the invoice'}
+            </button>
+            <button type="button" className="b2b-chip" onClick={startAnotherInvoice}>
+              Start a different invoice
+            </button>
+          </div>
+        </section>
+      )}
+
+      {invoiceOnly && !raised && !unraised && (
+        <p className="b2b-form-hint">
+          Pick the account and the lines. One click logs the delivery and posts its invoice in Odoo, then hands you the
+          PDF.
+        </p>
+      )}
+
+      {showForm && !raised && !unraised && (
         <form className="b2b-add-form" onSubmit={createSale}>
           <div className="b2b-form-row">
             <label className="b2b-field">
@@ -755,6 +896,9 @@ const B2BSales: React.FC = () => {
             )}
           </div>
 
+          {/* Create Invoice is itemised only — a lump sum cannot be
+              invoiced in Odoo. */}
+          {!invoiceOnly && (
           <div className="b2b-mode-switch">
             <button
               type="button"
@@ -776,6 +920,7 @@ const B2BSales: React.FC = () => {
                 : 'One figure, no breakdown — for a delivery already billed somewhere else.'}
             </span>
           </div>
+          )}
 
           {itemised && (
             <div className="b2b-line-editor">
@@ -905,10 +1050,13 @@ const B2BSales: React.FC = () => {
             </div>
           )}
           <div className="b2b-form-row">
-            <label className="b2b-field">
-              <span>Invoice no.</span>
-              <input value={form.invoiceNumber} onChange={(e) => setForm({ ...form, invoiceNumber: e.target.value })} />
-            </label>
+            {/* Odoo numbers the invoice it posts, so there is nothing to type. */}
+            {!invoiceOnly && (
+              <label className="b2b-field">
+                <span>Invoice no.</span>
+                <input value={form.invoiceNumber} onChange={(e) => setForm({ ...form, invoiceNumber: e.target.value })} />
+              </label>
+            )}
             <label className="b2b-field">
               <span>Order ref</span>
               <input
@@ -936,12 +1084,20 @@ const B2BSales: React.FC = () => {
               className="primary-button"
               disabled={isCreating || (itemised && startedLines(draftLines).length === 0)}
             >
-              {isCreating ? 'Saving…' : 'Log the sale'}
+              {invoiceOnly
+                ? isCreating
+                  ? 'Posting to Odoo…'
+                  : 'Create & post invoice'
+                : isCreating
+                  ? 'Saving…'
+                  : 'Log the sale'}
             </button>
           </div>
         </form>
       )}
 
+      {!invoiceOnly && (
+      <>
       {(receivables?.byClient.length || 0) > 0 && (
         <section className="b2b-panel b2b-chase">
           <h4>Who owes what</h4>
@@ -1100,6 +1256,8 @@ const B2BSales: React.FC = () => {
             );
           })}
         </div>
+      )}
+      </>
       )}
     </div>
   );

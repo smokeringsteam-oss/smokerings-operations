@@ -103,7 +103,53 @@ const PRODUCT_NAME_TO_ITEM_ID = {
   'Pork Burnt Ends (150g)': 'pork-burnt-ends',
   'Smokey BBQ Ribs (250g)': 'bbq-ribs-250g',
   'Smokey BBQ Ribs (1/2 rack, 6-7 ribs)': 'bbq-ribs-half-rack',
+  // PL-011, a duplicate of PP-100 that never got archived — same meat pack.
+  'Pulled Pork (150g)': 'pulled-pork-150g',
 };
+
+// ---- Platters: one Odoo line, several meats --------------------------------
+// The website sells "Any 3 / Any 6 Platter" as a single product and writes the
+// customer's picks into the line text, e.g.
+//   Any 6 Platter (Smoked Brisket 250g, Pulled Pork 250g, Cajun Chicken Half, …)
+// Odoo has no combo set up, so that text is the only record of what goes on
+// the platter. Each pick is its own menu row (platter-*: the meat plus its
+// dip), added to the order alongside the platter row (the shared salad and
+// garlic bread). The eight picks and their portions are fixed by the site's
+// menu feed (smokerings.in/api/menu-items.php). Each pick also carries the
+// platter it came off (platterId), so the planner can list an Any 3's meats
+// apart from an Any 6's.
+const PLATTER_ITEM_IDS = new Set(['any-3-platter', 'any-6-platter']);
+// Order matters: teriyaki before plain burnt ends, the Cajun sizes apart.
+const PLATTER_PICKS = [
+  [/teriyaki/i, 'platter-teriyaki-burnt-ends'],
+  [/burnt\s*ends?/i, 'platter-bbq-burnt-ends'],
+  [/brisket/i, 'platter-brisket'],
+  [/\bribs?\b/i, 'platter-ribs'],
+  [/pulled\s*pork/i, 'platter-pulled-pork'],
+  [/cajun.*\bhalf\b/i, 'platter-cajun-half'],
+  [/cajun.*\bquarter\b/i, 'platter-cajun-quarter'],
+  [/\bwings?\b/i, 'platter-wings'],
+];
+
+// null for anything that isn't a platter. For a platter: the pick rows found
+// in the line text, plus any text that named no known pick and every problem
+// worth surfacing in `unmatched` (a platter with no picks counts no meat).
+function platterPicks(itemId, lineText, qty, orderName) {
+  if (!PLATTER_ITEM_IDS.has(itemId)) return null;
+  const match = String(lineText || '').match(/platter\s*\(([^)]*)\)/i);
+  const segments = match ? match[1].split(',').map((s) => s.trim()).filter(Boolean) : [];
+  const picks = [];
+  const problems = [];
+  segments.forEach((segment) => {
+    const hit = PLATTER_PICKS.find(([re]) => re.test(segment));
+    if (hit) picks.push({ itemId: hit[1], name: `↳ ${segment}`, qty, platterId: itemId });
+    else problems.push(`${qty} × platter pick "${segment}" — not a known platter meat (order ${orderName})`);
+  });
+  if (!segments.length) {
+    problems.push(`${qty} × ${String(lineText || '').split('\n')[0]} — no meats listed on the line, so its meat isn't counted (order ${orderName})`);
+  }
+  return { picks, problems };
+}
 
 // Deterministic fallback for product names that don't exactly match —
 // keyword scoring, same spirit as the Gemini paste extractor but rule-based
@@ -111,7 +157,7 @@ const PRODUCT_NAME_TO_ITEM_ID = {
 // place returns null and surfaces in "unmatched" rather than guessing.
 function keywordMatch(productName) {
   const n = productName.toLowerCase();
-  if (/burnt\s*end/.test(n)) return 'pork-burnt-ends';
+  if (/burnt\s*end/.test(n)) return /teriyaki/.test(n) ? 'teriyaki-burnt-ends' : 'pork-burnt-ends';
   if (/\brib/.test(n)) return /half|rack/.test(n) ? 'bbq-ribs-half-rack' : 'bbq-ribs-250g';
 
   const protein = /\bpork\b/.test(n) ? 'pork' : /\bchicken\b/.test(n) ? 'chicken' : null;
@@ -384,13 +430,21 @@ async function fetchWeekendOrders({ fromDate, toDate, includeQuotations = true }
   const states = includeQuotations ? CONFIRMED_STATES.concat(QUOTATION_STATES) : CONFIRMED_STATES;
   const domain = weekendOrderDomain(fromDate, toDate, { states });
 
-  const [orders, slotTagMap] = await Promise.all([
+  // The team cancels an order by setting Fulfilment Status to Cancelled, not
+  // with Odoo's own Cancel button — so the order's `state` stays draft and it
+  // would otherwise come back as an open quotation (or, if confirmed, get
+  // prepped for). Filtered here rather than in the domain because the field
+  // name is looked up per database and may not exist at all.
+  const fulfilmentField = await resolveFulfilmentField();
+  const [fetched, slotTagMap] = await Promise.all([
     execute('sale.order', 'search_read', [
       domain,
-      ['id', 'name', 'state', 'date_order', 'commitment_date', 'partner_id', 'tag_ids', 'amount_total'],
+      ['id', 'name', 'state', 'date_order', 'commitment_date', 'partner_id', 'tag_ids', 'amount_total']
+        .concat(fulfilmentField ? [fulfilmentField] : []),
     ]),
     getSlotTagMap(),
   ]);
+  const orders = fulfilmentField ? fetched.filter((o) => o[fulfilmentField] !== 'cancelled') : fetched;
   if (!orders.length) {
     return { orders: [], quotations: [], unmatched: [], ordersFound: 0, quotationsFound: 0 };
   }
@@ -411,7 +465,7 @@ async function fetchWeekendOrders({ fromDate, toDate, includeQuotations = true }
     ['order_id', 'product_id', 'product_uom_qty', 'price_unit', 'name'],
   ]);
 
-  const tally = new Map(); // `${itemId}|${slotId}` -> quantity, confirmed orders only
+  const tally = new Map(); // `${itemId}|${slotId}|${platterId}` -> quantity, confirmed orders only
   const unmatched = [];
   const quotationLines = new Map(); // orderId -> [{ itemId, name, qty }]
 
@@ -432,10 +486,11 @@ async function fetchWeekendOrders({ fromDate, toDate, includeQuotations = true }
     if (!qty) continue;
 
     const itemId = matchProduct(productName, line.product_id ? line.product_id[0] : null);
+    const platter = platterPicks(itemId, line.name, qty, order.name);
 
     if (isQuotation(order)) {
       if (!quotationLines.has(orderId)) quotationLines.set(orderId, []);
-      quotationLines.get(orderId).push({ itemId, name: productName, qty });
+      quotationLines.get(orderId).push({ itemId, name: productName, qty }, ...(platter?.picks || []));
       continue;
     }
 
@@ -444,8 +499,11 @@ async function fetchWeekendOrders({ fromDate, toDate, includeQuotations = true }
       continue;
     }
 
-    const key = `${itemId}|${slotId}`;
-    tally.set(key, (tally.get(key) || 0) + qty);
+    [{ itemId, qty }, ...(platter?.picks || [])].forEach((entry) => {
+      const key = `${entry.itemId}|${slotId}|${entry.platterId || ''}`;
+      tally.set(key, (tally.get(key) || 0) + entry.qty);
+    });
+    if (platter) unmatched.push(...platter.problems);
   }
 
   for (const orderId of noSlotOrderIds) {
@@ -455,8 +513,8 @@ async function fetchWeekendOrders({ fromDate, toDate, includeQuotations = true }
   }
 
   const resultOrders = Array.from(tally.entries()).map(([key, quantity]) => {
-    const [itemId, slotId] = key.split('|');
-    return { itemId, slotId, quantity };
+    const [itemId, slotId, platterId] = key.split('|');
+    return platterId ? { itemId, slotId, quantity, platterId } : { itemId, slotId, quantity };
   });
 
   // Contact numbers for the quotation cards only — the planner's confirm
@@ -487,7 +545,9 @@ async function fetchWeekendOrders({ fromDate, toDate, includeQuotations = true }
       // confirm; anything else is named on the card so it's obvious what
       // won't land in the totals.
       const entries = slotId
-        ? items.filter((l) => l.itemId).map((l) => ({ itemId: l.itemId, slotId, quantity: l.qty }))
+        ? items
+            .filter((l) => l.itemId)
+            .map((l) => ({ itemId: l.itemId, slotId, quantity: l.qty, ...(l.platterId ? { platterId: l.platterId } : {}) }))
         : [];
       return {
         orderId: order.id,
@@ -830,8 +890,10 @@ async function fetchOrderPackingList({ fromDate, toDate, channel }) {
       continue;
     }
 
+    const platter = platterPicks(itemId, line.name, qty, order.name);
     if (!itemsByOrderId.has(orderId)) itemsByOrderId.set(orderId, []);
-    itemsByOrderId.get(orderId).push({ itemId, name: productName, qty });
+    itemsByOrderId.get(orderId).push({ itemId, name: productName, qty }, ...(platter?.picks || []));
+    if (platter) unmatched.push(...platter.problems);
   }
 
   for (const orderId of noSlotOrderIds) {
@@ -2028,6 +2090,78 @@ function priceFromRules(rules, product, { quantity = 1, onDate } = {}) {
   return { price: Math.max(0, Math.round(price * 100) / 100), source: 'pricelist' };
 }
 
+// ---- Newly confirmed orders, for the new-order push ----------------------
+//
+// Every sale order (B2C and B2B alike) confirmed at or after `since`, with
+// what a notification needs to say about it: who, what, how much, and when
+// it is promised for. See server/integrations/orderAlerts.js.
+//
+// "Confirmed at" is date_order. Odoo's action_confirm overwrites date_order
+// with the moment of confirmation (_prepare_confirmation_values), whichever
+// screen did the confirming — the website checkout, the Odoo backend, or the
+// planner's own Confirm button — so a quotation sitting in draft for a week
+// still reads as new on the day it is confirmed, which is the moment worth
+// a buzz.
+//
+// Orders the team cancelled through Fulfilment Status are dropped, same as
+// every other fetch here.
+async function fetchNewlyConfirmedOrders({ since }) {
+  const sinceUtc = new Date(since).toISOString().slice(0, 19).replace('T', ' ');
+  const fulfilmentField = await resolveFulfilmentField().catch(() => null);
+  const fields = ['id', 'name', 'date_order', 'commitment_date', 'partner_id', 'tag_ids', 'amount_total'];
+  if (fulfilmentField) fields.push(fulfilmentField);
+
+  const fetched = await execute('sale.order', 'search_read', [
+    [
+      ['state', 'in', CONFIRMED_STATES],
+      ['date_order', '>=', sinceUtc],
+    ],
+    fields,
+  ]);
+  const orders = fulfilmentField ? fetched.filter((o) => o[fulfilmentField] !== 'cancelled') : fetched;
+  if (!orders.length) return [];
+
+  const [slotTagMap, lines] = await Promise.all([
+    getSlotTagMap(),
+    execute('sale.order.line', 'search_read', [
+      [
+        ['order_id', 'in', orders.map((o) => o.id)],
+        ['display_type', '=', false],
+      ],
+      ['order_id', 'product_id', 'product_uom_qty', 'price_unit', 'name'],
+    ]),
+  ]);
+  const { slotByOrderId } = resolveSlots(orders, slotTagMap);
+
+  const itemsByOrderId = new Map();
+  for (const line of lines) {
+    if (isMoneyOffLine(line)) continue;
+    const qty = Math.round(line.product_uom_qty || 0);
+    if (!qty) continue;
+    const orderId = Array.isArray(line.order_id) ? line.order_id[0] : line.order_id;
+    // Odoo prefixes the display name with the internal reference
+    // ("[BRK500] Brisket 500g"); the code means nothing on a lock screen.
+    const name = String((line.product_id ? line.product_id[1] : line.name) || 'Item').replace(/^\[[^\]]*\]\s*/, '');
+    if (!itemsByOrderId.has(orderId)) itemsByOrderId.set(orderId, []);
+    itemsByOrderId.get(orderId).push({ name, qty });
+  }
+
+  return orders.map((order) => {
+    const slotId = slotByOrderId.get(order.id) || null;
+    return {
+      orderId: order.id,
+      orderName: order.name,
+      customer: order.partner_id ? order.partner_id[1] : 'Unknown customer',
+      confirmedAt: order.date_order || null,
+      promised: order.commitment_date || null,
+      slotId,
+      slotLabel: slotId ? SLOT_LABELS[slotId].label : null,
+      amountTotal: Number(order.amount_total) || 0,
+      items: itemsByOrderId.get(order.id) || [],
+    };
+  });
+}
+
 export {
   // Raw model-level call, for Odoo-backed features that live in their own
   // module rather than here (see server/ops/b2c/serviceWeeks.js). Everything to do
@@ -2037,6 +2171,8 @@ export {
   // Odoo product name -> our menu_id, shared with menuCsvMirror.js so a
   // renamed product can still find its knowledge-base row.
   matchProduct,
+  // Platter line text -> one row per meat picked, for the weekend tallies.
+  platterPicks,
   // Odoo stores every body as HTML; odooWhatsapp.js renders message text as
   // plain strings and needs the same flattening the contact fields get.
   htmlToText,
@@ -2048,6 +2184,8 @@ export {
   fetchWeekendOrders,
   confirmSaleOrder,
   fetchOrderPackingList,
+  // Orders confirmed since a moment, for the new-order push (orderAlerts.js).
+  fetchNewlyConfirmedOrders,
   fetchRecentOrders,
   // Line-grain sales for the Sales by Item screen. B2C only by construction —
   // see the note on the function.

@@ -81,22 +81,49 @@ const MEAT_CATEGORIES = {
   porkBelly: {
     label: 'Pork Belly',
     productName: 'Pork belly burnt ends',
-    productIds: ['IP-005'],
+    // IP-011 is the teriyaki burnt ends — same belly, different rub and glaze,
+    // so it shares this buy rather than getting a tile of its own.
+    productIds: ['IP-005', 'IP-011'],
     cut: { materialId: 'RM-053', name: 'Pork belly', minBuyKg: null },
     otherCuts: [],
   },
-  jackfruit: {
-    label: 'Pulled Jackfruit',
-    productName: 'Pulled jackfruit',
+  // The categories below came with the 2026-10-02 menu (jackfruit and beef
+  // ribs went the other way: never sold, and pointing at materials that were
+  // really cumin and coriander).
+  wings: {
+    label: 'Chicken Wings',
+    productName: 'Smoked chicken wings',
     productIds: ['IP-007'],
-    cut: { materialId: 'RM-062', name: 'Young jackfruit', minBuyKg: null },
+    cut: { materialId: 'RM-065', name: 'Chicken wings', minBuyKg: null },
     otherCuts: [],
   },
-  beefRibs: {
-    label: 'Beef Ribs',
-    productName: 'Smoked beef ribs',
+  // Cajun chicken is bought two ways for one dish: a Quarter is a whole leg,
+  // a Half or Whole comes off a whole bird. Two categories so each buy line
+  // names the thing actually bought. Both cuts are also chicken's, which keeps
+  // them there for realized-loss bucketing (first category to list a
+  // material wins — see LOSS_CATEGORY_BY_MATERIAL_ID).
+  cajunLegs: {
+    label: 'Cajun Chicken (legs)',
+    productName: 'Cajun chicken leg quarter',
+    productIds: ['IP-009'],
+    cut: { materialId: 'RM-048', name: 'Chicken whole legs', minBuyKg: null },
+    otherCuts: [],
+  },
+  cajunBirds: {
+    label: 'Cajun Chicken (birds)',
+    productName: 'Cajun chicken (whole bird)',
+    productIds: ['IP-010'],
+    // One ~1.2 kg bird: halves are cut from whole birds, so an odd half
+    // still means buying the whole one.
+    cut: { materialId: 'RM-047', name: 'Whole chicken', minBuyKg: 1.2 },
+    otherCuts: [],
+  },
+  brisket: {
+    label: 'Brisket',
+    productName: 'Smoked brisket',
     productIds: ['IP-008'],
-    cut: { materialId: 'RM-063', name: 'Beef ribs', minBuyKg: null },
+    lossPct: 50,
+    cut: { materialId: 'RM-066', name: 'Beef brisket', minBuyKg: null },
     otherCuts: [],
   },
 };
@@ -120,12 +147,15 @@ MEAT_CATEGORY_KEYS.forEach((key) => {
 // RM-xxx -> category, covering the cut we buy plus every alternate. Used by
 // the Smoking module to bucket a session's realized loss (server/ops/shared/smoking.js
 // lossCategoryFor, which keeps a keyword fallback for materials not listed
-// here at all).
+// here at all). First category to list a material keeps it: legs and whole
+// birds are pulled chicken's before they are Cajun chicken's.
 const LOSS_CATEGORY_BY_MATERIAL_ID = {};
 MEAT_CATEGORY_KEYS.forEach((key) => {
   const config = MEAT_CATEGORIES[key];
   [config.cut, ...(config.otherCuts || [])].forEach((cut) => {
-    if (cut?.materialId) LOSS_CATEGORY_BY_MATERIAL_ID[cut.materialId] = key;
+    if (cut?.materialId && !LOSS_CATEGORY_BY_MATERIAL_ID[cut.materialId]) {
+      LOSS_CATEGORY_BY_MATERIAL_ID[cut.materialId] = key;
+    }
   });
 });
 

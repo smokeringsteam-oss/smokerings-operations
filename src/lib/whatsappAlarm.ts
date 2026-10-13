@@ -28,8 +28,15 @@ const AUDIO_URL = '/whatsapp-alert.mp3';
 const ALARM_PARAM = 'alarm';
 const CHANNEL_PARAM = 'channel';
 
+// What set it off: a customer's WhatsApp message, or a weekly task flagged to
+// sound the alarm at its time (server/sprint/taskReminders.js). Same noise,
+// different banner.
+export type AlarmKind = 'whatsapp' | 'task';
+
 export type AlarmState = {
   active: boolean;
+  kind: AlarmKind;
+  // The customer's name, or for a task alarm the task itself.
   customer: string;
   body: string;
   channelId: number | null;
@@ -39,7 +46,9 @@ export type AlarmState = {
   blocked: string;
 };
 
-const IDLE: AlarmState = { active: false, customer: '', body: '', channelId: null, blocked: '' };
+const IDLE: AlarmState = { active: false, kind: 'whatsapp', customer: '', body: '', channelId: null, blocked: '' };
+
+const toKind = (value: unknown): AlarmKind => (value === 'task' ? 'task' : 'whatsapp');
 
 let state: AlarmState = IDLE;
 const subscribers = new Set<(next: AlarmState) => void>();
@@ -142,7 +151,7 @@ function stopVibrating(): void {
 
 // ---- Start and stop -----------------------------------------------------
 
-type AlarmDetail = { channelId?: number | null; customer?: string; body?: string };
+type AlarmDetail = { kind?: AlarmKind; channelId?: number | null; customer?: string; body?: string };
 
 /**
  * Sound the alarm, and keep sounding it.
@@ -154,6 +163,7 @@ type AlarmDetail = { channelId?: number | null; customer?: string; body?: string
 export function start(detail: AlarmDetail = {}): void {
   const next: AlarmState = {
     active: true,
+    kind: detail.kind || 'whatsapp',
     customer: detail.customer || '',
     body: detail.body || '',
     channelId: typeof detail.channelId === 'number' ? detail.channelId : null,
@@ -248,6 +258,7 @@ export function listen(): void {
     navigator.serviceWorker.addEventListener('message', (event: MessageEvent) => {
       if (event.data?.type !== 'whatsapp-alarm') return;
       start({
+        kind: toKind(event.data.kind),
         channelId: event.data.channelId,
         customer: event.data.customer,
         body: event.data.body,
@@ -255,12 +266,24 @@ export function listen(): void {
     });
   }
 
+  // 1 again, inside the Android app. Its pushes come through Firebase, not the
+  // service worker, so the app hands each one to the open page as a
+  // `nativepush` event instead. FCM data is all strings, hence the Number().
+  window.addEventListener('nativepush', onNativePush);
+
   // Prime the element on the first interaction of the session, whatever it is.
   window.addEventListener('pointerdown', unlock, { once: true, capture: true });
   window.addEventListener('keydown', unlock, { once: true, capture: true });
 
   // 3: a cold start from a notification tap.
   consumeUrlAlarm();
+}
+
+function onNativePush(event: Event): void {
+  const data = (event as CustomEvent<Record<string, string> | null>).detail;
+  if (data?.alarm !== 'whatsapp' && data?.alarm !== 'task') return;
+  const channelId = data.channelId && /^\d+$/.test(data.channelId) ? Number(data.channelId) : null;
+  start({ kind: toKind(data.alarm), channelId, customer: data.customer || data.title || '', body: data.body || '' });
 }
 
 // Reads ?alarm=whatsapp&channel=N and then removes it from the address bar.
@@ -335,6 +358,7 @@ export function __reset(): void {
     audio = null;
   }
   unlocked = false;
+  if (typeof window !== 'undefined') window.removeEventListener('nativepush', onNativePush);
   listening = false;
   state = IDLE;
   subscribers.clear();

@@ -6,14 +6,16 @@ import WeeklyPurchasing from '../shared/WeeklyPurchasing';
 
 // The other dashboard under Ops (see OpsDashboard.tsx, which owns the sidebar
 // ids). Landing page of module "boxes", exactly like the B2C Dashboard.
-type B2BModule = 'home' | 'clients' | 'sales' | 'weeklyPurchasing' | 'smoking';
+type B2BModule = 'home' | 'clients' | 'sales' | 'invoice' | 'weeklyPurchasing' | 'smoking';
 
 // The B2B side of the business: wholesale/corporate accounts rather than the
 // weekend consumer orders the B2C dashboard runs. Two modules are B2B's own —
 // Clients, the account book with its meat demand and the Sampling/Onboarding
 // stages (B2BClients.tsx), and Sales & Payments, the revenue and receivables
 // book behind it (B2BSales.tsx), which exists here and not on the B2C side
-// because only wholesale gets paid on a cycle rather than at checkout. The
+// because only wholesale gets paid on a cycle rather than at checkout. Create
+// Invoice is a front door into that same book — its form alone, posting the
+// Odoo invoice as it saves — rather than a third B2B module. The
 // other two are the same components the B2C dashboard runs, handed
 // channel="B2B". That's the whole difference: B2B purchases and
 // cooks go through identical flows into the same purchase_log.csv and
@@ -49,6 +51,14 @@ const MODULES: { id: B2BModule; label: string; icon: string; stage: string; desc
       'Sample trays and practice cooks for B2B accounts, through the same brine → rub → smoke → rest → shred stages as the weekend service. Every stage change is logged.',
   },
   {
+    id: 'invoice',
+    label: 'Create Invoice',
+    icon: '🧾',
+    stage: 'Bill',
+    description:
+      'Bill an account in one step: pick the client and the lines at their Odoo pricelist rates, and the invoice is posted in Odoo with its PDF ready to send. It lands in Sales & Payments too, so the payment clock starts.',
+  },
+  {
     id: 'sales',
     label: 'Sales & Payments',
     icon: '💰',
@@ -75,6 +85,10 @@ const B2BDashboard = () => {
         return <B2BClients />;
       case 'sales':
         return <B2BSales />;
+      case 'invoice':
+        // The Sales & Payments form on its own, posting as it saves — see
+        // the note at the top of B2BSales.tsx.
+        return <B2BSales mode="invoice" />;
       case 'weeklyPurchasing':
         return <WeeklyPurchasing channel="B2B" />;
       case 'smoking':

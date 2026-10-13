@@ -763,15 +763,16 @@ function marketingLinks(db) {
 // about. Category 'Marketing' is what puts them in their own Daily View card,
 // away from the kitchen and procurement tasks.
 //
-// Per-row rather than all-or-nothing, so a row someone retires by hand stays
-// retired instead of coming back on the next server start.
+// All-or-nothing: the rows go in once, into a schedule that has none of them.
+// It used to be per-row, which brought a row someone retired in Daily View
+// straight back on the next server start -- a missing id can't say whether it
+// was never added or deleted on purpose. WS-18 (poster post) and WS-22 (reel
+// content) were retired on 2026-10-06 and are left out for the same reason.
 const MARKETING_CADENCE = [
   ['WS-17', 'Monday', 'Social posts - order delivered reel (IG, FB, WhatsApp, YouTube, Story)'],
-  ['WS-18', 'Tuesday', 'Poster content post (Instagram, YouTube)'],
   ['WS-19', 'Wednesday', 'Social posts - CTA to place orders (IG, FB, WhatsApp, YouTube, Story)'],
   ['WS-20', 'Wednesday', 'Community posts - LinkedIn, WhatsApp community, Reddit community'],
   ['WS-21', 'Thursday', 'Social posts - CTA to place orders (IG, FB, WhatsApp, YouTube, Story)'],
-  ['WS-22', 'Friday', 'Reel content'],
   ['WS-23', 'Saturday', 'Social posts - BTS (IG, FB, WhatsApp, YouTube, Story)'],
   ['WS-24', 'Sunday', 'Social posts - BTS (IG, FB, WhatsApp, YouTube, Story)'],
   ['WS-25', 'Sunday', 'Community posts - LinkedIn, WhatsApp community, Reddit community'],
@@ -798,10 +799,10 @@ function marketingContentCadence(db) {
              (SELECT coalesce(max(sort_order), 0) + 1 FROM scheduled_task WHERE day = ?))`,
   );
 
-  const added = MARKETING_CADENCE.filter(([taskId]) => !seen.get(taskId));
-  added.forEach(([taskId, day, task]) => add.run(taskId, day, task, day));
+  if (MARKETING_CADENCE.some(([taskId]) => seen.get(taskId))) return null;
+  MARKETING_CADENCE.forEach(([taskId, day, task]) => add.run(taskId, day, task, day));
 
-  return added.length ? `scheduled_task: ${added.length} marketing cadence task(s) added` : null;
+  return `scheduled_task: ${MARKETING_CADENCE.length} marketing cadence task(s) added`;
 }
 
 // Daily View grew an edit mode: rename a task, retire one, add one, drag it up
@@ -903,7 +904,8 @@ function sharedNotes(db) {
           done_by    TEXT,
           assigned_to TEXT,
           github_issue    INTEGER,
-          github_category INTEGER
+          github_category INTEGER,
+          due_date        TEXT
       )
     `);
     return 'shared_note: created';
@@ -934,6 +936,10 @@ function sharedNotes(db) {
   if (!hasColumn(db, 'shared_note', 'github_category')) {
     db.exec('ALTER TABLE shared_note ADD COLUMN github_category INTEGER');
     added.push('github_category');
+  }
+  if (!hasColumn(db, 'shared_note', 'due_date')) {
+    db.exec('ALTER TABLE shared_note ADD COLUMN due_date TEXT');
+    added.push('due_date');
   }
   return added.length ? `shared_note: ${added.join(', ')} added` : null;
 }
@@ -1049,7 +1055,40 @@ const STEPS = [
   salesOrderTrackingUrl,
   deliveryWatchQueue,
   appPushTokens,
+  ideaBoard,
+  ideaCategories,
+  scheduledTaskAlarm,
+  scheduledTaskIssue,
+  sharedNoteSource,
 ];
+
+// Which push alert filed a note, when one did — see server/core/alertTasks.js.
+// NULL for every existing note, which were all typed by a person.
+function sharedNoteSource(db) {
+  if (!hasTable(db, 'shared_note')) return null;
+  if (hasColumn(db, 'shared_note', 'source')) return null;
+  db.exec('ALTER TABLE shared_note ADD COLUMN source TEXT');
+  return 'shared_note: source added';
+}
+
+// Each recurring task's standing sub-issue on the sprint board, so the weekly
+// cadence sits under the same epics as everything else. Empty until linked.
+function scheduledTaskIssue(db) {
+  if (!hasTable(db, 'scheduled_task')) return null;
+  if (hasColumn(db, 'scheduled_task', 'github_issue')) return null;
+  db.exec('ALTER TABLE scheduled_task ADD COLUMN github_issue INTEGER');
+  return 'scheduled_task: github_issue added';
+}
+
+// A weekly task can sound the alarm at its time instead of sending an ordinary
+// reminder -- the posting reminders, which are worth being unable to ignore.
+// Off for every existing row; nothing changes until a task is switched on.
+function scheduledTaskAlarm(db) {
+  if (!hasTable(db, 'scheduled_task')) return null;
+  if (hasColumn(db, 'scheduled_task', 'alarm')) return null;
+  db.exec('ALTER TABLE scheduled_task ADD COLUMN alarm INTEGER NOT NULL DEFAULT 0 CHECK (alarm IN (0, 1))');
+  return 'scheduled_task: alarm added';
+}
 
 // Firebase tokens for the Android app (native build), which can't use web push.
 // One new table beside push_subscription; nothing existing changes.
@@ -1065,6 +1104,61 @@ function appPushTokens(db) {
       )
   `);
   return 'push_app_token: created';
+}
+
+// The Idea Board under Overview — one new table, nothing existing changes.
+function ideaBoard(db) {
+  if (hasTable(db, 'idea')) return null;
+  db.exec(`
+      CREATE TABLE idea (
+          idea_id    INTEGER PRIMARY KEY,
+          title      TEXT NOT NULL CHECK (trim(title) <> ''),
+          details    TEXT,
+          category   TEXT NOT NULL DEFAULT 'wild',
+          stage      TEXT NOT NULL DEFAULT 'spark',
+          author     TEXT,
+          fire       INTEGER NOT NULL DEFAULT 0,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          updated_at TEXT
+      )
+  `);
+  return 'idea: created';
+}
+
+// The Idea Board's categories, which started as a fixed list in code and are
+// now rows anyone can add to ("Supper club", "New menu"). Seeded with that
+// original list whenever the table is empty — which only ever means "never
+// seeded", because Wild card cannot be deleted. The ids match what idea rows
+// already store, so nothing in `idea` changes.
+function ideaCategories(db) {
+  const changes = [];
+  if (!hasTable(db, 'idea_category')) {
+    db.exec(`
+      CREATE TABLE idea_category (
+          category_id TEXT PRIMARY KEY,
+          label       TEXT NOT NULL CHECK (trim(label) <> ''),
+          emoji       TEXT,
+          color       TEXT NOT NULL DEFAULT 'lilac',
+          sort_order  INTEGER NOT NULL DEFAULT 0,
+          created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+      )
+    `);
+    changes.push('idea_category: created');
+  }
+  if (!db.prepare('SELECT count(*) AS n FROM idea_category').get().n) {
+    const seed = db.prepare(
+      'INSERT INTO idea_category (category_id, label, emoji, color, sort_order) VALUES (?, ?, ?, ?, ?)',
+    );
+    [
+      ['menu', 'Menu', '🍖', 'peach'],
+      ['marketing', 'Marketing', '📣', 'pink'],
+      ['ops', 'Kitchen & ops', '🛠️', 'blue'],
+      ['experience', 'Guest experience', '🎉', 'green'],
+      ['wild', 'Wild card', '🚀', 'lilac'],
+    ].forEach((row, n) => seed.run(...row, n));
+    changes.push('idea_category: seeded');
+  }
+  return changes.length ? changes.join('; ') : null;
 }
 
 // Returns only what it actually changed, so the caller can say so once on

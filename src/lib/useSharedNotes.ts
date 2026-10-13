@@ -27,6 +27,9 @@ export type SharedNote = {
   doneBy: string;
   // Whose job it is, or '' when it is nobody's in particular.
   assignedTo: string;
+  // The day it is for, YYYY-MM-DD, or '' for whenever. Daily View lists a
+  // dated note under its day.
+  dueDate: string;
 };
 
 export type SharedNotes = {
@@ -141,8 +144,10 @@ function publish(next: Store) {
   for (const notify of subscribers) notify();
 }
 
+// Always pending-only: the bubble is the one screen that reads this list, and
+// it shows only what is still to do. The counts still cover the whole board.
 function filterKey(): string {
-  const params = new URLSearchParams();
+  const params = new URLSearchParams({ pending: '1' });
   if (query) params.set('q', query);
   if (author) params.set('author', author);
   return params.toString();
@@ -156,7 +161,7 @@ async function load(): Promise<void> {
   publish({ ...store, loading: true });
   inFlight = (async () => {
     try {
-      const resp = await fetch(key ? `/api/notes?${key}` : '/api/notes');
+      const resp = await fetch(`/api/notes?${key}`);
       const body = await resp.json();
       if (mine !== issued) return;
       if (!resp.ok) throw new Error(body?.error || `Request failed (${resp.status})`);
@@ -217,11 +222,11 @@ function onVisibility() {
   if (!document.hidden) void load();
 }
 
-async function post(body: string, author: string): Promise<SharedNote> {
+async function post(body: string, author: string, dueDate = ''): Promise<SharedNote> {
   const resp = await fetch('/api/notes', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ body, author }),
+    body: JSON.stringify({ body, author, dueDate }),
   });
   const created = await resp.json();
   if (!resp.ok) throw new Error(created?.error || `Request failed (${resp.status})`);
@@ -373,7 +378,7 @@ export function useSharedNotes() {
     // not put a spinner over notes you are reading.
     loading: store.loading && !store.data,
     refresh: useCallback(() => load(), []),
-    addNote: useCallback((body: string, author: string) => post(body, author), []),
+    addNote: useCallback((body: string, author: string, dueDate?: string) => post(body, author, dueDate), []),
     setDone: useCallback((id: number, done: boolean, by: string) => setDone(id, done, by), []),
     assignNote: useCallback((id: number, assignedTo: string) => assign(id, assignedTo), []),
     deleteNote: useCallback((id: number) => destroy(id), []),

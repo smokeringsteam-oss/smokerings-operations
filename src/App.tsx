@@ -3,6 +3,8 @@ import WeeklySprintDashboard, { type WeeklySprintSub, weeklySprintTools } from '
 import MarketingDashboard, { type MarketingSub, marketingTools } from './pages/marketing/MarketingDashboard';
 import OpsDashboard, { type OpsSub, opsTools } from './pages/ops/OpsDashboard';
 import FinanceDashboard, { type FinanceSub, financeTools } from './pages/finance/FinanceDashboard';
+import Overview from './pages/overview/Overview';
+import IdeaBoard from './pages/overview/IdeaBoard';
 import { usePersistedChoice } from './lib/usePersistedChoice';
 import { useWhatsappAttentionCount } from './lib/useWhatsappAttention';
 import NotesBubble from './components/NotesBubble';
@@ -13,7 +15,7 @@ import WhatsappAlarm from './components/WhatsappAlarm';
 // sidebar entry; it now lives as the first step inside the B2C Dashboard's
 // sequential weekend flow (see B2CDashboard.tsx) so the whole Fri plan → buy
 // → smoke / Sat-Sun serve pipeline is one unified view.
-type ActiveTool = WeeklySprintSub | MarketingSub | OpsSub | FinanceSub;
+type ActiveTool = 'overview' | 'ideaBoard' | WeeklySprintSub | MarketingSub | OpsSub | FinanceSub;
 
 const isWeeklySprintTool = (tool: ActiveTool): tool is WeeklySprintSub =>
   weeklySprintTools.some((item) => item.id === tool);
@@ -27,6 +29,15 @@ const isFinanceTool = (tool: ActiveTool): tool is FinanceSub =>
   financeTools.some((item) => item.id === tool);
 
 const menuSections: { label: string; tools: { id: ActiveTool; label: string; icon: string }[] }[] = [
+  // First, because it is where the app opens: the one-page answer to "how are
+  // we doing", with a way into each screen behind it.
+  {
+    label: 'Overview',
+    tools: [
+      { id: 'overview', label: 'Overview', icon: '🏠' },
+      { id: 'ideaBoard', label: 'Idea Board', icon: '💡' },
+    ],
+  },
   { label: 'Ops Dashboard', tools: opsTools },
   { label: 'Weekly Sprint Tasks', tools: weeklySprintTools },
   { label: 'Marketing', tools: marketingTools },
@@ -51,13 +62,18 @@ const ACTIVE_TOOL_KEY = 'smokerings.activeTool';
 const BADGED_TOOL: ActiveTool = 'whatsappInbox';
 
 const App = () => {
-  // Which screen you were on, remembered. Daily View is still where a browser
-  // that has never been here lands.
-  const [activeTool, setActiveTool] = usePersistedChoice<ActiveTool>(ACTIVE_TOOL_KEY, 'dailyView', ALL_TOOL_IDS);
+  // Which screen you were on, remembered for this tab only. Opening the app
+  // fresh — a new tab, the Android app relaunched — lands on the Overview; a
+  // reload, or a phone bringing a discarded tab back, keeps you where you were.
+  const [activeTool, setActiveTool] = usePersistedChoice<ActiveTool>(ACTIVE_TOOL_KEY, 'overview', ALL_TOOL_IDS, 'session');
   // Drawer state only matters at <= 720px, where the sidebar is off-canvas.
   const [menuOpen, setMenuOpen] = useState(false);
   // Conversations still waiting on a reply, polled for the whole session.
   const whatsappAttention = useWhatsappAttentionCount();
+  // A day someone asked the mic to show ("what's left today?").
+  // `at` makes asking for the same day twice a new request, so Daily View
+  // jumps back to it even after a tab has been clicked in between.
+  const [dailyFocus, setDailyFocus] = useState<{ date: string; at: number } | null>(null);
 
   const activeLabel =
     menuSections.flatMap((section) => section.tools).find((tool) => tool.id === activeTool)?.label ?? 'Menu';
@@ -151,8 +167,12 @@ const App = () => {
 
       <main className="app-main">
         <div className="page-area">
-          {isWeeklySprintTool(activeTool) ? (
-            <WeeklySprintDashboard activeTool={activeTool} />
+          {activeTool === 'overview' ? (
+            <Overview onOpen={(tool) => setActiveTool(tool)} />
+          ) : activeTool === 'ideaBoard' ? (
+            <IdeaBoard />
+          ) : isWeeklySprintTool(activeTool) ? (
+            <WeeklySprintDashboard activeTool={activeTool} dailyFocus={dailyFocus} />
           ) : isMarketingTool(activeTool) ? (
             <MarketingDashboard activeTool={activeTool} />
           ) : isOpsTool(activeTool) ? (
@@ -170,8 +190,15 @@ const App = () => {
           note stays one tap away however far down a page you have scrolled. */}
       <NotesBubble />
 
-      {/* The mic beside it: say a purchase or a to-do instead of typing it. */}
-      <VoiceCommand />
+      {/* The mic beside it: say a purchase or a to-do instead of typing it, or
+          ask what is on for a day and land on Daily View. */}
+      <VoiceCommand
+        onShowTasks={(date) => {
+          setActiveTool('dailyView');
+          setMenuOpen(false);
+          setDailyFocus({ date, at: Date.now() });
+        }}
+      />
 
       {/* Renders nothing until a WhatsApp alarm is actually sounding. Mounted
           at the shell for the same reason the badge is: the message that needs

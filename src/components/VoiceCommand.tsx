@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
+import { formatDay, todayIso } from '../lib/localDay';
+import { speak, stopSpeaking } from '../lib/speak';
 import { readNotesAuthor, useSharedNotes } from '../lib/useSharedNotes';
 import { startRecording, type Recording } from '../lib/voiceRecorder';
-import { listenForWakeWord, wakeWordSupported } from '../lib/wakeWord';
 import { createScheduleTask } from '../pages/sprint/recurringSchedule';
 import { TEAM } from './NotesBubble';
 
@@ -19,11 +20,12 @@ import { TEAM } from './NotesBubble';
 // board, a repeating one into the weekly cadence. Speech over a smoker's fan
 // mishears a 15 as a 50 often enough that a confirm step is the whole design.
 //
-// "Hey Smokey" (src/lib/wakeWord.ts) is a second way to press the button, for
-// when there is no hand free to press it with. It changes how a command
-// starts and stops — the wake phrase instead of a tap, a pause instead of a
-// second tap — and nothing about what happens to it: the draft still waits on
-// screen for Confirm.
+// The one command that is not a draft is "show me pending tasks for today":
+// nothing gets written, so there is nothing to confirm, and the mic hands the
+// day to the shell (onShowTasks), which opens Daily View on it.
+//
+// It talks back (src/lib/speak.ts): every command that finishes says what it
+// did — the same lines as the ✓ list.
 
 const WEEKDAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 
@@ -43,41 +45,23 @@ type DraftPurchase = {
   skipped: { itemName: string; reason: string }[];
 };
 
-type DraftTask = { title: string; assignee: string; repeatsWeekly: boolean; day: string; time: string };
+// dueDate: the day a one-off is for, YYYY-MM-DD, or '' for whenever.
+type DraftTask = { title: string; assignee: string; repeatsWeekly: boolean; day: string; time: string; dueDate: string };
 
-type Draft = { transcript: string; notes: string; purchase: DraftPurchase | null; tasks: DraftTask[] };
+type Draft = {
+  transcript: string;
+  notes: string;
+  purchase: DraftPurchase | null;
+  tasks: DraftTask[];
+  // A day to open Daily View on, YYYY-MM-DD, when the command was a question
+  // about one rather than something to write down.
+  showTasksFor: string;
+};
 
 type Phase = 'idle' | 'recording' | 'thinking' | 'review' | 'saving';
 
-// Fewer words than this after the wake phrase is not a command, just the tail
-// of saying it — record instead of guessing.
-const MIN_COMMAND_WORDS = 3;
-
-// Two rising notes: "go ahead". Whoever said "Hey Smokey" is usually not
-// looking at the screen, so the red button alone would not tell them.
-function chime(): void {
-  try {
-    const ctx = new AudioContext();
-    const gain = ctx.createGain();
-    gain.gain.value = 0.15;
-    gain.connect(ctx.destination);
-    [660, 880].forEach((frequency, i) => {
-      const tone = ctx.createOscillator();
-      tone.frequency.value = frequency;
-      tone.connect(gain);
-      tone.start(ctx.currentTime + i * 0.12);
-      tone.stop(ctx.currentTime + i * 0.12 + 0.1);
-    });
-    setTimeout(() => void ctx.close().catch(() => {}), 600);
-  } catch {
-    // No sound is not worth failing a command over.
-  }
-}
-
-const todayIso = () => {
-  const now = new Date();
-  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
-};
+// "Today" reads as a heading; said mid-sentence it wants to be "today".
+const spokenDay = (iso: string) => formatDay(iso).replace(/^(Today|Tomorrow|Yesterday)$/, (d) => d.toLowerCase());
 
 const todayName = () => new Date().toLocaleDateString('en-US', { weekday: 'long' });
 
@@ -87,7 +71,7 @@ async function readJson(resp: Response) {
   return body;
 }
 
-const VoiceCommand = () => {
+const VoiceCommand = ({ onShowTasks }: { onShowTasks?: (date: string) => void }) => {
   const { addNote, assignNote } = useSharedNotes();
   const [phase, setPhase] = useState<Phase>('idle');
   const [open, setOpen] = useState(false);
@@ -97,9 +81,6 @@ const VoiceCommand = () => {
   // What the last Confirm actually wrote, one line per thing.
   const [saved, setSaved] = useState<string[]>([]);
   const [typed, setTyped] = useState('');
-  // On wherever the browser can do it, with no switch. Goes false for the rest
-  // of the session only if the microphone turns out to be blocked.
-  const [wake, setWake] = useState(wakeWordSupported);
 
   const recordingRef = useRef<Recording | null>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -118,6 +99,8 @@ const VoiceCommand = () => {
     [],
   );
 
+  const say = (text: string) => void speak(text);
+
   const interpret = async (body: FormData) => {
     setPhase('thinking');
     setError(null);
@@ -134,6 +117,14 @@ const VoiceCommand = () => {
       ]);
       setVendors(vendorList);
       const heard = result as Draft;
+      // "What's left today": nothing to draft, so no review step — go
+      // straight to the day and get the panel out of the way of it.
+      if (heard.showTasksFor && !heard.purchase && heard.tasks.length === 0 && onShowTasks) {
+        say(`Here are the tasks for ${spokenDay(heard.showTasksFor)}.`);
+        onShowTasks(heard.showTasksFor);
+        close();
+        return;
+      }
       if (heard.purchase && !heard.purchase.purchaseDate) heard.purchase.purchaseDate = todayIso();
       setDraft(heard);
       setPhase('review');
@@ -160,15 +151,13 @@ const VoiceCommand = () => {
     }
   };
 
-  // handsFree: started by "Hey Smokey", so it also has to end without a tap.
-  const begin = async (handsFree = false) => {
+  const begin = async () => {
     setOpen(true);
     setError(null);
     setSaved([]);
     setDraft(null);
     try {
-      recordingRef.current = await startRecording(handsFree ? { onSilence: () => void stopAndSend() } : {});
-      if (handsFree) chime();
+      recordingRef.current = await startRecording();
       setPhase('recording');
       timerRef.current = setTimeout(() => void stopAndSend(), MAX_SECONDS * 1000);
     } catch (err) {
@@ -188,6 +177,12 @@ const VoiceCommand = () => {
     setSaved([]);
   };
 
+  // Closed by hand: whatever it was saying no longer matters either.
+  const dismiss = () => {
+    stopSpeaking();
+    close();
+  };
+
   const onMic = () => {
     if (phase === 'recording') void stopAndSend();
     else if (phase === 'idle' || phase === 'review') void begin();
@@ -202,39 +197,6 @@ const VoiceCommand = () => {
     setTyped('');
     void interpret(body);
   };
-
-  // "Hey Smokey" was heard. `rest` is anything said in the same breath.
-  const onWake = (rest: string) => {
-    setOpen(true);
-    setSaved([]);
-    setDraft(null);
-    // Leaves 'idle' straight away, so the listener below is only started again
-    // once this command has run its course.
-    setPhase('thinking');
-    if (rest.split(/\s+/).filter(Boolean).length >= MIN_COMMAND_WORDS) {
-      const body = new FormData();
-      body.append('text', rest);
-      void interpret(body);
-    } else {
-      void begin(true);
-    }
-  };
-  const onWakeRef = useRef(onWake);
-  onWakeRef.current = onWake;
-
-  // Listens only while nothing else is going on: the recorder needs the
-  // microphone to itself, and a draft on screen is waiting on a tap, not on
-  // another command.
-  useEffect(() => {
-    if (!wake || phase !== 'idle') return undefined;
-    return listenForWakeWord({
-      onWake: (rest) => onWakeRef.current(rest),
-      // Quietly: nobody asked for this, so a blocked microphone is not worth a
-      // panel opening itself on every page load. Tapping the mic still says
-      // why if the block applies there too.
-      onError: () => setWake(false),
-    });
-  }, [wake, phase]);
 
   const patchPurchase = (patch: Partial<DraftPurchase>) =>
     setDraft((d) => (d && d.purchase ? { ...d, purchase: { ...d.purchase, ...patch } } : d));
@@ -314,9 +276,12 @@ const VoiceCommand = () => {
             await createScheduleTask({ day, label: title.slice(0, 140), time: task.time, assignedTo: task.assignee });
             done.push(`Added “${title}” to every ${day}.`);
           } else {
-            const note = await addNote(title, readNotesAuthor());
+            const note = await addNote(title, readNotesAuthor(), task.dueDate);
             if (task.assignee) await assignNote(note.id, task.assignee);
-            done.push(`Added “${title}” to the board${task.assignee ? ` for ${task.assignee}` : ''}.`);
+            done.push(
+              `Added “${title}” to the board${task.assignee ? ` for ${task.assignee}` : ''}` +
+                (task.dueDate ? `, due ${formatDay(task.dueDate).replace(/^(Today|Tomorrow)$/, (d) => d.toLowerCase())}.` : '.'),
+            );
           }
         }
         setDraft((d) => (d ? { ...d, tasks: d.tasks.filter((t) => t !== task) } : d));
@@ -325,10 +290,13 @@ const VoiceCommand = () => {
       setSaved(done);
       setDraft(null);
       setPhase('idle');
+      say(done.length ? `Done. ${done.join(' ')}` : 'Nothing to save.');
     } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
       setSaved(done);
-      setError(err instanceof Error ? err.message : String(err));
+      setError(message);
       setPhase('review');
+      say(`${done.length ? `${done.join(' ')} But the rest` : 'That'} didn’t save. ${message}`);
     }
   };
 
@@ -343,9 +311,7 @@ const VoiceCommand = () => {
     <div className="voice-root">
       <button
         type="button"
-        className={`notes-toggle voice-toggle${phase === 'recording' ? ' is-recording' : ''}${
-          wake && phase === 'idle' ? ' is-listening' : ''
-        }`}
+        className={`notes-toggle voice-toggle${phase === 'recording' ? ' is-recording' : ''}`}
         aria-label={phase === 'recording' ? 'Stop and send the voice command' : 'Give a voice command'}
         disabled={phase === 'thinking' || phase === 'saving'}
         onClick={onMic}
@@ -367,12 +333,10 @@ const VoiceCommand = () => {
                       ? 'Saving…'
                       : phase === 'review'
                         ? 'Check it, then confirm'
-                        : wake
-                          ? 'Say “Hey Smokey”, or tap the mic'
-                          : 'Log a purchase or add a task'}
+                        : 'Log a purchase or add a task'}
               </p>
             </div>
-            <button type="button" className="notes-close" aria-label="Close voice command" onClick={close}>
+            <button type="button" className="notes-close" aria-label="Close voice command" onClick={dismiss}>
               <span aria-hidden="true">✕</span>
             </button>
           </header>
@@ -382,7 +346,8 @@ const VoiceCommand = () => {
           <div className="voice-body">
             {phase === 'recording' ? (
               <p className="voice-hint">
-                Try “bought 5 kg pork shoulder from SK Pork at 540 a kilo” or “remind Sowmya to call the gas vendor”.
+                Try “bought 5 kg pork shoulder from SK Pork at 540 a kilo”, “remind Sowmya to call the gas vendor
+                tomorrow” or “show me pending tasks for today”.
               </p>
             ) : null}
 
@@ -396,7 +361,7 @@ const VoiceCommand = () => {
             {draft?.notes ? <p className="voice-hint">{draft.notes}</p> : null}
             {nothingHeard ? (
               <p className="voice-hint">
-                No purchase or task in that. Tap the mic and try again, or type it below.
+                No purchase, task or day to show in that. Tap the mic and try again, or type it below.
               </p>
             ) : null}
 
@@ -542,7 +507,18 @@ const VoiceCommand = () => {
                             </option>
                           ))}
                         </select>
-                      ) : null}
+                      ) : (
+                        // Blank is "whenever" — the ordinary note. A day puts
+                        // it under that day in Daily View, however far out.
+                        <input
+                          type="date"
+                          value={task.dueDate}
+                          min={todayIso()}
+                          aria-label="Due on (optional)"
+                          title="Due on — leave blank for whenever"
+                          onChange={(event) => patchTask(index, { dueDate: event.target.value })}
+                        />
+                      )}
                     </div>
                     <label className="notes-repeat">
                       <input
@@ -560,7 +536,7 @@ const VoiceCommand = () => {
 
           {phase === 'review' && (purchase || tasks.length) ? (
             <div className="voice-actions">
-              <button type="button" className="voice-cancel" onClick={close}>
+              <button type="button" className="voice-cancel" onClick={dismiss}>
                 Discard
               </button>
               <button type="button" className="notes-send" onClick={() => void confirm()}>

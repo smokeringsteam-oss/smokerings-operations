@@ -529,7 +529,15 @@ test('a stage set in Odoo after a save wins back on the next refresh', async () 
 
   setOdooDirectly('out_for_delivery');
   fireEvent.click(screen.getByRole('button', { name: /Refresh orders/ }));
-  await waitFor(() => expect(stagePicker().value).toBe('out_for_delivery'));
+  // Picked up, so it folds into the "on the way" count rather than staying open.
+  await waitFor(() => expect(screen.getByRole('button', { name: /1 on the way/ })).toBeTruthy());
+  expect(stagePicker()).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: /1 on the way/ }));
+  expect(stagePicker().value).toBe('out_for_delivery');
+
+  fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+  expect(stagePicker()).toBeNull();
+  expect(screen.getByRole('button', { name: /0 pending/ })).toBeTruthy();
 });
 
 // A save Odoo never took keeps the stage the board saved, not the stale
@@ -545,4 +553,35 @@ test('a stage Odoo refused still shows the stage that was set', async () => {
 
   await tickAMinute();
   expect(stagePicker().value).toBe('packed');
+});
+
+// Coming back to the board must not reshuffle it under the packer. The quiet
+// re-read on open applies a stage change in place, but a new order waits
+// behind a banner until someone taps it.
+test('a new order found on reopening waits behind a banner instead of reloading the board', async () => {
+  GROUPS = [
+    group('satLunch', 'Saturday Lunch', [order(1)]),
+    group('satEvening', 'Saturday Dinner', []),
+    group('sunLunch', 'Sunday Lunch', []),
+    group('sunEvening', 'Sunday Dinner', []),
+  ];
+  atClock('2026-09-05T10:00:00');
+  const first = render(<OrderManagement />);
+  await waitForBoard();
+  first.unmount();
+
+  GROUPS = [
+    group('satLunch', 'Saturday Lunch', [order(1), order(5)]),
+    group('satEvening', 'Saturday Dinner', []),
+    group('sunLunch', 'Sunday Lunch', []),
+    group('sunEvening', 'Sunday Dinner', []),
+  ];
+  render(<OrderManagement />);
+  const banner = await screen.findByRole('button', { name: /1 new order in/ });
+  const names = () => Array.from(document.querySelectorAll('.pack-order-name')).map((el) => el.textContent);
+  expect(names()).toEqual(['S00001']);
+
+  fireEvent.click(banner);
+  await waitFor(() => expect(names()).toContain('S00005'));
+  expect(screen.queryByRole('button', { name: /new order/ })).toBeNull();
 });

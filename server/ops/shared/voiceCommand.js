@@ -1,6 +1,8 @@
 // Voice commands — a spoken sentence turned into a draft purchase and/or a
 // list of draft to-dos for the mic button (src/components/VoiceCommand.tsx)
-// to show, check and only then save.
+// to show, check and only then save. Or into a day to look at: "show me
+// pending tasks for today" comes back as `showTasksFor`, and the mic opens
+// Daily View on that day instead of drafting anything.
 //
 // The same two halves as the bill scan next door (purchaseScan.js), and the
 // purchase half IS the bill scan's: a spoken "5 kg pork shoulder at 540" is a
@@ -22,6 +24,17 @@ const MAX_AUDIO_BYTES = 10 * 1024 * 1024;
 const WEEKDAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 
 const clean = (value) => (typeof value === 'string' ? value.trim() : '');
+
+// A YYYY-MM-DD that is a real day, or ''. Gemini resolves "tomorrow" and "the
+// 15th" itself, so what comes back is a claim like any other field — and a
+// date that does not exist would file a task under a day nobody ever opens.
+function isoDay(value) {
+  const text = clean(value);
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text);
+  if (!match) return '';
+  const day = new Date(Date.UTC(+match[1], +match[2] - 1, +match[3]));
+  return day.toISOString().slice(0, 10) === text ? text : '';
+}
 
 // The team as the browser sent it: a JSON array in a multipart field.
 function parseTeam(value) {
@@ -56,19 +69,29 @@ function normaliseVoiceCommand(parsed, { materials = [], vendors = [], team = []
       if (!title) return null;
       const spokenName = clean(raw.assignee).toLowerCase();
       const day = WEEKDAYS.find((name) => name.toLowerCase() === clean(raw.day).toLowerCase()) || '';
+      const repeatsWeekly = Boolean(raw.repeatsWeekly);
       return {
         title,
         // Only a name the board knows. A misheard one is dropped rather than
         // kept, so it cannot split one person across two name chips.
         assignee: team.find((name) => name.toLowerCase() === spokenName) || '',
-        repeatsWeekly: Boolean(raw.repeatsWeekly),
+        repeatsWeekly,
         day,
         time: clean(raw.time).slice(0, 10),
+        // A repeating task has a weekday, not a date; the two are never both
+        // set, so the screen has one question to ask about when.
+        dueDate: repeatsWeekly ? '' : isoDay(raw.dueDate),
       };
     })
     .filter(Boolean);
 
-  return { transcript: clean(parsed?.transcript), purchase, tasks, notes: bill.notes };
+  return {
+    transcript: clean(parsed?.transcript),
+    purchase,
+    tasks,
+    showTasksFor: isoDay(parsed?.showTasksFor),
+    notes: bill.notes,
+  };
 }
 
 // The route's half: validate the upload, read it, normalise it. `buffer` is

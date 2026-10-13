@@ -11,9 +11,8 @@
 //   * the repeat box files the job under *today's* weekday, with the category
 //     actually chosen. A task filed under the wrong day or no category still
 //     looks like a task in the list and only goes missing next week;
-//   * the list shows the whole day, ticked jobs included. A list that drops a
-//     row the moment it is ticked cannot show you that you ticked the wrong
-//     one, and reads as an empty day by evening;
+//   * the list shows only pending rows — but one ticked while the panel is
+//     open stays until it closes, so a mis-tick can be put back;
 //   * a search narrows both halves. Tasks are filtered in the browser and
 //     notes on the server, so this is the one place the two can disagree.
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
@@ -69,9 +68,10 @@ const strip = (rows: Task[]) => ({
 // The server narrows the board itself and echoes back the filter it answered,
 // which is what the panel keys its own task filtering off. Mirrored here, or
 // the two halves of the list would be tested against different searches.
-const board = (rows: Note[], q: string, who: string) => {
+const board = (rows: Note[], q: string, who: string, pending = false) => {
   const matches = rows.filter(
     (row) =>
+      (!pending || !row.done) &&
       (!q || `${row.body} ${row.author}`.toLowerCase().includes(q.toLowerCase())) &&
       (!who || row.author.toLowerCase() === who.toLowerCase()),
   );
@@ -105,11 +105,13 @@ const SCHEDULE = [
 let calls: { url: string; method: string; body?: any }[] = [];
 let tasks: Task[] = [];
 let notes: Note[] = [];
+let sprint: any[] = [];
 
 beforeEach(() => {
   calls = [];
   tasks = [];
   notes = [];
+  sprint = [];
   window.localStorage.clear();
 
   vi.stubGlobal(
@@ -121,7 +123,14 @@ beforeEach(() => {
 
       if (url.startsWith('/api/notes')) {
         const params = new URLSearchParams(url.split('?')[1] || '');
-        return { ok: true, json: async () => board(notes, params.get('q') || '', params.get('author') || '') };
+        return { ok: true, json: async () => board(notes, params.get('q') || '', params.get('author') || '', params.get('pending') === '1') };
+      }
+      if (url === '/api/github/status') return { ok: true, json: async () => ({ configured: sprint.length > 0 }) };
+      if (url === '/api/github/sprint-board') return { ok: true, json: async () => ({ items: sprint }) };
+      if (url.startsWith('/api/github/sprint-board/')) {
+        const id = decodeURIComponent(url.split('/')[4]);
+        sprint = sprint.map((row) => (row.id === id ? { ...row, status: body.status } : row));
+        return { ok: true, json: async () => ({ ok: true }) };
       }
       if (url === '/api/recurring-schedule') return { ok: true, json: async () => ({ schedule: SCHEDULE }) };
       if (url === '/api/recurring-schedule/tasks') {
@@ -222,16 +231,45 @@ test('the list shows the whole day, however long it is', async () => {
   expect(screen.getByText('six')).toBeInTheDocument();
 });
 
-test('a ticked job stays in the list, so a mistick can be put back', async () => {
+test('only pending rows are listed', async () => {
   tasks = [task('WS-20', 'Reddit automation post'), task('WS-21', 'Poster content post', { done: true })];
+  notes = [note(1, 'Order more charcoal'), note(2, 'Gas refilled', { done: true, doneBy: 'Adarsh' })];
   await openPanel();
+  // The notes store outlives a test; a focus is what makes it fetch again.
+  window.dispatchEvent(new Event('focus'));
 
-  await waitFor(() => expect(screen.getByText('Reddit automation post')).toBeInTheDocument());
-  const ticked = screen.getByRole('checkbox', { name: /Poster content post" as not done/i });
+  await waitFor(() => expect(screen.getByText('Order more charcoal')).toBeInTheDocument());
+  expect(screen.getByText('Reddit automation post')).toBeInTheDocument();
+  expect(screen.queryByText('Poster content post')).not.toBeInTheDocument();
+  expect(screen.queryByText('Gas refilled')).not.toBeInTheDocument();
+  expect(calls.some((call) => call.url.startsWith('/api/notes?') && call.url.includes('pending=1'))).toBe(true);
+});
 
-  fireEvent.click(ticked);
-  await waitFor(() => expect(calls.some((call) => call.url.startsWith('/api/today-tasks/WS-21'))).toBe(true));
-  expect(calls.find((call) => call.url.startsWith('/api/today-tasks/WS-21'))?.body).toEqual({ done: false });
+test('a row ticked while the panel is open stays until it closes, so a mistick can be put back', async () => {
+  tasks = [task('WS-20', 'Reddit automation post')];
+  notes = [note(1, 'Order more charcoal')];
+  await openPanel();
+  // The notes store outlives a test; a focus is what makes it fetch again.
+  window.dispatchEvent(new Event('focus'));
+  await waitFor(() => expect(screen.getByText('Order more charcoal')).toBeInTheDocument());
+
+  fireEvent.click(screen.getByRole('checkbox', { name: /Reddit automation post" as done/i }));
+  await waitFor(() => expect(calls.some((call) => call.url.startsWith('/api/today-tasks/WS-20'))).toBe(true));
+  notes = notes.map((row) => ({ ...row, done: true }));
+  fireEvent.click(screen.getByRole('checkbox', { name: /Order more charcoal" as done/i }));
+  await waitFor(() => expect(calls.some((call) => call.url === '/api/notes/1')).toBe(true));
+
+  // Still there, ticked, and untickable.
+  await waitFor(() =>
+    expect(screen.getByRole('checkbox', { name: /Order more charcoal" as not done/i })).toBeInTheDocument(),
+  );
+  expect(screen.getByRole('checkbox', { name: /Reddit automation post" as not done/i })).toBeInTheDocument();
+
+  // Gone on the next open.
+  fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: /close shared notes/i }));
+  fireEvent.click(screen.getByRole('button', { name: /open shared notes/i }));
+  await waitFor(() => expect(screen.queryByText('Order more charcoal')).not.toBeInTheDocument());
+  expect(screen.queryByText('Reddit automation post')).not.toBeInTheDocument();
 });
 
 test('a search narrows the jobs as well as the notes', async () => {
@@ -258,4 +296,42 @@ test('a search narrows the jobs as well as the notes', async () => {
   // useSharedNotes.ts.
   fireEvent.change(screen.getByLabelText(/search notes, tasks and names/i), { target: { value: '' } });
   await waitFor(() => expect(screen.getByText('Order more charcoal')).toBeInTheDocument());
+});
+
+const sprintItem = (id: string, title: string, status: string) => ({
+  id,
+  title,
+  status,
+  day: 'Tuesday',
+  assignedTo: 'Adarsh',
+  assignees: [],
+  isDraft: true,
+  number: null,
+  url: null,
+});
+
+test("today's sprint items follow the board: Done there is gone here, ticked here is Done there", async () => {
+  sprint = [
+    sprintItem('PV-1', 'Shoot the brisket reel', 'In Progress'),
+    sprintItem('PV-2', 'Fix the menu typo', 'Done'),
+    { ...sprintItem('PV-3', 'Friday-only job', 'Backlog'), day: 'Friday' },
+  ];
+  await openPanel();
+
+  await waitFor(() => expect(screen.getByText('Shoot the brisket reel')).toBeInTheDocument());
+  expect(screen.queryByText('Fix the menu typo')).not.toBeInTheDocument();
+  expect(screen.queryByText('Friday-only job')).not.toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole('checkbox', { name: /Shoot the brisket reel" as done/i }));
+  await waitFor(() =>
+    expect(calls.find((call) => call.url === '/api/github/sprint-board/PV-1/status')?.body).toEqual({ status: 'Done' }),
+  );
+
+  // Unticking puts it back in the column it came from.
+  fireEvent.click(await screen.findByRole('checkbox', { name: /Shoot the brisket reel" as not done/i }));
+  await waitFor(() =>
+    expect(calls.filter((call) => call.url === '/api/github/sprint-board/PV-1/status').pop()?.body).toEqual({
+      status: 'In Progress',
+    }),
+  );
 });

@@ -102,6 +102,8 @@ function startAlarmOnClients(data) {
       for (const client of windows) {
         client.postMessage({
           type: 'whatsapp-alarm',
+          // 'whatsapp' or 'task' -- the banner words itself by it.
+          kind: data.alarm,
           channelId: data.channelId ?? null,
           customer: data.customer || data.title || '',
           body: data.body || '',
@@ -136,6 +138,7 @@ self.addEventListener('notificationclick', (event) => {
             if (isAlarm && focused && 'postMessage' in focused) {
               focused.postMessage({
                 type: 'whatsapp-alarm',
+                kind: data.alarm,
                 channelId: data.channelId ?? null,
                 customer: event.notification.title || '',
                 body: event.notification.body || '',

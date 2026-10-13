@@ -215,10 +215,11 @@ const MEAT: MeatByItem = {
   'pork-bbq-burger': [{ category: 'pulledPork', label: 'Pulled Pork', productName: 'Pulled pork' }],
   'bbq-ribs-250g': [{ category: 'ribs', label: 'Pork Ribs', productName: 'Smoked pork ribs' }],
   'jackfruit-burger': [{ category: 'jackfruit', label: 'Pulled Jackfruit', productName: 'Pulled jackfruit' }],
-  'beef-ribs-250g': [{ category: 'beefRibs', label: 'Beef Ribs', productName: 'Smoked beef ribs' }],
+  'brisket-slices-250g': [{ category: 'brisket', label: 'Brisket', productName: 'Smoked brisket' }],
+  'chicken-wings-500g': [{ category: 'wings', label: 'Chicken Wings', productName: 'Smoked chicken wings' }],
   // A dish carrying both — one order of it belongs to both smoker loads.
   'combo-platter': [
-    { category: 'beefRibs', label: 'Beef Ribs', productName: 'Smoked beef ribs' },
+    { category: 'brisket', label: 'Brisket', productName: 'Smoked brisket' },
     { category: 'porkBelly', label: 'Pork Belly', productName: 'Pork belly burnt ends' },
   ],
 };
@@ -234,7 +235,7 @@ describe('smoker loads', () => {
       { itemId: 'bbq-ribs-250g', qty: 1 },
       { itemId: 'combo-platter', qty: 1 },
     ]);
-    expect([...orderMeatCategories(both, MEAT)].sort()).toEqual(['beefRibs', 'chicken', 'porkBelly', 'ribs']);
+    expect([...orderMeatCategories(both, MEAT)].sort()).toEqual(['brisket', 'chicken', 'porkBelly', 'ribs']);
   });
 
   it('puts every pork cut behind the one pork switch', () => {
@@ -249,8 +250,8 @@ describe('smoker loads', () => {
     expect(orderNeedsLoad(combo, MEAT, BEEF)).toBe(true);
   });
 
-  it('puts beef ribs behind the beef switch and nothing else', () => {
-    const beefOnly = order(1, [{ itemId: 'beef-ribs-250g', qty: 2 }]);
+  it('puts brisket behind the beef switch and nothing else', () => {
+    const beefOnly = order(1, [{ itemId: 'brisket-slices-250g', qty: 2 }]);
     expect(orderNeedsLoad(beefOnly, MEAT, BEEF)).toBe(true);
     expect(orderNeedsLoad(beefOnly, MEAT, PORK)).toBe(false);
   });
@@ -263,6 +264,8 @@ describe('smoker loads', () => {
     expect(orderNeedsLoad(chickenOnly, MEAT, CHICKEN)).toBe(true);
     expect(orderNeedsLoad(chickenOnly, MEAT, PORK)).toBe(false);
     expect(orderNeedsLoad(chickenOnly, MEAT, BEEF)).toBe(false);
+    // Wings are chicken too — same short smoke.
+    expect(orderNeedsLoad(order(3, [{ itemId: 'chicken-wings-500g', qty: 1 }]), MEAT, CHICKEN)).toBe(true);
     // ...and a pork order is not swept onto the chicken switch either.
     expect(orderNeedsLoad(order(2, [{ itemId: 'pork-bbq-burger', qty: 1 }]), MEAT, CHICKEN)).toBe(false);
   });

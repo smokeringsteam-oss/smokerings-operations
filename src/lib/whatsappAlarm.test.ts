@@ -243,3 +243,24 @@ describe('vibration', () => {
     expect(vibrate).toHaveBeenCalled();
   });
 });
+
+describe('inside the Android app', () => {
+  const push = (detail: Record<string, string>) =>
+    window.dispatchEvent(new CustomEvent('nativepush', { detail }));
+
+  it('sounds the alarm for a WhatsApp push the app hands over', () => {
+    listen();
+    push({ alarm: 'whatsapp', channelId: '42', customer: 'Eric Savage', body: 'Hello?' });
+
+    expect(play).toHaveBeenCalledTimes(1);
+    expect(getState()).toMatchObject({ active: true, channelId: 42, customer: 'Eric Savage' });
+  });
+
+  it('stays quiet for pushes that are not alarms', () => {
+    listen();
+    push({ title: 'Daily digest', body: '3 tasks today' });
+
+    expect(play).not.toHaveBeenCalled();
+    expect(getState().active).toBe(false);
+  });
+});

@@ -29,6 +29,9 @@
 const CONTAINERS = {
   sauceCup: { materialId: 'RM-059', name: '30 ml portion cup', capacity: 30 },
   small: { materialId: 'RM-040', name: '100 ml packaging', capacity: 100 },
+  // The same cup, counted one per plate: buffalo sauce's per-order figure is
+  // 120 ml of coating plus a 50 ml dip, and only the dip gets a cup.
+  dipCup: { materialId: 'RM-040', name: '100 ml packaging', capacity: 100, portionCapacity: 1 },
   round: { materialId: 'RM-041', name: '500 ml round container', capacity: 500 },
   // 30 US fl oz = 887 ml.
   tray: { materialId: 'RM-039', name: '30 oz packaging', capacity: 887 },
@@ -58,6 +61,13 @@ const SIDE_CONTAINERS = {
   'RM-016': 'tray', // Green lettuce
   'RM-017': 'tray', // Iceberg lettuce — not currently on a BoM, mapped so it
   //                   doesn't fall through to the default if it ever is
+  // The 2026-10-02 menu's dips go in 100 ml cups (pitmaster, 2026-10-05).
+  'SR-022': 'dipCup', // Buffalo sauce — one dip cup per plate, the rest coats the wings
+  'SR-023': 'small', // Garlic mayo
+  'SR-025': 'small', // Cajun sauce
+  'SR-029': 'small', // Steak sauce
+  'SR-027': 'sauceCup', // Teriyaki glaze — 30 ml, where BBQ burnt ends take a BBQ sauce cup
+  'SR-030': 'tray', // Veg sticks (carrot + celery)
 };
 
 // A side with no entry above gets no container, and the caller falls back to

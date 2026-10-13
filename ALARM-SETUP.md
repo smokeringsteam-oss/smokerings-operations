@@ -1,7 +1,7 @@
 # The WhatsApp alarm — making the phone loud
 
 A new customer message in Odoo now sets off an alarm: a push notification, and
-the Voldemort laugh (`public/whatsapp-alert.mp3`) on loop until someone stops
+the Vadivelu "Maapu" clip (`public/whatsapp-alert.mp3`, 14–23s of the Chandramukhi scene) on loop until someone stops
 it.
 
 The push half works the moment the server restarts. **The loud half on a phone
@@ -17,7 +17,7 @@ With the phone in a pocket and the shortcut closed:
 | Legion's own speakers | **Yes**, always — this is the only row that depends on nothing but the server. |
 | The notification appearing | **Only while the browser process is alive.** See "the browser has to be running" below — this is the one that surprises people. |
 | Vibrating, including on silent | **Yes**, if the notification arrives at all — a ~6 second pattern, as long as the site's notification channel has vibration on (step 4 below). |
-| The Voldemort laugh on the phone | **Only** if you set it as the channel's ringtone — the manual step below. |
+| The alarm clip on the phone | **Only** if you set it as the channel's ringtone — the manual step below. |
 
 ### The browser has to be running
 
@@ -56,8 +56,8 @@ knowing so it doesn't look like something left unfinished:
   and with the shortcut closed there is no page.
 - Vibration is different: the notification carries a vibrate pattern, and
   Android honours it with nothing open. That is why the buzz works closed and
-  the laugh does not.
-- So the laugh, with nothing open, has to be the **channel's ringtone** — set
+  the clip does not.
+- So the clip, with nothing open, has to be the **channel's ringtone** — set
   once, in Android, below. After that it plays for every alarm, closed or not.
 
 Once a page *is* open (or the moment you tap the notification), the mp3 loops
@@ -81,8 +81,8 @@ line up or the notifications stay under Chrome:
 - **Notifications must be switched on from inside the app** (Daily View), once.
 
 Built with `alarm_sound` and `alarm_tag: whatsapp-`, the app puts the WhatsApp
-alarm on its own **Alarms** channel with the laugh bundled as its sound — so in
-the app the laugh plays closed, and the manual step below is only needed for
+alarm on its own **Alarms** channel with the clip bundled as its sound — so in
+the app the clip plays closed, and the manual step below is only needed for
 plain Chrome.
 
 ## The one manual step (about three minutes)
@@ -93,13 +93,13 @@ plain Chrome.
 2. Make sure the alarm has fired at least once, so the channel exists — Daily
    View → **🚨 Test alarm**.
 3. On the phone: **Settings → Apps → Chrome → Notifications →
-   `legion.tail946602.ts.net` → Sound** → pick the laugh.
+   `legion.tail946602.ts.net` → Sound** → pick the clip.
 4. While you're there, set **Importance / Behaviour** to *Urgent — make sound
    and pop on screen*, and turn **Override Do Not Disturb** on if you want it
    through DND.
 
 Android keeps the sound per site, so this affects the WhatsApp alarm and the
-daily task reminders equally. If you want the laugh for one and not the other,
+daily task reminders equally. If you want the clip for one and not the other,
 that needs separate channels, which the Web Push API cannot set from the
 server — it would mean splitting the two across two origins, which is not
 worth it.

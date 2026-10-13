@@ -16,58 +16,144 @@ import {
 
 const LOCAL_STORAGE_KEY = 'kitchen-prep-orders-v1';
 
-// Real Smoke Rings BBQ menu (smokerings.in).
-const MENU_ITEMS: { id: string; name: string; collection: string }[] = [
-  { id: 'chicken-bbq-burger', name: 'Signature Pulled Chicken BBQ Burger', collection: 'smoked-chicken' },
-  { id: 'chicken-glaze-burger', name: 'Smoke and Glaze Pulled Chicken Burger', collection: 'smoked-chicken' },
-  { id: 'chicken-tacos', name: 'Smoked Chicken Tacos', collection: 'smoked-chicken' },
-  { id: 'chicken-quesadilla', name: 'Smoked Chicken Quesadilla', collection: 'smoked-chicken' },
-  { id: 'pork-bbq-burger', name: 'Signature Pulled Pork BBQ Burger', collection: 'smoked-pork' },
-  { id: 'pork-glaze-burger', name: 'Smoke and Glaze Pulled Pork Burger', collection: 'smoked-pork' },
-  { id: 'pork-tacos', name: 'Smoked Pork Tacos', collection: 'smoked-pork' },
-  { id: 'pork-quesadilla', name: 'Smoked Pork Quesadilla', collection: 'smoked-pork' },
-  { id: 'pork-burnt-ends', name: 'Pork Burnt Ends (150g)', collection: 'pitmasters-favourite' },
-  { id: 'bbq-ribs-250g', name: 'Smokey BBQ Ribs (250g)', collection: 'pitmasters-favourite' },
-  { id: 'bbq-ribs-half-rack', name: 'Smokey BBQ Ribs (1/2 rack, 6-7 ribs)', collection: 'pitmasters-favourite' },
-  { id: 'beef-ribs-250g', name: 'Smokey BBQ Beef Ribs (250g)', collection: 'pitmasters-favourite' },
-  { id: 'jackfruit-tacos', name: 'Smoked Jackfruit Tacos', collection: 'smoked-jackfruit' },
+// Real Smoke Rings BBQ menu (smokerings.in), as of 2026-10-05: the glaze
+// burgers, tacos and quesadillas are off it; wings, Cajun chicken, brisket,
+// platters, meat packs and burger add-ons are on.
+//
+// `pick` rows are the meats on a platter. Odoo sells a platter as one line,
+// and the server splits that line's text into one row per pick (see
+// server/integrations/odoo.js platterPicks) so the meat, rub and dip of each
+// pick reach the plans below. They are not dishes in their own right — the
+// platter is — so they're left out of the dish totals.
+const MENU_ITEMS: { id: string; name: string; pick?: true }[] = [
+  { id: 'chicken-bbq-burger', name: 'Pulled Chicken BBQ Burger' },
+  { id: 'pork-bbq-burger', name: 'Pulled Pork BBQ Burger' },
+  { id: 'brisket-bbq-burger', name: 'BBQ Brisket Burger' },
+  { id: 'extra-chicken-50g', name: 'Extra Pulled Chicken (50g)' },
+  { id: 'extra-chicken-100g', name: 'Extra Pulled Chicken (100g)' },
+  { id: 'extra-pork-50g', name: 'Extra Pulled Pork (50g)' },
+  { id: 'extra-pork-100g', name: 'Extra Pulled Pork (100g)' },
+  { id: 'extra-brisket-50g', name: 'Extra Brisket (50g)' },
+  { id: 'extra-brisket-100g', name: 'Extra Brisket (100g)' },
+  { id: 'pork-burnt-ends', name: 'BBQ Pork Burnt Ends (150g)' },
+  { id: 'teriyaki-burnt-ends', name: 'Teriyaki Pork Burnt Ends (150g)' },
+  { id: 'bbq-ribs-250g', name: 'Smokey BBQ Ribs (250g)' },
+  { id: 'bbq-ribs-half-rack', name: 'Smokey BBQ Ribs (500g)' },
+  { id: 'brisket-slices-250g', name: 'Smoked Brisket Slices (250g)' },
+  { id: 'brisket-slices-500g', name: 'Smoked Brisket Slices (500g)' },
+  { id: 'chicken-wings-500g', name: 'Smoked Chicken Wings (500g)' },
+  { id: 'cajun-chicken-quarter', name: 'Cajun Chicken (Quarter)' },
+  { id: 'cajun-chicken-half', name: 'Cajun Chicken (Half)' },
+  { id: 'cajun-chicken-whole', name: 'Cajun Chicken (Whole)' },
+  { id: 'pulled-chicken-150g', name: 'Smoked Pulled Chicken (150g)' },
+  { id: 'pulled-pork-150g', name: 'Smoked Pulled Pork (150g)' },
+  { id: 'add-seasoning', name: 'Seasoning (taco seasoning for a meat pack)' },
+  { id: 'any-3-platter', name: 'Any 3 Platter' },
+  { id: 'any-6-platter', name: 'Any 6 Platter' },
+  { id: 'platter-brisket', name: 'Smoked Brisket 250g', pick: true },
+  { id: 'platter-ribs', name: 'Smokey BBQ Ribs 250g', pick: true },
+  { id: 'platter-pulled-pork', name: 'Pulled Pork 250g', pick: true },
+  { id: 'platter-bbq-burnt-ends', name: 'BBQ Pork Burnt Ends 150g', pick: true },
+  { id: 'platter-teriyaki-burnt-ends', name: 'Teriyaki Pork Burnt Ends 150g', pick: true },
+  { id: 'platter-cajun-half', name: 'Cajun Chicken Half', pick: true },
+  { id: 'platter-cajun-quarter', name: 'Cajun Chicken Quarter', pick: true },
+  { id: 'platter-wings', name: 'Smoked Chicken Wings 6 pcs', pick: true },
 ];
 
 // Step 1 shows the weekend's counts as tiles — one per thing the kitchen
-// actually preps, not one per SKU. Tacos and quesadillas of the same protein
-// share a tile: same pulled meat, same tortilla run, so the kitchen wants the
-// combined number with the split underneath as the footnote.
-const ORDER_TILES: { id: string; label: string; parts: { label: string; itemId: string }[] }[] = [
+// actually preps, not one per SKU. Sizes and flavours of the same meat share
+// a tile (same smoke, same prep), with the split underneath as the footnote.
+// `platter` lists the platter picks that are the same meat: they're counted
+// in the tile's number (the kitchen smokes and portions them alongside), and
+// shown as "Prime cuts N · Platter N" so the two stay told apart. The
+// platters themselves get their own cards below the tiles (PLATTERS).
+type TilePart = { label: string; itemId: string };
+const ORDER_TILES: { id: string; label: string; parts: TilePart[]; platter?: TilePart[] }[] = [
   { id: 'chicken-bbq-burger', label: 'Chicken BBQ Burger', parts: [{ label: 'BBQ', itemId: 'chicken-bbq-burger' }] },
-  {
-    id: 'chicken-glaze-burger',
-    label: 'Chicken Glaze Burger',
-    parts: [{ label: 'Glaze', itemId: 'chicken-glaze-burger' }],
-  },
-  {
-    id: 'chicken-tacos-quesadilla',
-    label: 'Chicken Tacos & Quesadilla',
-    parts: [
-      { label: 'Tacos', itemId: 'chicken-tacos' },
-      { label: 'Quesadilla', itemId: 'chicken-quesadilla' },
-    ],
-  },
   { id: 'pork-bbq-burger', label: 'Pork BBQ Burger', parts: [{ label: 'BBQ', itemId: 'pork-bbq-burger' }] },
-  { id: 'pork-glaze-burger', label: 'Pork Glaze Burger', parts: [{ label: 'Glaze', itemId: 'pork-glaze-burger' }] },
+  { id: 'brisket-bbq-burger', label: 'Brisket BBQ Burger', parts: [{ label: 'BBQ', itemId: 'brisket-bbq-burger' }] },
   {
-    id: 'pork-tacos-quesadilla',
-    label: 'Pork Tacos & Quesadilla',
+    id: 'extra-meat',
+    label: 'Extra meat (burger add-on)',
     parts: [
-      { label: 'Tacos', itemId: 'pork-tacos' },
-      { label: 'Quesadilla', itemId: 'pork-quesadilla' },
+      { label: 'Chicken 50g', itemId: 'extra-chicken-50g' },
+      { label: 'Chicken 100g', itemId: 'extra-chicken-100g' },
+      { label: 'Pork 50g', itemId: 'extra-pork-50g' },
+      { label: 'Pork 100g', itemId: 'extra-pork-100g' },
+      { label: 'Brisket 50g', itemId: 'extra-brisket-50g' },
+      { label: 'Brisket 100g', itemId: 'extra-brisket-100g' },
     ],
   },
-  { id: 'pork-burnt-ends', label: 'Pork Burnt Ends (150g)', parts: [{ label: '150 g', itemId: 'pork-burnt-ends' }] },
-  { id: 'bbq-ribs-250g', label: 'BBQ Ribs (250g)', parts: [{ label: '250 g', itemId: 'bbq-ribs-250g' }] },
-  { id: 'bbq-ribs-half-rack', label: 'BBQ Ribs (½ rack)', parts: [{ label: '6-7 ribs', itemId: 'bbq-ribs-half-rack' }] },
-  { id: 'beef-ribs-250g', label: 'BBQ Beef Ribs (250g)', parts: [{ label: '250 g', itemId: 'beef-ribs-250g' }] },
-  { id: 'jackfruit-tacos', label: 'Jackfruit Tacos', parts: [{ label: 'Tacos', itemId: 'jackfruit-tacos' }] },
+  {
+    id: 'burnt-ends',
+    label: 'Pork Burnt Ends (150g)',
+    parts: [
+      { label: 'BBQ', itemId: 'pork-burnt-ends' },
+      { label: 'Teriyaki', itemId: 'teriyaki-burnt-ends' },
+    ],
+    platter: [
+      { label: 'BBQ', itemId: 'platter-bbq-burnt-ends' },
+      { label: 'Teriyaki', itemId: 'platter-teriyaki-burnt-ends' },
+    ],
+  },
+  {
+    id: 'bbq-ribs-250g',
+    label: 'BBQ Ribs (250g)',
+    parts: [{ label: '250 g', itemId: 'bbq-ribs-250g' }],
+    platter: [{ label: '250 g', itemId: 'platter-ribs' }],
+  },
+  { id: 'bbq-ribs-half-rack', label: 'BBQ Ribs (500g)', parts: [{ label: '500 g', itemId: 'bbq-ribs-half-rack' }] },
+  {
+    id: 'brisket-slices',
+    label: 'Brisket Slices',
+    parts: [
+      { label: '250 g', itemId: 'brisket-slices-250g' },
+      { label: '500 g', itemId: 'brisket-slices-500g' },
+    ],
+    platter: [{ label: '250 g', itemId: 'platter-brisket' }],
+  },
+  {
+    id: 'chicken-wings',
+    label: 'Chicken Wings',
+    parts: [{ label: '500 g', itemId: 'chicken-wings-500g' }],
+    platter: [{ label: '6 pcs', itemId: 'platter-wings' }],
+  },
+  {
+    id: 'cajun-chicken',
+    label: 'Cajun Chicken',
+    parts: [
+      { label: 'Quarter', itemId: 'cajun-chicken-quarter' },
+      { label: 'Half', itemId: 'cajun-chicken-half' },
+      { label: 'Whole', itemId: 'cajun-chicken-whole' },
+    ],
+    platter: [
+      { label: 'Quarter', itemId: 'platter-cajun-quarter' },
+      { label: 'Half', itemId: 'platter-cajun-half' },
+    ],
+  },
+  {
+    id: 'pulled-meat',
+    label: 'Pulled meat',
+    parts: [
+      { label: 'Chicken 150g', itemId: 'pulled-chicken-150g' },
+      { label: 'Pork 150g', itemId: 'pulled-pork-150g' },
+    ],
+    platter: [{ label: 'Pork 250g', itemId: 'platter-pulled-pork' }],
+  },
+  { id: 'add-seasoning', label: 'Seasoning add-on', parts: [{ label: 'Taco seasoning', itemId: 'add-seasoning' }] },
 ];
+
+// One card per platter size: how many, and the meats on them. The server
+// tags every pick with the platter it came off, and applyExtractedOrders
+// files it a second time under platterPickKey — so an Any 3's brisket and an
+// Any 6's brisket stay apart here while the plain pick row still feeds the
+// meat plan and the tiles above.
+const PLATTERS = [
+  { id: 'any-3-platter', label: 'Any 3 Platter' },
+  { id: 'any-6-platter', label: 'Any 6 Platter' },
+];
+const PLATTER_PICK_ITEMS = MENU_ITEMS.filter((item) => item.pick);
+const platterPickKey = (platterId: string, pickId: string) => `${platterId}/${pickId}`;
 
 // The ids stay 'satEvening'/'sunEvening' — that's what Odoo's slot tags and
 // every server response key on — but the label reads "Dinner", which is what
@@ -85,6 +171,8 @@ type ExtractedOrder = {
   itemId: string;
   slotId: string;
   quantity: number;
+  // On a platter pick: the platter it came off (any-3-platter / any-6-platter).
+  platterId?: string;
 };
 
 // An unconfirmed Odoo quotation (state draft/sent) sitting in the fetched
@@ -198,8 +286,10 @@ type MeatPlan = {
   pulledPork: MeatCategoryPlan;
   ribs: MeatCategoryPlan;
   porkBelly: MeatCategoryPlan;
-  jackfruit: MeatCategoryPlan;
-  beefRibs: MeatCategoryPlan;
+  wings: MeatCategoryPlan;
+  cajunLegs: MeatCategoryPlan;
+  cajunBirds: MeatCategoryPlan;
+  brisket: MeatCategoryPlan;
   gaps: string[];
 };
 // Mirrors server/ops/b2c/recipes.js computePrepPlan's row shape (Bakery category —
@@ -340,8 +430,10 @@ type YieldStats = {
   ribs: LossStat | null;
   porkBelly: LossStat | null;
   chicken: LossStat | null;
-  jackfruit: LossStat | null;
-  beefRibs: LossStat | null;
+  wings: LossStat | null;
+  cajunLegs: LossStat | null;
+  cajunBirds: LossStat | null;
+  brisket: LossStat | null;
 };
 // yield-stats also carries, per category, sessions weighed raw but with no
 // finished weight logged yet — the reason a category can still have no average.
@@ -401,7 +493,7 @@ const MeatCategoryTile = ({
 }: {
   icon: string;
   title: string;
-  colorClass: 'pork' | 'chicken' | 'jackfruit' | 'beef';
+  colorClass: 'pork' | 'chicken' | 'beef';
   loss: EffectiveLoss;
   requiredNoun: string;
   buyNoun: string;
@@ -610,8 +702,9 @@ const WeekendPrepPlanner: React.FC = () => {
   const rowTotal = (itemId: string) =>
     SLOTS.reduce((sum, slot) => sum + (orders[itemId]?.[slot.id] || 0), 0);
 
+  // Platter picks are inside a platter that's already counted.
   const colTotal = (slotId: string) =>
-    MENU_ITEMS.reduce((sum, item) => sum + (orders[item.id]?.[slotId] || 0), 0);
+    MENU_ITEMS.filter((item) => !item.pick).reduce((sum, item) => sum + (orders[item.id]?.[slotId] || 0), 0);
 
   const grandTotal = useMemo(() => SLOTS.reduce((sum, slot) => sum + colTotal(slot.id), 0), [orders]);
 
@@ -633,10 +726,16 @@ const WeekendPrepPlanner: React.FC = () => {
   const applyExtractedOrders = (entries: ExtractedOrder[], mode: 'add' | 'replace' = 'add') => {
     setOrders((current) => {
       const next: OrderMap = mode === 'replace' ? {} : { ...current };
-      entries.forEach(({ itemId, slotId, quantity }) => {
-        const itemSlots = { ...(next[itemId] || {}) };
+      const add = (key: string, slotId: string, quantity: number) => {
+        const itemSlots = { ...(next[key] || {}) };
         itemSlots[slotId] = Math.max(0, Math.floor((itemSlots[slotId] || 0) + quantity));
-        next[itemId] = itemSlots;
+        next[key] = itemSlots;
+      };
+      entries.forEach(({ itemId, slotId, quantity, platterId }) => {
+        add(itemId, slotId, quantity);
+        // Filed again per platter for the platter cards. Not a MENU_ITEMS id,
+        // so it never reaches the totals or the meat plan.
+        if (platterId) add(platterPickKey(platterId, itemId), slotId, quantity);
       });
       return next;
     });
@@ -691,8 +790,11 @@ const WeekendPrepPlanner: React.FC = () => {
       if (entries.length) {
         // Entries are the server's tally — one per dish × slot, already summed
         // — so their count is not a count of anything the kitchen makes.
-        // Report the dishes (sum of quantities) instead.
-        const dishes = entries.reduce((sum, entry) => sum + (entry.quantity || 0), 0);
+        // Report the dishes (sum of quantities) instead — platter meats are
+        // part of their platter, not dishes of their own.
+        const dishes = entries
+          .filter((entry) => !PLATTER_PICK_ITEMS.some((item) => item.id === entry.itemId))
+          .reduce((sum, entry) => sum + (entry.quantity || 0), 0);
         setOdooStatus(
           `Pulled ${ordersFound} confirmed order${ordersFound === 1 ? '' : 's'} from Odoo — ${dishes} dish${
             dishes === 1 ? '' : 'es'
@@ -837,7 +939,7 @@ const WeekendPrepPlanner: React.FC = () => {
   // loss % and cut to buy (server/core/meatConfig.js) for every category — pulled
   // pork, pork belly (burnt ends), ribs (both the 250g portion and whole
   // half-racks, which draw from the same raw pork-ribs pool), shredded
-  // chicken, jackfruit and beef ribs.
+  // chicken, wings, Cajun chicken (legs and whole birds) and brisket.
   const [meatPlan, setMeatPlan] = useState<MeatPlan | null>(null);
   const [isLoadingMeatPlan, setIsLoadingMeatPlan] = useState(false);
   const [meatPlanError, setMeatPlanError] = useState('');
@@ -918,8 +1020,10 @@ const WeekendPrepPlanner: React.FC = () => {
       pulledPork: pick('pulledPork'),
       ribs: pick('ribs'),
       porkBelly: pick('porkBelly'),
-      jackfruit: pick('jackfruit'),
-      beefRibs: pick('beefRibs'),
+      wings: pick('wings'),
+      cajunLegs: pick('cajunLegs'),
+      cajunBirds: pick('cajunBirds'),
+      brisket: pick('brisket'),
     };
   }, [yieldStats, meatPlan]);
 
@@ -950,8 +1054,10 @@ const WeekendPrepPlanner: React.FC = () => {
       pulledPork: buildCategory(meatPlan.pulledPork, effectiveLoss.pulledPork.pct),
       ribs: buildCategory(meatPlan.ribs, effectiveLoss.ribs.pct),
       porkBelly: buildCategory(meatPlan.porkBelly, effectiveLoss.porkBelly.pct),
-      jackfruit: buildCategory(meatPlan.jackfruit, effectiveLoss.jackfruit.pct),
-      beefRibs: buildCategory(meatPlan.beefRibs, effectiveLoss.beefRibs.pct),
+      wings: buildCategory(meatPlan.wings, effectiveLoss.wings.pct),
+      cajunLegs: buildCategory(meatPlan.cajunLegs, effectiveLoss.cajunLegs.pct),
+      cajunBirds: buildCategory(meatPlan.cajunBirds, effectiveLoss.cajunBirds.pct),
+      brisket: buildCategory(meatPlan.brisket, effectiveLoss.brisket.pct),
     };
   }, [meatPlan, effectiveLoss]);
 
@@ -1366,19 +1472,60 @@ const WeekendPrepPlanner: React.FC = () => {
 
               <div className="prep-summary-grid">
                 {ORDER_TILES.map((tile) => {
-                  const total = tile.parts.reduce((sum, part) => sum + rowTotal(part.itemId), 0);
+                  const primeTotal = tile.parts.reduce((sum, part) => sum + rowTotal(part.itemId), 0);
+                  const platterParts = (tile.platter || []).filter((part) => rowTotal(part.itemId) > 0);
+                  const platterTotal = platterParts.reduce((sum, part) => sum + rowTotal(part.itemId), 0);
+                  // A long split (six add-ons) only lists what was actually
+                  // ordered; a short one keeps its zeros.
+                  const parts = tile.parts.length > 3 ? tile.parts.filter((part) => rowTotal(part.itemId) > 0) : tile.parts;
+                  // With platter portions in the tile, each side gets its own
+                  // line carrying its own sizes ("Prime cuts 6: 250 g 1 · 500 g 5",
+                  // "Platter 2: 250 g 2"), so no size count reads as belonging
+                  // to the other. Sizes are left off when the tile only comes
+                  // in one (ribs 250g) — the label already says it.
+                  const sizeLabels = new Set([...tile.parts, ...(tile.platter || [])].map((part) => part.label));
+                  const showSizes = sizeLabels.size > 1;
+                  const primeParts = tile.parts.filter((part) => rowTotal(part.itemId) > 0);
                   return (
                     <div key={tile.id} className="prep-summary-card">
                       <div className="prep-summary-label">{tile.label}</div>
-                      <div className="prep-summary-value">{total}</div>
-                      {tile.parts.length > 1 && (
-                        <div className="prep-summary-split">
-                          {tile.parts.map((part) => (
-                            <span key={part.itemId}>
-                              {part.label} <strong>{rowTotal(part.itemId)}</strong>
+                      <div className="prep-summary-value">{primeTotal + platterTotal}</div>
+                      {platterTotal > 0 ? (
+                        <div className="prep-summary-origin">
+                          <div className="prep-summary-origin-row">
+                            <span className="prep-summary-origin-head">
+                              Prime cuts <strong>{primeTotal}</strong>
                             </span>
-                          ))}
+                            {showSizes &&
+                              primeParts.map((part) => (
+                                <span key={part.itemId} className="prep-summary-origin-size">
+                                  {part.label} <strong>{rowTotal(part.itemId)}</strong>
+                                </span>
+                              ))}
+                          </div>
+                          <div className="prep-summary-origin-row prep-summary-origin-platter">
+                            <span className="prep-summary-origin-head">
+                              Platter <strong>{platterTotal}</strong>
+                            </span>
+                            {showSizes &&
+                              platterParts.map((part) => (
+                                <span key={part.itemId} className="prep-summary-origin-size">
+                                  {part.label} <strong>{rowTotal(part.itemId)}</strong>
+                                </span>
+                              ))}
+                          </div>
                         </div>
+                      ) : (
+                        tile.parts.length > 1 &&
+                        parts.length > 0 && (
+                          <div className="prep-summary-split">
+                            {parts.map((part) => (
+                              <span key={part.itemId}>
+                                {part.label} <strong>{rowTotal(part.itemId)}</strong>
+                              </span>
+                            ))}
+                          </div>
+                        )
                       )}
                     </div>
                   );
@@ -1387,6 +1534,33 @@ const WeekendPrepPlanner: React.FC = () => {
                   <div className="prep-summary-label">Weekend total</div>
                   <div className="prep-summary-value">{grandTotal}</div>
                 </div>
+              </div>
+
+              <h3 className="prep-platter-heading">Platters</h3>
+              <p className="inv-section-hint">
+                Each platter's meats are already in the tiles above, under "Platter".
+              </p>
+              <div className="prep-summary-grid prep-platter-grid">
+                {PLATTERS.map((platter) => {
+                  const picks = PLATTER_PICK_ITEMS.filter(
+                    (item) => rowTotal(platterPickKey(platter.id, item.id)) > 0,
+                  );
+                  return (
+                    <div key={platter.id} className="prep-summary-card prep-platter-card">
+                      <div className="prep-summary-label">{platter.label}</div>
+                      <div className="prep-summary-value">{rowTotal(platter.id)}</div>
+                      {picks.length > 0 && (
+                        <div className="prep-summary-split prep-summary-split--stacked">
+                          {picks.map((item) => (
+                            <span key={item.id}>
+                              {item.name} <strong>{rowTotal(platterPickKey(platter.id, item.id))}</strong>
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
 
               <div className="wizard-actions-bottom">
@@ -1443,8 +1617,10 @@ const WeekendPrepPlanner: React.FC = () => {
                         { key: 'pulledPork', icon: '🍖', colorClass: 'pork', requiredNoun: 'shredded pork', fallbackBuy: 'pork' },
                         { key: 'ribs', icon: '🍗', colorClass: 'pork', requiredNoun: 'ribs', fallbackBuy: 'ribs' },
                         { key: 'porkBelly', icon: '🥓', colorClass: 'pork', requiredNoun: 'pork belly', fallbackBuy: 'pork belly' },
-                        { key: 'jackfruit', icon: '🍈', colorClass: 'jackfruit', requiredNoun: 'pulled jackfruit', fallbackBuy: 'jackfruit' },
-                        { key: 'beefRibs', icon: '🐄', colorClass: 'beef', requiredNoun: 'beef ribs', fallbackBuy: 'beef ribs' },
+                        { key: 'wings', icon: '🍗', colorClass: 'chicken', requiredNoun: 'smoked wings', fallbackBuy: 'chicken wings' },
+                        { key: 'cajunLegs', icon: '🌶️', colorClass: 'chicken', requiredNoun: 'Cajun leg quarters', fallbackBuy: 'chicken legs' },
+                        { key: 'cajunBirds', icon: '🌶️', colorClass: 'chicken', requiredNoun: 'Cajun chicken', fallbackBuy: 'whole chicken' },
+                        { key: 'brisket', icon: '🐄', colorClass: 'beef', requiredNoun: 'sliced brisket', fallbackBuy: 'brisket' },
                       ] as const;
                       // A cut nobody ordered is a full-size tile of zeros — list
                       // those on one line instead so the grid is only what to buy.

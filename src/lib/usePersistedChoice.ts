@@ -27,14 +27,22 @@ import { useCallback, useState } from 'react';
 //   3. It stores a single short string, never a draft or anything typed.
 //      Unsaved work has its own machinery (see reelDraft.ts and the smoking
 //      session draft); this is only ever a breadcrumb of where you were.
+//
+// 'session' storage remembers for the life of the tab rather than forever:
+// it survives a reload and a phone restoring a discarded tab, but a freshly
+// opened app starts on `fallback`. That is what the sidebar wants now that
+// the Overview is the screen the day starts on.
+const storageFor = (kind: 'local' | 'session') => (kind === 'session' ? window.sessionStorage : window.localStorage);
+
 export function usePersistedChoice<T extends string>(
   key: string,
   fallback: T,
   known: readonly T[],
+  storage: 'local' | 'session' = 'local',
 ): [T, (next: T) => void] {
   const [choice, setChoice] = useState<T>(() => {
     try {
-      const stored = window.localStorage.getItem(key);
+      const stored = storageFor(storage).getItem(key);
       // The cast is checked on the very next line — `known` is the source of
       // truth for what a valid choice is, not the type.
       if (stored && known.includes(stored as T)) return stored as T;
@@ -48,12 +56,12 @@ export function usePersistedChoice<T extends string>(
     (next: T) => {
       setChoice(next);
       try {
-        window.localStorage.setItem(key, next);
+        storageFor(storage).setItem(key, next);
       } catch {
         // Not being able to remember it is not a reason to refuse to go there.
       }
     },
-    [key],
+    [key, storage],
   );
 
   return [choice, choose];

@@ -572,7 +572,15 @@ CREATE TABLE scheduled_task (
     -- rather than rowid order: dragging a task up the list has to survive,
     -- and rowid is fixed at insert. Ties (two rows sharing a rank, which a
     -- hand-written INSERT can produce) fall back to rowid.
-    sort_order        INTEGER NOT NULL DEFAULT 0
+    sort_order        INTEGER NOT NULL DEFAULT 0,
+    -- 1 makes the task's own nudge an alarm (the Maapu clip, looping until
+    -- Stop) rather than an ordinary notification. Only means anything on a
+    -- task with a clock time -- see server/sprint/taskReminders.js.
+    alarm             INTEGER NOT NULL DEFAULT 0 CHECK (alarm IN (0, 1)),
+    -- The standing "Recurring: …" sub-issue on the sprint board (knowledge-base
+    -- repo) this task sits under. Rows with the same task on several days share
+    -- one issue. NULL when it has none.
+    github_issue      INTEGER
 );
 
 CREATE TABLE side_prep_status (
@@ -936,5 +944,55 @@ CREATE TABLE shared_note (
     -- put it under — see server/integrations/noteIssues.js. NULL until filed,
     -- which is also how a failed filing gets retried.
     github_issue    INTEGER,
-    github_category INTEGER
+    github_category INTEGER,
+    -- The calendar day it is for, as YYYY-MM-DD, when it is for one — "call
+    -- the gas vendor tomorrow", "order brisket on the 15th". NULL for the
+    -- ordinary note, which is for whenever. A local date rather than a
+    -- timestamp, because "Friday" in the kitchen is a day in Bengaluru with no
+    -- time attached; Daily View lists a dated note under its day.
+    due_date        TEXT,
+    -- Set when the note was filed by a push alert rather than typed — e.g.
+    -- "whatsapp:42" or "delivery:1187". See server/core/alertTasks.js. It is
+    -- what stops a second alert about the same thing adding a second to-do
+    -- while the first is still open. NULL for every note a person wrote.
+    source          TEXT
+);
+
+-- The Idea Board under Overview — every "what if we…" worth keeping, from a
+-- new rub to a pop-up at a brewery. See server/overview/ideas.js.
+CREATE TABLE idea (
+    -- Insertion order, like shared_note, so "newest" never ties.
+    idea_id    INTEGER PRIMARY KEY,
+    -- The idea in a line. Required: a card with no headline is a stray tap.
+    title      TEXT NOT NULL CHECK (trim(title) <> ''),
+    -- The longer version, when there is one.
+    details    TEXT,
+    -- Which part of the business it is for. A short fixed list, kept in
+    -- server/overview/ideas.js, so the board can colour and filter by it.
+    category   TEXT NOT NULL DEFAULT 'wild',
+    -- Where it has got to: spark (just thought of), smoking (being worked
+    -- on), served (done), parked (not now).
+    stage      TEXT NOT NULL DEFAULT 'spark',
+    -- Free-text name, the same claim the notes bubble sends.
+    author     TEXT,
+    -- 🔥 taps. A counter, bumped in SQL, so two phones tapping at once both count.
+    fire       INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT
+);
+
+-- The Idea Board's categories — rows rather than a list in code, so a new
+-- one ("Supper club", "New menu") is a tap on the board. Seeded with the
+-- original five by migrations.js; 'wild' (Wild card) is the one that cannot
+-- be deleted, and is where a deleted category's ideas go.
+CREATE TABLE idea_category (
+    -- A slug of the first label, e.g. 'supper-club'. What idea.category holds.
+    category_id TEXT PRIMARY KEY,
+    label       TEXT NOT NULL CHECK (trim(label) <> ''),
+    emoji       TEXT,
+    -- A name from the board's paper palette (peach, pink, blue, …), not a
+    -- hex, so every category stays readable on its sticky note.
+    color       TEXT NOT NULL DEFAULT 'lilac',
+    sort_order  INTEGER NOT NULL DEFAULT 0,
+    created_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );

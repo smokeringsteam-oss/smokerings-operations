@@ -38,6 +38,10 @@ const WhatsappAlarm = ({ onOpenInbox }: Props) => {
 
   if (!alarm.active) return null;
 
+  // A task alarm (a posting reminder at its time) has nothing to open but the
+  // task list it came from, which is a tab away — Stop is all it needs.
+  const isTask = alarm.kind === 'task';
+
   const openInbox = () => {
     // Opening the conversation IS dealing with it, so the noise stops. Leaving
     // it running while you read the message would just mean hunting for the
@@ -50,10 +54,10 @@ const WhatsappAlarm = ({ onOpenInbox }: Props) => {
     <div className="wa-alarm" role="alert" aria-live="assertive">
       <div className="wa-alarm-body">
         <span className="wa-alarm-icon" aria-hidden="true">
-          💬
+          {isTask ? '⏰' : '💬'}
         </span>
         <div className="wa-alarm-text">
-          <strong>{alarm.customer || 'New WhatsApp message'}</strong>
+          <strong>{alarm.customer || (isTask ? 'Task reminder' : 'New WhatsApp message')}</strong>
           {alarm.body ? <span className="wa-alarm-preview">{alarm.body}</span> : null}
           {alarm.blocked ? <span className="wa-alarm-blocked">{alarm.blocked}</span> : null}
         </div>
@@ -66,9 +70,11 @@ const WhatsappAlarm = ({ onOpenInbox }: Props) => {
             🔊 Sound it
           </button>
         ) : null}
-        <button type="button" className="wa-alarm-btn" onClick={openInbox}>
-          Open inbox
-        </button>
+        {isTask ? null : (
+          <button type="button" className="wa-alarm-btn" onClick={openInbox}>
+            Open inbox
+          </button>
+        )}
         <button type="button" className="wa-alarm-btn wa-alarm-btn-stop" onClick={stop}>
           Stop
         </button>
