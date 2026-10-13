@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { formatDay, todayIso } from '../lib/localDay';
 import { readNotesAuthor, useSharedNotes, writeNotesAuthor, type SharedNote } from '../lib/useSharedNotes';
 import { useTodayTasks, type TodayTask } from '../lib/useTodayTasks';
+import { SPRINT_DONE, useTodaySprint, type SprintItem } from '../lib/useTodaySprint';
 import {
   createScheduleTask,
   fetchRecurringSchedule,
@@ -121,7 +123,8 @@ function highlight(text: string, term: string): ReactNode {
 // renderer tells them apart.
 type BoardItem =
   | { kind: 'note'; key: string; note: SharedNote }
-  | { kind: 'task'; key: string; task: TodayTask };
+  | { kind: 'task'; key: string; task: TodayTask }
+  | { kind: 'sprint'; key: string; item: SprintItem };
 
 type Group = { key: string; label: string; items: BoardItem[] };
 
@@ -134,11 +137,11 @@ type Group = { key: string; label: string; items: BoardItem[] };
 // Today, ahead of the notes typed since, and Today is created for them on a
 // day nobody has written anything.
 //
-// Ticked rows stay where they are rather than sinking to the bottom. A board
-// this size is read as a list of the last few days, and an item that jumped
-// somewhere else the instant you ticked it would take the thing you had just
-// been looking at out from under you.
-function buildGroups(notes: SharedNote[], tasks: TodayTask[]): Group[] {
+// Only pending rows reach here, plus whatever was ticked since the panel
+// opened — those stay where they are rather than sinking or vanishing, since
+// an item that moved the instant you ticked it would take the thing you had
+// just been looking at out from under you.
+function buildGroups(notes: SharedNote[], tasks: TodayTask[], sprint: SprintItem[]): Group[] {
   const groups: Group[] = [];
   for (const note of notes) {
     const label = dayLabel(note.createdAt);
@@ -147,8 +150,13 @@ function buildGroups(notes: SharedNote[], tasks: TodayTask[]): Group[] {
     if (last && last.label === label) last.items.push(item);
     else groups.push({ key: `${label}-note-${note.id}`, label, items: [item] });
   }
-  if (tasks.length) {
-    const items: BoardItem[] = tasks.map((task) => ({ kind: 'task', key: `task-${task.id}`, task }));
+  if (tasks.length || sprint.length) {
+    // This week's sprint items for today lead, then the cadence: the sprint is
+    // the week's priorities, the cadence is the routine around them.
+    const items: BoardItem[] = [
+      ...sprint.map((item): BoardItem => ({ kind: 'sprint', key: `sprint-${item.id}`, item })),
+      ...tasks.map((task): BoardItem => ({ kind: 'task', key: `task-${task.id}`, task })),
+    ];
     const today = groups.find((group) => group.label === 'Today');
     if (today) today.items.unshift(...items);
     else groups.push({ key: 'today-tasks', label: 'Today', items });
@@ -217,6 +225,16 @@ const NotesBubble = () => {
   // Same, for today's tasks. A separate set because the ids are strings from a
   // different table and a note and a task could otherwise collide.
   const [tickingTask, setTickingTask] = useState<string[]>([]);
+  // Rows ticked since the panel opened. The board shows only what is still to
+  // do, but a row that vanished the instant its box was tapped would leave a
+  // mis-tap on a phone with no way back — so these stay on screen, ticked and
+  // untickable, until the panel closes.
+  const [keptNotes, setKeptNotes] = useState<SharedNote[]>([]);
+  const [keptTasks, setKeptTasks] = useState<string[]>([]);
+  // Sprint items ticked since opening, with the status each had before — so
+  // unticking puts it back in the column it came from rather than guessing.
+  const [keptSprint, setKeptSprint] = useState<Record<string, string | null>>({});
+  const [tickingSprint, setTickingSprint] = useState<string[]>([]);
   // Whether what is being typed joins the weekly cadence instead of being a
   // one-off note. A tick box on the composer rather than a pair of mode tabs
   // above it: there is one box, one Add button and one thing being written
@@ -226,6 +244,10 @@ const NotesBubble = () => {
   // ended up filed as a standing job, and unpicking that means a trip to
   // Daily View.
   const [repeatWeekly, setRepeatWeekly] = useState(false);
+  // The day a one-off is for, or '' for whenever. Cleared after each post for
+  // the same reason the repeat box is not remembered: a date left set would
+  // quietly file the next note under it.
+  const [noteDue, setNoteDue] = useState('');
   const [taskTime, setTaskTime] = useState('');
   const [taskWho, setTaskWho] = useState('');
   // Marketing by default. That is what actually gets added on the fly here —
@@ -253,6 +275,7 @@ const NotesBubble = () => {
   // meantime.
   const localWeekday = useMemo(() => new Date().toLocaleDateString('en-US', { weekday: 'long' }), []);
   const today = weekday || localWeekday;
+  const { items: sprintItems, error: sprintError, setStatus: setSprintStatus } = useTodaySprint(open, today);
 
   // Today's jobs, narrowed by whatever the board is narrowed by. The search
   // and the name chips are filters on the list, and the list now has tasks in
@@ -266,13 +289,38 @@ const NotesBubble = () => {
     const needle = query.trim().toLowerCase();
     const who = filteredAuthor.trim().toLowerCase();
     return tasks.filter((task) => {
+      if (task.done && !keptTasks.includes(task.id)) return false;
       if (who && task.assignedTo.trim().toLowerCase() !== who) return false;
       if (!needle) return true;
       return `${task.label} ${task.assignedTo} ${task.category}`.toLowerCase().includes(needle);
     });
-  }, [tasks, query, filteredAuthor]);
+  }, [tasks, query, filteredAuthor, keptTasks]);
 
-  const groups = useMemo(() => buildGroups(notes, visibleTasks), [notes, visibleTasks]);
+  // The server sends only open notes; the ones ticked since opening are put
+  // back in their place by id, so the list does not shift under the tap.
+  const shownNotes = useMemo(() => {
+    const missing = keptNotes.filter((kept) => !notes.some((note) => note.id === kept.id));
+    return missing.length ? [...notes, ...missing].sort((a, b) => a.id - b.id) : notes;
+  }, [notes, keptNotes]);
+
+  // Today's sprint items still open on the board, narrowed like the tasks. One
+  // marked Done on the board is gone here on the next fetch.
+  const visibleSprint = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    const who = filteredAuthor.trim().toLowerCase();
+    return sprintItems.filter((item) => {
+      if (item.status === SPRINT_DONE && !(item.id in keptSprint)) return false;
+      const names = [item.assignedTo, ...item.assignees].map((name) => (name || '').trim().toLowerCase());
+      if (who && !names.includes(who)) return false;
+      if (!needle) return true;
+      return `${item.title} ${names.join(' ')}`.toLowerCase().includes(needle);
+    });
+  }, [sprintItems, query, filteredAuthor, keptSprint]);
+
+  const groups = useMemo(
+    () => buildGroups(shownNotes, visibleTasks, visibleSprint),
+    [shownNotes, visibleTasks, visibleSprint],
+  );
   const newest = notes.length ? notes[notes.length - 1].id : 0;
 
   // One request per pause in typing rather than one per keystroke. 220ms is
@@ -302,8 +350,19 @@ const NotesBubble = () => {
       setRepeatWeekly(false);
       setTaskAdded('');
       setReassigningId(null);
+      // Ticked rows go once the panel does — next open is pending work only.
+      setKeptNotes([]);
+      setKeptTasks([]);
+      setKeptSprint({});
     }
   }, [open]);
+
+  // A new search or name is a new list; rows ticked under the old one have no
+  // business following it there.
+  useEffect(() => {
+    setKeptNotes([]);
+    setKeptTasks([]);
+  }, [query, filteredAuthor]);
 
   // The categories, the first time the repeat box is ticked. Falls back to
   // whatever today's own rows are already tagged with, so the picker is never
@@ -465,11 +524,12 @@ const NotesBubble = () => {
     setPosting(true);
     setActionError(null);
     try {
-      await addNote(body, author);
+      await addNote(body, author, noteDue);
       // Cleared only after the server has it. A failed post that had already
       // wiped the box would lose what you typed, which on a phone in a kitchen
       // is the one thing this must never do.
       setDraft('');
+      setNoteDue('');
     } catch (err) {
       setActionError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -481,6 +541,10 @@ const NotesBubble = () => {
     if (ticking.includes(note.id)) return;
     setActionError(null);
     setTicking((ids) => [...ids, note.id]);
+    // Held either way: an untick is not back in the server's list until the
+    // reload lands, and the row should not blink out in between.
+    const flipped = { ...note, done: !note.done, doneBy: note.done ? '' : author };
+    setKeptNotes((kept) => [...kept.filter((other) => other.id !== note.id), flipped]);
     try {
       await setDone(note.id, !note.done, author);
     } catch (err) {
@@ -504,20 +568,40 @@ const NotesBubble = () => {
     };
     authors.forEach(add);
     tasks.forEach((task) => add(task.assignedTo));
+    sprintItems.forEach((item) => add(item.assignedTo || item.assignees[0]));
     notes.forEach((note) => add(note.assignedTo));
     return Array.from(seen.values());
-  }, [authors, tasks, notes]);
+  }, [authors, tasks, notes, sprintItems]);
 
   const tickTask = async (id: string, done: boolean) => {
     if (tickingTask.includes(id)) return;
     setActionError(null);
     setTickingTask((ids) => [...ids, id]);
+    if (done) setKeptTasks((ids) => (ids.includes(id) ? ids : [...ids, id]));
     try {
       await setTaskDone(id, done);
     } catch (err) {
       setActionError(err instanceof Error ? err.message : String(err));
     } finally {
       setTickingTask((ids) => ids.filter((other) => other !== id));
+    }
+  };
+
+  // Ticking a sprint item moves it to Done on the board — the same write the
+  // board's own status dropdown makes. Unticking puts it back where it was.
+  const tickSprint = async (item: SprintItem) => {
+    if (tickingSprint.includes(item.id)) return;
+    setActionError(null);
+    const done = item.status === SPRINT_DONE;
+    const next = done ? keptSprint[item.id] || 'In Progress' : SPRINT_DONE;
+    if (!done) setKeptSprint((kept) => ({ ...kept, [item.id]: item.status }));
+    setTickingSprint((ids) => [...ids, item.id]);
+    try {
+      await setSprintStatus(item, next);
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setTickingSprint((ids) => ids.filter((other) => other !== item.id));
     }
   };
 
@@ -672,11 +756,12 @@ const NotesBubble = () => {
   // One count for the whole board, now that it is one board. Two numbers in
   // the header — one for notes, one for the cadence — would put back in the
   // heading the split the list itself no longer makes.
-  const openTotal = openCount + tasksOpen;
-  const doneTotal = doneCount + tasksDone;
+  const sprintDone = sprintItems.filter((item) => item.status === SPRINT_DONE).length;
+  const openTotal = openCount + tasksOpen + sprintItems.length - sprintDone;
+  const doneTotal = doneCount + tasksDone + sprintDone;
 
   const summary =
-    total + tasks.length === 0
+    total + tasks.length + sprintItems.length === 0
       ? 'Nothing yet'
       : [openTotal > 0 ? `${openTotal} to do` : null, doneTotal > 0 ? `${doneTotal} done` : null]
           .filter(Boolean)
@@ -684,10 +769,10 @@ const NotesBubble = () => {
 
   // Nothing to show at all, as against nothing that matches. The two need
   // different words and only one of them means the board is empty.
-  const boardEmpty = notes.length === 0 && visibleTasks.length === 0;
+  const boardEmpty = shownNotes.length === 0 && visibleTasks.length === 0 && visibleSprint.length === 0;
   // How many rows a filter found across the whole board: the server's count
   // for notes plus today's matching jobs, which are filtered here.
-  const matchedTotal = matched + visibleTasks.length;
+  const matchedTotal = matched + visibleTasks.length + visibleSprint.length;
 
   // A note, rendered as a row of the board. The same card the scheduled jobs
   // above use, so a column of the two reads as one list of things to do.
@@ -718,6 +803,17 @@ const NotesBubble = () => {
             label: note.body.slice(0, 60),
             write: (name) => assignNote(note.id, name),
           })}
+          {/* The day it is for, when it is for one — and in Daily View
+              under that day. Ember while still open, so a dated job stands
+              out from the remarks around it. */}
+          {note.dueDate ? (
+            <span
+              className={`notes-item-due${!note.done && note.dueDate < todayIso() ? ' is-overdue' : ''}`}
+              title="Due date — listed under this day in Daily View"
+            >
+              📅 {formatDay(note.dueDate)}
+            </span>
+          ) : null}
           <span className="notes-item-time">{formatWhen(note.createdAt)}</span>
           {/* Who ticked it. The point of a shared board is that
               "already handled" is only useful if you can tell
@@ -815,6 +911,39 @@ const NotesBubble = () => {
     </article>
   );
 
+  // A sprint board item, as a row of the board. Same card and tick box; the
+  // "Sprint" chip and the issue link say where it lives. Reassigning and
+  // deleting stay on the sprint board.
+  const renderSprint = (item: SprintItem, key: string) => {
+    const done = item.status === SPRINT_DONE;
+    return (
+      <article key={key} className={`notes-item is-task${done ? ' is-done' : ''}`}>
+        <input
+          type="checkbox"
+          className="notes-check"
+          checked={done}
+          disabled={tickingSprint.includes(item.id)}
+          aria-label={`Mark "${item.title}" as ${done ? 'not done' : 'done'}`}
+          onChange={() => void tickSprint(item)}
+        />
+        <div className="notes-item-main">
+          <p className="notes-item-body">{highlight(item.title, query)}</p>
+          <div className="notes-item-meta">
+            <span className="notes-task-tag" title="On the sprint board — ticking it moves it to Done there">
+              Sprint
+            </span>
+            <span className="notes-item-author">{item.assignedTo || item.assignees[0] || 'Unassigned'}</span>
+            {item.url ? (
+              <a className="notes-item-time" href={item.url} target="_blank" rel="noreferrer">
+                #{item.number} ↗
+              </a>
+            ) : null}
+          </div>
+        </div>
+      </article>
+    );
+  };
+
   return (
     <div className="notes-bubble-root">
       <button
@@ -861,11 +990,12 @@ const NotesBubble = () => {
           {error ? <p className="notes-alert">Could not refresh — {error}</p> : null}
           {actionError ? <p className="notes-alert">{actionError}</p> : null}
           {tasksError ? <p className="notes-alert">Could not load today's tasks — {tasksError}</p> : null}
+          {sprintError ? <p className="notes-alert">Could not load the sprint board — {sprintError}</p> : null}
 
           {/* Only once there is something to search. On an empty board the row
               would be a control that cannot do anything, sitting where the
               "nothing here yet" line should be. */}
-          {total > 0 || tasks.length > 0 ? (
+          {total > 0 || tasks.length > 0 || sprintItems.length > 0 ? (
             <div className="notes-search">
               <span className="notes-search-icon" aria-hidden="true">
                 🔍
@@ -927,7 +1057,8 @@ const NotesBubble = () => {
             {loading ? <p className="notes-empty">Loading…</p> : null}
             {!loading && boardEmpty && !filtering ? (
               <p className="notes-empty">
-                Nothing on the board. Type below and it becomes a to-do with a tick box, on every phone and tablet
+                {openTotal === 0 && doneTotal > 0 ? 'All done — nothing pending. ' : 'Nothing on the board. '}
+                Type below and it becomes a to-do with a tick box, on every phone and tablet
                 signed in to the dashboard.
               </p>
             ) : null}
@@ -945,7 +1076,7 @@ const NotesBubble = () => {
             ) : null}
             {truncated && !filtering ? (
               <p className="notes-truncated">
-                Showing the most recent {notes.length} of {total}.
+                Showing the most recent {notes.length} of {matched} pending.
               </p>
             ) : null}
 
@@ -953,7 +1084,11 @@ const NotesBubble = () => {
               <section key={group.key} className="notes-day">
                 <h3 className="notes-day-label">{group.label}</h3>
                 {group.items.map((item) =>
-                  item.kind === 'task' ? renderTask(item.task, item.key) : renderNote(item.note, item.key),
+                  item.kind === 'task'
+                    ? renderTask(item.task, item.key)
+                    : item.kind === 'sprint'
+                      ? renderSprint(item.item, item.key)
+                      : renderNote(item.note, item.key),
                 )}
               </section>
             ))}
@@ -1037,6 +1172,27 @@ const NotesBubble = () => {
               />
               <span>Repeats every {today}</span>
             </label>
+
+            {/* A one-off can still be for a particular day — "call the
+                vendor Friday" — which lists it under that day in Daily View.
+                Blank is the ordinary note, for whenever. */}
+            {repeatWeekly ? null : (
+              <div className="notes-task-fields">
+                <input
+                  type="date"
+                  value={noteDue}
+                  min={todayIso()}
+                  aria-label="Due on, optional"
+                  title="Due on — leave blank for whenever"
+                  onChange={(event) => setNoteDue(event.target.value)}
+                />
+                {noteDue ? (
+                  <button type="button" className="notes-confirm-no" onClick={() => setNoteDue('')}>
+                    No date
+                  </button>
+                ) : null}
+              </div>
+            )}
 
             {repeatWeekly ? (
               <>

@@ -136,6 +136,20 @@ describe('dueReminders', () => {
     expect(nudge.body).not.toContain('Brine pork');
   });
 
+  it('leaves an ordinary nudge quiet', () => {
+    const nudge = reminders.dueReminders(at('15:00'))[0].payload;
+    expect(nudge.alarm).toBeUndefined();
+    expect(nudge.tag).toBe('task-WS-02');
+  });
+
+  // The posting reminders: same nudge, but it sounds the alarm. The tag has to
+  // carry "whatsapp-", which is what puts it on the Android app's Alarms channel.
+  it('sounds the alarm for a task flagged to', () => {
+    repo.update('scheduled_task', { task_id: 'WS-02' }, { alarm: 1 });
+    const nudge = reminders.dueReminders(at('15:00'))[0].payload;
+    expect(nudge).toMatchObject({ title: 'Brine pork', alarm: 'task', taskId: 'WS-02', tag: 'whatsapp-task-WS-02' });
+  });
+
   it('says so when a nudge is the last thing left', () => {
     const { weekKey } = reminders.getTodayPending(at('06:00'));
     ['WS-01', 'WS-03'].forEach((task_id) =>

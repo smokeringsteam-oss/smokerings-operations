@@ -843,10 +843,11 @@ function lossCategoryFor(row) {
   const byId = LOSS_CATEGORY_BY_MATERIAL_ID[row.source_material_id];
   if (byId) return byId;
   const name = (row.source_material_name || '').toLowerCase();
-  // Checked before the generic 'rib' match below so "beef ribs" doesn't
-  // land in the pork ribs bucket.
-  if (name.includes('beef')) return 'beefRibs';
-  if (name.includes('jackfruit')) return 'jackfruit';
+  // Checked before the generic 'rib' and 'chicken' matches below so "beef
+  // ribs" doesn't land in the pork ribs bucket, nor "chicken wings" in
+  // pulled chicken's.
+  if (name.includes('brisket') || name.includes('beef')) return 'brisket';
+  if (name.includes('wing')) return 'wings';
   if (name.includes('belly')) return 'porkBelly';
   if (name.includes('rib')) return 'ribs';
   if (name.includes('shoulder')) return 'pulledPork';

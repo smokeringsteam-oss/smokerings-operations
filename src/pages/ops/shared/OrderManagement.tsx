@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   BulkStatusBar,
+  effectiveStatus,
   FulfilmentBadge,
   FulfilmentControl,
   useOrderFulfilment,
@@ -71,6 +72,12 @@ const reviveNotesCache = (stored: unknown): NotesCache | undefined =>
 
 // "10:42 AM" today, "Sat 10:42 AM" otherwise — enough to tell a board pulled
 // this morning from one left over from yesterday.
+// Which orders sit in which group — what decides whether a re-read can go
+// straight onto the screen (same shape, only stages or notes moved) or has to
+// wait behind the "new orders" banner.
+const boardShape = (data: PackingResponse): string =>
+  data.groups.map((g) => `${g.id}:${g.orders.map((o) => o.orderId).join(',')}`).join('|');
+
 const formatFetchedAt = (at: number): string => {
   const d = new Date(at);
   const sameDay = d.toDateString() === new Date().toDateString();
@@ -350,6 +357,27 @@ const splitItemName = (name: string): { code: string; label: string } => {
   return match ? { code: match[1], label: match[2] } : { code: '', label: name };
 };
 
+// Once the rider has the box it is off the kitchen's hands, so the board
+// tucks it away: picked-up orders leave the main view and are counted in the
+// strip above it instead ("🛵 2 on the way · ✅ 1 delivered · ⏳ 4 pending").
+// Tapping a count opens just those cards; the × on top folds them away again.
+// An order whose last save failed stays in view whatever its stage, so the
+// error isn't hidden along with the card.
+type OrderBucket = 'pending' | 'on_the_way' | 'delivered';
+
+const bucketOf = (order: PackOrder, status: PackingStatus | undefined): OrderBucket => {
+  const stage = effectiveStatus(order, status);
+  if (stage === 'delivered') return 'delivered';
+  if (stage === 'out_for_delivery') return 'on_the_way';
+  return 'pending';
+};
+
+const BUCKETS: { key: OrderBucket; emoji: string; label: string }[] = [
+  { key: 'pending', emoji: '⏳', label: 'pending' },
+  { key: 'on_the_way', emoji: '🛵', label: 'on the way' },
+  { key: 'delivered', emoji: '✅', label: 'delivered' },
+];
+
 const OrdersBoard: React.FC<OrdersBoardProps> = ({
   orders,
   sortBy,
@@ -364,15 +392,59 @@ const OrdersBoard: React.FC<OrdersBoardProps> = ({
   onBulkApply,
   onCheckDelivery,
 }) => {
+  const [view, setView] = useState<OrderBucket>('pending');
   const sorted = useMemo(() => sortOrders(orders, sortBy, timePreferences), [orders, sortBy, timePreferences]);
+  // Every render, not memoised: an order's stage can move without the orders
+  // array itself changing identity.
+  const bucketed: Record<OrderBucket, PackOrder[]> = { pending: [], on_the_way: [], delivered: [] };
+  sorted.forEach((order) => {
+    const key = String(order.orderId);
+    bucketed[errors[key] ? 'pending' : bucketOf(order, statuses[key])].push(order);
+  });
+
   if (orders.length === 0) return <p className="pack-slot-empty">Nothing for this slot.</p>;
+
+  const shown = bucketed[view];
+  const viewMeta = BUCKETS.find((b) => b.key === view)!;
 
   return (
     <>
       <BulkStatusBar orders={orders} statuses={statuses} busy={isBulkBusy} onApply={onBulkApply} />
 
+      <div className="pack-bucket-strip" role="group" aria-label="Orders by where they are">
+        {BUCKETS.map((b) => (
+          <button
+            key={b.key}
+            type="button"
+            className={`pack-bucket-btn pack-bucket-${b.key}${view === b.key ? ' active' : ''}`}
+            aria-pressed={view === b.key}
+            disabled={b.key !== 'pending' && bucketed[b.key].length === 0}
+            onClick={() => setView(view === b.key ? 'pending' : b.key)}
+          >
+            {b.emoji} {bucketed[b.key].length} {b.label}
+          </button>
+        ))}
+      </div>
+
+      {view !== 'pending' && (
+        <div className="pack-bucket-head">
+          <span>
+            {viewMeta.emoji} {shown.length} {viewMeta.label}
+          </span>
+          <button type="button" className="pack-bucket-close" aria-label="Close" onClick={() => setView('pending')}>
+            ✕
+          </button>
+        </div>
+      )}
+
+      {shown.length === 0 && (
+        <p className="pack-slot-empty">
+          {view === 'pending' ? '🎉 Every order in this slot has left the kitchen.' : `Nothing ${viewMeta.label}.`}
+        </p>
+      )}
+
       <div className="pack-order-grid">
-        {sorted.map((order, index) => {
+        {shown.map((order, index) => {
           const key = String(order.orderId);
           return (
             <div key={order.orderId} className="pack-order-card">
@@ -520,11 +592,55 @@ const OrderManagement: React.FC<{ channel?: PackChannel }> = ({ channel = 'B2C' 
     (stored) => (ORDER_SORTS.includes(stored as OrderSort) ? (stored as OrderSort) : undefined),
   );
 
-  const handleFetch = async () => {
-    if (!odooFrom || !odooTo || isFetching) return;
+  // A board Odoo has moved on from in a way that would reshuffle the screen —
+  // orders added or dropped — waiting for the packer to tap the banner. Held
+  // rather than applied because the background re-read lands seconds after
+  // the board draws, and swapping cards under a thumb mid-scroll is exactly
+  // the "it keeps reloading" complaint. Same orders with a new Odoo stage go
+  // straight in: nothing moves, the badge just changes.
+  const [pendingBoard, setPendingBoard] = useState<{ rangeKey: string; data: PackingResponse } | null>(null);
+  const pending = pendingBoard && pendingBoard.rangeKey === rangeKey ? pendingBoard : null;
+  const newOrderCount = useMemo(() => {
+    if (!pending || !data) return 0;
+    const seen = new Set(data.groups.flatMap((g) => g.orders.map((o) => o.orderId)));
+    return pending.data.groups.flatMap((g) => g.orders).filter((o) => !seen.has(o.orderId)).length;
+  }, [pending, data]);
+
+  const applyPending = () => {
+    if (!pending) return;
+    setData(pending.data, pending.rangeKey);
+    setPendingBoard(null);
+    locatedRange.current = '';
+  };
+
+  // A fetch that was not asked for — the board opening, or the app coming back
+  // to the front — goes through here instead of straight onto the screen.
+  const applyQuietly = (next: PackingResponse, forRange: string) => {
+    const shown = boardCacheRef.current;
+    if (!shown || shown.rangeKey !== forRange || boardShape(shown.data) === boardShape(next)) {
+      setData(next, forRange);
+      setPendingBoard((current) => (current?.rangeKey === forRange ? null : current));
+      return;
+    }
+    setPendingBoard({ rangeKey: forRange, data: next });
+  };
+  const boardCacheRef = useRef(boardCache);
+  boardCacheRef.current = boardCache;
+
+  const fetchingRef = useRef(false);
+  const lastCheckedAt = useRef(0);
+  const handleFetch = async ({ quiet = false }: { quiet?: boolean } = {}) => {
+    if (!odooFrom || !odooTo || fetchingRef.current) return;
     const forRange = rangeKey;
-    setIsFetching(true);
-    setError('');
+    fetchingRef.current = true;
+    lastCheckedAt.current = Date.now();
+    // A quiet check keeps the button and the error line still: it is not
+    // something anyone pressed, and a flicker on every return to the app is
+    // what made the board feel like it never stopped loading.
+    if (!quiet) {
+      setIsFetching(true);
+      setError('');
+    }
     try {
       const resp = await fetch(
         `/api/odoo/order-packing?from=${odooFrom}&to=${odooTo}&channel=${channel.toLowerCase()}`,
@@ -536,14 +652,20 @@ const OrderManagement: React.FC<{ channel?: PackChannel }> = ({ channel = 'B2C' 
         throw new Error('Got an empty response from the server. Is the backend running (npm run start-server)? Try again.');
       }
       if (!resp.ok) throw new Error(json.error || 'Odoo request failed.');
+      if (quiet) {
+        applyQuietly(json, forRange);
+        return;
+      }
       setData(json, forRange);
+      setPendingBoard(null);
       // A manual refresh re-measures anything new, which the locate pass
       // otherwise runs only once per range.
       locatedRange.current = '';
     } catch (err) {
-      setError(String((err as Error).message || err));
+      if (!quiet) setError(String((err as Error).message || err));
     } finally {
-      setIsFetching(false);
+      fetchingRef.current = false;
+      if (!quiet) setIsFetching(false);
     }
   };
 
@@ -561,14 +683,83 @@ const OrderManagement: React.FC<{ channel?: PackChannel }> = ({ channel = 'B2C' 
   // Status off THIS fetch (orderFulfilment.tsx effectiveStatus), and
   // /api/order-packing/status carries no Odoo value of its own, so a reopened
   // board went on showing whatever Odoo said the last time Refresh was pressed.
+  //
+  // With a stored board on screen that re-read is quiet (see applyQuietly):
+  // the same orders update in place, new ones wait behind a banner.
   const autoFetchedRange = useRef('');
   useEffect(() => {
     if (!odooFrom || !odooTo) return;
     if (autoFetchedRange.current === rangeKey) return;
     autoFetchedRange.current = rangeKey;
-    void handleFetch();
+    void handleFetch({ quiet: data != null });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rangeKey]);
+
+  // Coming back to the app without the page reloading (switching to WhatsApp
+  // and back) checks Odoo the same quiet way, at most once a minute.
+  const handleFetchRef = useRef(handleFetch);
+  handleFetchRef.current = handleFetch;
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState !== 'visible') return;
+      if (Date.now() - lastCheckedAt.current < 60_000) return;
+      void handleFetchRef.current({ quiet: true });
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
+  }, []);
+
+  // Where you were on the board, put back when the page comes back. On a
+  // phone the OS throws the backgrounded page away and reopening it starts at
+  // the top, which on a long Saturday board means scrolling back to the order
+  // you were packing. Kept for half an hour — long enough to step away, short
+  // enough that tomorrow's board does not open halfway down.
+  const scrollKey = `smokerings.orderBoard.${channel}.scroll`;
+  const scrollRestored = useRef(false);
+  useEffect(() => {
+    if (scrollRestored.current || !data) return;
+    scrollRestored.current = true;
+    try {
+      const saved = JSON.parse(window.localStorage.getItem(scrollKey) || 'null') as {
+        y?: number;
+        at?: number;
+        rangeKey?: string;
+      } | null;
+      if (
+        saved &&
+        typeof saved.y === 'number' &&
+        saved.rangeKey === rangeKey &&
+        Date.now() - (saved.at || 0) < 30 * 60_000
+      ) {
+        const y = saved.y;
+        requestAnimationFrame(() => window.scrollTo(0, y));
+      }
+    } catch {
+      // Nothing stored, or nothing readable — the top of the board it is.
+    }
+    // Only ever once, on the first draw with a board in it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data]);
+
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const save = () => {
+      timer = null;
+      try {
+        window.localStorage.setItem(scrollKey, JSON.stringify({ y: window.scrollY, at: Date.now(), rangeKey }));
+      } catch {
+        // A locked-down browser just forgets where you were.
+      }
+    };
+    const onScroll = () => {
+      if (!timer) timer = setTimeout(save, 250);
+    };
+    window.addEventListener('scroll', onScroll, { passive: true });
+    return () => {
+      window.removeEventListener('scroll', onScroll);
+      if (timer) clearTimeout(timer);
+    };
+  }, [scrollKey, rangeKey]);
 
   const groups = useMemo<PackGroup[]>(() => data?.groups || [], [data]);
 
@@ -607,7 +798,9 @@ const OrderManagement: React.FC<{ channel?: PackChannel }> = ({ channel = 'B2C' 
         const json: PackingResponse & { error?: string; located?: { error?: string } } = await resp.json();
         if (!resp.ok) throw new Error(json.error || 'Could not work out delivery distances.');
         if (cancelled) return;
-        setData(json);
+        // The locate pass hands back a whole fresh board, so it can carry
+        // orders that arrived since — same rule as any other unasked re-read.
+        applyQuietly(json, key);
         if (json.located?.error) setLocateError(json.located.error);
       })
       .catch((err) => {
@@ -775,7 +968,7 @@ const OrderManagement: React.FC<{ channel?: PackChannel }> = ({ channel = 'B2C' 
               <button
                 type="button"
                 className="primary-button"
-                onClick={handleFetch}
+                onClick={() => handleFetch()}
                 disabled={!odooFrom || !odooTo || isFetching}
               >
                 {isFetching ? 'Fetching…' : 'Refresh orders'}
@@ -786,11 +979,21 @@ const OrderManagement: React.FC<{ channel?: PackChannel }> = ({ channel = 'B2C' 
             {hasResult && !error && (
               <p className="status-message">
                 Found {data!.ordersFound} order{data!.ordersFound === 1 ? '' : 's'} in that range
-                {boardCache?.fetchedAt ? ` · fetched ${formatFetchedAt(boardCache.fetchedAt)}` : ''}. Re-read from
-                Odoo every time this board opens; Refresh pulls again now.
+                {boardCache?.fetchedAt ? ` · fetched ${formatFetchedAt(boardCache.fetchedAt)}` : ''}. Checked
+                against Odoo whenever you come back to it; new orders wait for a tap.
               </p>
             )}
           </div>
+
+          {/* Outside the panel above so `position: sticky` has the whole
+              board to stick within, not just the date box. */}
+          {pending && (
+            <button type="button" className="pack-new-orders-banner" onClick={applyPending}>
+              {newOrderCount > 0
+                ? `🆕 ${newOrderCount} new order${newOrderCount === 1 ? '' : 's'} in — tap to refresh`
+                : '🔄 Orders changed in Odoo — tap to refresh'}
+            </button>
+          )}
 
           {data && data.unmatched.length > 0 && (
             <div className="prep-unmatched">
@@ -901,6 +1104,7 @@ const OrderManagement: React.FC<{ channel?: PackChannel }> = ({ channel = 'B2C' 
                 </div>
               </div>
               <OrdersBoard
+                key={activeGroup?.id || 'none'}
                 sortBy={sortBy}
                 onSaveTracking={fulfilment.saveTrackingLink}
                 orders={activeGroup?.orders || []}

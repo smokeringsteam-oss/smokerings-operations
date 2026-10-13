@@ -10,6 +10,7 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import DailyView from './DailyView';
+import { addDays, todayIso } from '../../lib/localDay';
 
 const monday = () => ({
   day: 'Monday',
@@ -27,10 +28,30 @@ const schedule = () => [monday(), { day: 'Tuesday', tasks: [] }];
 // per call so a test that mutates one response can't leak into the next.
 let calls: { url: string; method: string; body: unknown }[] = [];
 
+// Dated one-off notes, for the To-dos card. Relative to the day the suite runs.
+const note = (id: number, body: string, dueDate: string, done = false) => ({
+  id,
+  body,
+  dueDate,
+  done,
+  author: 'Sowmya',
+  assignedTo: '',
+  createdAt: '2026-10-01T09:00:00.000Z',
+  doneAt: null,
+  doneBy: '',
+});
+const datedNotes = () => [
+  note(1, 'Chase the gas refill', addDays(todayIso(), -2)),
+  note(2, 'Call the vendor back', todayIso()),
+  note(3, 'Order brisket', addDays(todayIso(), 12)),
+];
+
 const respond = (url: string) => {
   if (url.startsWith('/api/recurring-schedule/status')) return { weekState: {} };
   if (url.startsWith('/api/recurring-schedule')) return { schedule: schedule() };
   if (url === '/api/github/status') return { configured: false };
+  if (url.startsWith('/api/notes/dated')) return { notes: datedNotes() };
+  if (url.startsWith('/api/notes')) return { notes: [], total: 0, done: 0, open: 0, authors: [] };
   return {};
 };
 
@@ -144,14 +165,12 @@ test('a new task lands on the day on screen, assigned to whoever is filtered in'
   });
 });
 
-test('a task added under Marketing gets that category', async () => {
+test('a task added with the Marketing category is filed under it', async () => {
   await startEditing();
 
-  const field = screen.getByLabelText('New marketing task');
-  fireEvent.change(field, { target: { value: 'Story teaser' } });
-  // The marketing card's own Add, not the ops card's — the category comes from
-  // which card the row sits in, so pressing the wrong one proves nothing.
-  fireEvent.click(within(field.closest('.daily-view-add-row') as HTMLElement).getByRole('button', { name: /^Add$/ }));
+  fireEvent.change(screen.getByLabelText('New task'), { target: { value: 'Story teaser' } });
+  fireEvent.change(screen.getByLabelText('New task category'), { target: { value: 'Marketing' } });
+  fireEvent.click(screen.getByRole('button', { name: /^Add$/ }));
 
   await waitFor(() => expect(writes()).toHaveLength(1));
   expect(writes()[0]).toMatchObject({
@@ -208,4 +227,41 @@ test('ticking a task off is a week-only write, not a schedule change', async () 
     method: 'POST',
     body: { taskId: 'WS-02', done: true },
   });
+});
+
+test("today's to-dos include the overdue one still open, and the rest wait under Coming up", async () => {
+  render(<DailyView />);
+
+  expect(await screen.findByText('Call the vendor back')).toBeInTheDocument();
+  expect(screen.getByText('Chase the gas refill')).toBeInTheDocument();
+  expect(screen.getByText(/^Overdue · /)).toBeInTheDocument();
+  // Twelve days out is not today's job — it is listed, but under Coming up.
+  expect(screen.getByRole('heading', { name: 'Coming up' })).toBeInTheDocument();
+  expect(screen.getByText('Order brisket')).toBeInTheDocument();
+});
+
+test('a to-do added here is filed under the day picked for it', async () => {
+  render(<DailyView />);
+  await screen.findByText('Call the vendor back');
+
+  const due = addDays(todayIso(), 30);
+  fireEvent.change(screen.getByLabelText('New to-do'), { target: { value: 'Renew FSSAI licence' } });
+  fireEvent.change(screen.getByLabelText('Due on'), { target: { value: due } });
+  fireEvent.click(screen.getByRole('button', { name: 'Add' }));
+
+  await waitFor(() =>
+    expect(writes()).toContainEqual(
+      expect.objectContaining({ url: '/api/notes', method: 'POST', body: expect.objectContaining({ body: 'Renew FSSAI licence', dueDate: due }) }),
+    ),
+  );
+});
+
+test('a day asked for from outside (the mic) lands the list on that day', async () => {
+  const { rerender } = render(<DailyView />);
+  await screen.findByText('Call the vendor back');
+
+  rerender(<DailyView focus={{ date: addDays(todayIso(), 12), at: 1 }} />);
+
+  expect(await screen.findByLabelText('Show the list for')).toHaveValue(addDays(todayIso(), 12));
+  expect(screen.queryByText('Call the vendor back')).not.toBeInTheDocument();
 });

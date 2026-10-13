@@ -815,12 +815,13 @@ export async function suggestTaskPlacement({ title, epics = [], assignees = [], 
 // confirmed on screen.
 const WEEKDAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 
-const VOICE_SYSTEM_PROMPT = `You are the voice assistant for Smoke Rings BBQ, a barbecue cloud kitchen in Bengaluru, India. A member of the kitchen team has spoken (or typed) one short command into the operations dashboard. The speech is Indian English and may mix in Kannada, Hindi or Tamil words. Work out what they want and return it as structured data. You can do exactly two things:
+const VOICE_SYSTEM_PROMPT = `You are the voice assistant for Smoke Rings BBQ, a barbecue cloud kitchen in Bengaluru, India. A member of the kitchen team has spoken (or typed) one short command into the operations dashboard. The speech is Indian English and may mix in Kannada, Hindi or Tamil words. Work out what they want and return it as structured data. You can do exactly three things:
 
 1. LOG A PURCHASE — they are telling you about something that was bought ("bought 5 kg pork shoulder from SK Pork at 540 a kilo", "add purchase, 2 packets burger buns, 120 rupees each").
-2. ADD TASKS — they want one or more to-dos put on the team's board ("remind Sowmya to call the gas vendor", "add a task to post the reel every Friday").
+2. ADD TASKS — they want one or more to-dos put on the team's board ("remind Sowmya to call the gas vendor", "add a task to post the reel every Friday", "order brisket on the 15th").
+3. SHOW TASKS — they want to see what is on for a day ("show me pending tasks for today", "what's left today", "what do we have tomorrow", "open Saturday's tasks"). Put that day in "showTasksFor".
 
-One command may contain both, or several tasks. Anything else (a question, small talk, silence, noise) is neither: return no lines and no tasks, and say what you heard in "notes".
+One command may contain a purchase and tasks, or several tasks. Anything else (any other question, small talk, silence, noise) is none of these: return no lines, no tasks and an empty "showTasksFor", and say what you heard in "notes".
 
 Return:
 - "transcript": what was said, verbatim, in the words spoken. Empty string if nothing intelligible.
@@ -829,6 +830,7 @@ Return:
 - "channel": "B2B" only if they said the buy was for a B2B / corporate / catering client; otherwise "B2C".
 - "lines": one entry per item bought. Empty array when the command is not a purchase.
 - "tasks": one entry per to-do. Empty array when the command has none.
+- "showTasksFor": for SHOW TASKS, the day they asked about as YYYY-MM-DD, resolved against today's date given below — today's date when they said "today" or named no day. Empty string for any command that is not asking to see tasks.
 - "notes": at most one short sentence about anything you were unsure of. Empty string otherwise.
 
 Each purchase line has:
@@ -845,6 +847,7 @@ Each task has:
 - "assignee": one of the team names below when the speaker named who it is for; "" otherwise.
 - "repeatsWeekly": true only if they said it recurs ("every Friday", "weekly"). A one-off is false.
 - "day": for a repeating task, the weekday it repeats on. "" otherwise.
+- "dueDate": for a one-off task tied to a day ("tomorrow", "on Saturday", "on the 15th", "next Monday", "today"), that day as YYYY-MM-DD, resolved against today's date given below — always today or later. "" when no day was said, and always "" for a repeating task.
 - "time": a time of day if one was said, as spoken ("9 AM"). "" otherwise.`;
 
 // Either `audioBase64` (what the mic button sends) or `text` (the typed
@@ -896,6 +899,7 @@ export async function readVoiceCommand({ audioBase64, mimeType, text, catalogue 
           transcript: { type: Type.STRING },
           vendorName: { type: Type.STRING },
           purchaseDate: { type: Type.STRING, description: 'YYYY-MM-DD, or empty string.' },
+          showTasksFor: { type: Type.STRING, description: 'YYYY-MM-DD, or empty string.' },
           channel: { type: Type.STRING, enum: ['B2C', 'B2B'] },
           notes: { type: Type.STRING },
           lines: {
@@ -926,12 +930,17 @@ export async function readVoiceCommand({ audioBase64, mimeType, text, catalogue 
                 // is checked in normaliseVoiceCommand instead.
                 day: { type: Type.STRING, description: `One of ${WEEKDAYS.join(', ')}, or empty string.` },
                 time: { type: Type.STRING },
+                dueDate: { type: Type.STRING, description: 'YYYY-MM-DD, or empty string.' },
               },
-              required: ['title'],
+              // dueDate is required, "" and all: left optional, Gemini drops
+              // it often enough that "tomorrow" came back as no date at all.
+              required: ['title', 'repeatsWeekly', 'dueDate'],
             },
           },
         },
-        required: ['transcript', 'lines', 'tasks'],
+        // showTasksFor likewise, so "show me pending tasks for today" always
+        // gets an answer rather than reading as nothing heard.
+        required: ['transcript', 'lines', 'tasks', 'showTasksFor'],
       },
     },
   });

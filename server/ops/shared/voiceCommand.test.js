@@ -54,8 +54,27 @@ describe('normaliseVoiceCommand', () => {
     });
 
     expect(tasks).toEqual([
-      { title: 'Call the gas vendor', assignee: 'Sowmya', repeatsWeekly: false, day: '', time: '' },
-      { title: 'Post the reel', assignee: '', repeatsWeekly: true, day: 'Friday', time: '9 AM' },
+      { title: 'Call the gas vendor', assignee: 'Sowmya', repeatsWeekly: false, day: '', time: '', dueDate: '' },
+      { title: 'Post the reel', assignee: '', repeatsWeekly: true, day: 'Friday', time: '9 AM', dueDate: '' },
     ]);
+  });
+
+  it('keeps a real due date on a one-off, and never on a repeating task', () => {
+    const { tasks } = read({
+      tasks: [
+        { title: 'Order brisket', dueDate: '2026-10-15' },
+        { title: 'Call the vendor', dueDate: '2026-02-30' },
+        { title: 'Post the reel', repeatsWeekly: true, day: 'Friday', dueDate: '2026-10-09' },
+      ],
+    });
+
+    expect(tasks.map((t) => t.dueDate)).toEqual(['2026-10-15', '', '']);
+  });
+
+  it('passes on a day to show, and nothing for a command that is not asking', () => {
+    expect(read({ transcript: 'show me pending tasks for today', showTasksFor: '2026-10-03', lines: [], tasks: [] }))
+      .toMatchObject({ showTasksFor: '2026-10-03', purchase: null, tasks: [] });
+    expect(read({ showTasksFor: 'today' }).showTasksFor).toBe('');
+    expect(read({ lines: [], tasks: [] }).showTasksFor).toBe('');
   });
 });

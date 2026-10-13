@@ -99,7 +99,15 @@ import {
   saveAppToken as savePushAppToken,
   saveSubscription as savePushSubscription,
 } from './core/pushNotify.js';
-import { listNotes, addNote, setNoteDone, assignNote, deleteNote } from './core/sharedNotes.js';
+import {
+  listNotes,
+  listDatedNotes,
+  addNote,
+  setNoteDone,
+  assignNote,
+  setNoteDueDate,
+  deleteNote,
+} from './core/sharedNotes.js';
 import { fileUnfiledNotes } from './integrations/noteIssues.js';
 import {
   getTodayPending,
@@ -108,6 +116,7 @@ import {
   DEFAULT_DIGEST_MINUTES,
 } from './sprint/taskReminders.js';
 import { runWhatsappAlertTick, sendAlarmTest } from './integrations/whatsappAlerts.js';
+import { runOrderAlertTick } from './integrations/orderAlerts.js';
 import { localAlarmState, stopLocalAlarm } from './integrations/localAlarm.js';
 import { getMenu, computeSwiggyPlan, computeMeatPlan, computePrepPlan, getPackableSidesByItem, getMeatByItem } from './ops/b2c/recipes.js';
 import { getMenuItemRecipe, updateMenuItemRecipe } from './ops/menu/menuRecipe.js';
@@ -225,6 +234,17 @@ import {
 } from './integrations/googleDrive.js';
 import { buildWeeklyReport, DEFAULT_WEEKS } from './finance/weeklyLedger.js';
 import { buildItemSalesReport } from './finance/itemSales.js';
+import { buildOverview } from './overview/overview.js';
+import {
+  listIdeas,
+  addIdea,
+  updateIdea,
+  fireIdea,
+  deleteIdea,
+  addCategory,
+  updateCategory,
+  deleteCategory,
+} from './overview/ideas.js';
 import { buildUnitEconomicsReport } from './finance/unitEconomics.js';
 import { buildMaterialPriceSheet, saveMaterialPrice } from './finance/materialPrices.js';
 import {
@@ -567,8 +587,8 @@ app.get('/api/ops/menu-items', async (req, res) => {
 // Partial update — only the fields present in the body are written.
 app.post('/api/ops/menu-items/update', async (req, res) => {
   try {
-    const { id, name, price, description, isAvailable } = req.body;
-    res.json(await updateMenuItem({ id, name, price, description, isAvailable }));
+    const { id, name, price, description, isAvailable, isInPos } = req.body;
+    res.json(await updateMenuItem({ id, name, price, description, isAvailable, isInPos }));
   } catch (err) {
     console.error('Error in POST /api/ops/menu-items/update:', err);
     res.status(err.status || 500).json({ error: err.message || String(err) });
@@ -1488,8 +1508,8 @@ app.get('/api/recurring-schedule', (req, res) => {
 // matched. One round trip, one source of truth for the order.
 app.post('/api/recurring-schedule/tasks', (req, res) => {
   try {
-    const { day, label, time, assignedTo, category } = req.body;
-    const created = createScheduledTask({ day, label, time, assignedTo, category });
+    const { day, label, time, assignedTo, category, alarm } = req.body;
+    const created = createScheduledTask({ day, label, time, assignedTo, category, alarm });
     res.json({ ...created, schedule: getRecurringSchedule() });
   } catch (err) {
     console.error('Error in POST /api/recurring-schedule/tasks:', err);
@@ -1499,8 +1519,8 @@ app.post('/api/recurring-schedule/tasks', (req, res) => {
 
 app.patch('/api/recurring-schedule/tasks/:taskId', (req, res) => {
   try {
-    const { label, time, assignedTo, category } = req.body;
-    const updated = updateScheduledTask({ taskId: req.params.taskId, label, time, assignedTo, category });
+    const { label, time, assignedTo, category, alarm, githubIssue } = req.body;
+    const updated = updateScheduledTask({ taskId: req.params.taskId, label, time, assignedTo, category, alarm, githubIssue });
     res.json({ ...updated, schedule: getRecurringSchedule() });
   } catch (err) {
     console.error('Error in PATCH /api/recurring-schedule/tasks:', err);
@@ -2679,6 +2699,83 @@ app.get('/api/marketing/reel/drive/:uploadId', (req, res) => {
   res.json(job);
 });
 
+// ---- Overview (the screen the app opens on) -------------------------------
+// Tasks per person, orders and the meat in them, the money, and site traffic,
+// for one week or month. Composed from the modules that own each figure — see
+// server/overview/overview.js. Each section fails on its own, so this answers
+// 200 with an `error` on the section that broke rather than failing whole.
+app.get('/api/overview', async (req, res) => {
+  try {
+    const { view, date } = req.query || {};
+    res.json(await buildOverview({ view: view || undefined, date: date || undefined }));
+  } catch (err) {
+    console.error('Error in GET /api/overview:', err);
+    res.status(err.status || 500).json({ error: err.message || String(err) });
+  }
+});
+
+// ---- Idea Board (Overview > Idea Board) ------------------------------------
+// Every idea worth keeping, with a stage, a category and a 🔥 count. No rules
+// of its own here — see server/overview/ideas.js.
+const ideaRoute = (handler, label) => (req, res) => {
+  try {
+    handler(req, res);
+  } catch (err) {
+    console.error(`Error in ${label}:`, err);
+    res.status(err.status || 500).json({ error: err.message || String(err) });
+  }
+};
+
+app.get('/api/ideas', ideaRoute((req, res) => res.json(listIdeas()), 'GET /api/ideas'));
+
+app.post(
+  '/api/ideas',
+  ideaRoute((req, res) => {
+    const { title, details, category, author } = req.body || {};
+    res.status(201).json(addIdea({ title, details, category, author }));
+  }, 'POST /api/ideas'),
+);
+
+app.patch(
+  '/api/ideas/:id',
+  ideaRoute((req, res) => {
+    const { title, details, category, stage } = req.body || {};
+    res.json(updateIdea({ id: req.params.id, title, details, category, stage }));
+  }, 'PATCH /api/ideas/:id'),
+);
+
+app.post(
+  '/api/ideas/:id/fire',
+  ideaRoute((req, res) => res.json(fireIdea({ id: req.params.id })), 'POST /api/ideas/:id/fire'),
+);
+
+app.delete(
+  '/api/ideas/:id',
+  ideaRoute((req, res) => res.json(deleteIdea({ id: req.params.id })), 'DELETE /api/ideas/:id'),
+);
+
+// The board's own categories. Deleting one moves its ideas to Wild card.
+app.post(
+  '/api/ideas/categories',
+  ideaRoute((req, res) => {
+    const { label, emoji, color } = req.body || {};
+    res.status(201).json(addCategory({ label, emoji, color }));
+  }, 'POST /api/ideas/categories'),
+);
+
+app.patch(
+  '/api/ideas/categories/:id',
+  ideaRoute((req, res) => {
+    const { label, emoji, color } = req.body || {};
+    res.json(updateCategory({ id: req.params.id, label, emoji, color }));
+  }, 'PATCH /api/ideas/categories/:id'),
+);
+
+app.delete(
+  '/api/ideas/categories/:id',
+  ideaRoute((req, res) => res.json(deleteCategory({ id: req.params.id })), 'DELETE /api/ideas/categories/:id'),
+);
+
 // ---- Finance (Finance > Spending vs Sales) --------------------------------
 // Money out against money in, one row per Monday-to-Sunday week. Purchases and
 // wholesale invoices come out of SQLite, so this answers with or without Odoo;
@@ -2893,13 +2990,28 @@ app.post('/api/today-tasks/:taskId/assignee', (req, res) => {
 // a couple of cheap reads of a small table.
 //
 // ?q= filters on the note text and the poster's name; ?author= narrows to one
-// person by whole name, and the two stack. Server-side because the browser
+// person by whole name, and the two stack; ?pending=1 leaves out ticked notes.
+// Server-side because the browser
 // only ever holds the most recent page of notes — see listNotes.
 app.get('/api/notes', (req, res) => {
   try {
-    res.json(listNotes({ q: req.query?.q, author: req.query?.author }));
+    res.json(listNotes({ q: req.query?.q, author: req.query?.author, pending: req.query?.pending === '1' }));
   } catch (err) {
     console.error('Error in GET /api/notes:', err);
+    res.status(err.status || 500).json({ error: err.message || String(err) });
+  }
+});
+
+// The notes that belong to a day, for Daily View: due on or after ?from=
+// (YYYY-MM-DD, the browser's today), plus older ones still open. A separate
+// read from the board above because that one is a window of the newest notes,
+// and a task filed months ahead would have scrolled out of it — see
+// listDatedNotes.
+app.get('/api/notes/dated', (req, res) => {
+  try {
+    res.json(listDatedNotes({ from: req.query?.from }));
+  } catch (err) {
+    console.error('Error in GET /api/notes/dated:', err);
     res.status(err.status || 500).json({ error: err.message || String(err) });
   }
 });
@@ -2909,8 +3021,8 @@ app.get('/api/notes', (req, res) => {
 // wait for the next poll to reconcile them.
 app.post('/api/notes', (req, res) => {
   try {
-    const { body, author } = req.body || {};
-    res.status(201).json(addNote({ body, author }));
+    const { body, author, dueDate } = req.body || {};
+    res.status(201).json(addNote({ body, author, dueDate }));
     // Filed to GitHub after the reply, never before it — see
     // server/integrations/noteIssues.js. Also retries any earlier note that
     // did not get filed.
@@ -2947,6 +3059,17 @@ app.patch('/api/notes/:id/assignee', (req, res) => {
     res.json(assignNote({ id: req.params.id, assignedTo }));
   } catch (err) {
     console.error('Error in PATCH /api/notes/:id/assignee:', err);
+    res.status(err.status || 500).json({ error: err.message || String(err) });
+  }
+});
+
+// Moves one to another day, or back to "whenever" with a blank date.
+app.patch('/api/notes/:id/due', (req, res) => {
+  try {
+    const { dueDate } = req.body || {};
+    res.json(setNoteDueDate({ id: req.params.id, dueDate }));
+  } catch (err) {
+    console.error('Error in PATCH /api/notes/:id/due:', err);
     res.status(err.status || 500).json({ error: err.message || String(err) });
   }
 });
@@ -3189,6 +3312,27 @@ if (process.env.WHATSAPP_ALERTS !== 'off') {
     // server should not hang for a minute waiting on a timer with nothing to
     // say.
   }, WHATSAPP_ALERT_MS).unref();
+}
+
+// New-order push: a sale order confirmed in Odoo goes to every subscribed
+// phone with its items, total and delivery slot. See
+// server/integrations/orderAlerts.js.
+//
+// Its own timer for the same reason the WhatsApp alarm has one — it calls Odoo
+// every pass, and must not slow the reminder tick. Unlike the alarm it does
+// run at startup: an order confirmed while the server was restarting is still
+// worth hearing about, and the claims in push_delivery stop a restart from
+// repeating one. ORDER_ALERTS=off disables it.
+const ORDER_ALERT_MS = 60 * 1000;
+if (process.env.ORDER_ALERTS !== 'off') {
+  const graceMinutes = Number(process.env.ORDER_ALERT_GRACE_MINUTES) || undefined;
+  const orderTick = () => {
+    runOrderAlertTick(new Date(), graceMinutes ? { graceMinutes } : {}).then((result) => {
+      if (result?.announced) console.log(`[order-alert] announced ${result.announced} order(s), ${result.sent} device(s)`);
+    });
+  };
+  setInterval(orderTick, ORDER_ALERT_MS).unref();
+  orderTick();
 }
 
 // Sprint rollover: open items left in a sprint that has ended move into the

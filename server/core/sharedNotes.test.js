@@ -12,7 +12,9 @@ import { createTestDb, removeTestDb } from './testDb.js';
 const { dir } = createTestDb();
 
 const { run } = await import('./db.js');
-const { listNotes, addNote, setNoteDone, assignNote, deleteNote, MAX_BODY } = await import('./sharedNotes.js');
+const { listNotes, listDatedNotes, addNote, setNoteDone, assignNote, setNoteDueDate, deleteNote, MAX_BODY } = await import(
+  './sharedNotes.js'
+);
 
 beforeEach(() => {
   run('DELETE FROM shared_note');
@@ -86,6 +88,15 @@ describe('reading the panel', () => {
   it('reports the total and says so when the window is not the whole table', () => {
     addNote({ body: 'only one' });
     expect(listNotes()).toMatchObject({ total: 1, truncated: false });
+  });
+
+  it('leaves out ticked notes when asked for pending only, but counts the whole board', () => {
+    const done = addNote({ body: 'gas refilled' });
+    addNote({ body: 'order charcoal' });
+    setNoteDone({ id: done.id, done: true, by: 'Adarsh' });
+    const board = listNotes({ pending: true });
+    expect(board.notes.map((n) => n.body)).toEqual(['order charcoal']);
+    expect(board).toMatchObject({ total: 2, done: 1, open: 1, matched: 1, truncated: false });
   });
 });
 
@@ -331,5 +342,50 @@ describe('deleting a note', () => {
   it('refuses an id that is not one', () => {
     expect(() => deleteNote({ id: 'abc' })).toThrow(/note id is required/);
     expect(() => deleteNote({})).toThrow(/note id is required/);
+  });
+});
+
+describe('dating a note', () => {
+  it('is for whenever unless given a day', () => {
+    expect(addNote({ body: 'remark' }).dueDate).toBe('');
+    expect(addNote({ body: 'call the vendor', dueDate: '2026-10-09' }).dueDate).toBe('2026-10-09');
+    expect(listNotes().notes.map((n) => n.dueDate)).toEqual(['', '2026-10-09']);
+  });
+
+  it('refuses a day that does not exist rather than filing it nowhere', () => {
+    expect(() => addNote({ body: 'x', dueDate: '2026-02-30' })).toThrow(/real day/);
+    expect(() => addNote({ body: 'x', dueDate: '9 Oct' })).toThrow(/real day/);
+    expect(listNotes().notes).toHaveLength(0);
+  });
+
+  it('can be moved to another day, or back to whenever', () => {
+    const note = addNote({ body: 'order brisket', dueDate: '2026-10-09' });
+    expect(setNoteDueDate({ id: note.id, dueDate: '2026-12-01' }).dueDate).toBe('2026-12-01');
+    expect(setNoteDueDate({ id: note.id, dueDate: '' }).dueDate).toBe('');
+    expect(() => setNoteDueDate({ id: 999999, dueDate: '2026-12-01' })).toThrow(/no longer exists/);
+  });
+});
+
+describe('the dated list for Daily View', () => {
+  it('has today on, ticked or not, plus older ones still open, in date order', () => {
+    const later = addNote({ body: 'December order', dueDate: '2026-12-01' });
+    const today = addNote({ body: 'today', dueDate: '2026-10-03' });
+    const doneToday = addNote({ body: 'done today', dueDate: '2026-10-03' });
+    setNoteDone({ id: doneToday.id, done: true, by: 'Adarsh' });
+    const overdue = addNote({ body: 'overdue', dueDate: '2026-09-30' });
+    const finished = addNote({ body: 'finished last week', dueDate: '2026-09-28' });
+    setNoteDone({ id: finished.id, done: true, by: 'Adarsh' });
+    addNote({ body: 'whenever' });
+
+    expect(listDatedNotes({ from: '2026-10-03' }).notes.map((n) => n.id)).toEqual([
+      overdue.id,
+      today.id,
+      doneToday.id,
+      later.id,
+    ]);
+  });
+
+  it('needs a day to start from', () => {
+    expect(() => listDatedNotes({})).toThrow(/from is required/);
   });
 });

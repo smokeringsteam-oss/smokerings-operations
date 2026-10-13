@@ -61,6 +61,7 @@
 // while legion was asleep is not worth an alarm at 2am; it is worth a badge,
 // which it already has.
 import { claimDelivery, sendToAll, subscriptionCount } from '../core/pushNotify.js';
+import { closeAlertTask, fileAlertTask, openAlertSources } from '../core/alertTasks.js';
 import { isLocalAlarmEnabled, startLocalAlarm } from './localAlarm.js';
 import { fetchWhatsappThreads } from './odooWhatsapp.js';
 
@@ -151,6 +152,23 @@ function dueAlerts(inbox, now = new Date(), options = {}) {
   return out;
 }
 
+// Ticks the WhatsApp to-dos whose conversation has had a reply from us since.
+function closeAnsweredTasks(inbox, now) {
+  const open = openAlertSources('whatsapp:');
+  if (!open.length) return;
+  const threads = new Map((inbox.threads || []).map((thread) => [`whatsapp:${thread.channelId}`, thread]));
+  for (const source of open) {
+    const thread = threads.get(source);
+    if (!thread) continue;
+    const latest = (thread.messages || [])
+      .map((message) => ({ message, at: parseAt(message.at) }))
+      .filter((entry) => entry.at)
+      .sort((a, b) => a.at - b.at)
+      .pop();
+    if (latest && latest.message.from === 'us') closeAlertTask(source, 'WhatsApp reply', now);
+  }
+}
+
 /**
  * One pass of the timer: read the inbox, work out what is new, claim it, send.
  *
@@ -182,6 +200,10 @@ async function runWhatsappAlertTick(now = new Date(), options = {}) {
     // full of 503s once a minute.
     if (!inbox.available) return { considered: 0, sent: 0, skipped: inbox.reason || 'unavailable' };
 
+    // A to-do filed by an earlier alert is ticked once the thread's newest
+    // message is ours — the customer has been answered, from whichever screen.
+    closeAnsweredTasks(inbox, now);
+
     const due = dueAlerts(inbox, now, options);
     if (!due.length) return { considered: 0, sent: 0 };
 
@@ -200,6 +222,13 @@ async function runWhatsappAlertTick(now = new Date(), options = {}) {
       // milliseconds — whereas sendToAll goes over the network to a push
       // service, and making the noise in this room wait on that is backwards.
       startLocalAlarm({ customer: alert.payload.customer, body: alert.payload.body });
+      // And a to-do, so the message is still on someone's list after the
+      // notification has been swiped away. One per conversation while open.
+      fileAlertTask({
+        source: `whatsapp:${alert.channelId}`,
+        body: `Reply to ${alert.payload.customer || 'a customer'} on WhatsApp: "${alert.payload.body.split('\n')[0]}"`,
+        now,
+      });
       const result = await sendToAll(alert.payload);
       sent += result.sent || 0;
     }

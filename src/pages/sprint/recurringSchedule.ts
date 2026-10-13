@@ -19,7 +19,14 @@ export type RecurringTaskDef = {
   defaultTime: string;
   defaultAssignee: string;
   category?: string;
+  // Sounds the alarm at its time instead of an ordinary reminder.
+  alarm?: boolean;
+  // Its standing "Recurring: …" sub-issue on the sprint board, if any.
+  githubIssue?: number | null;
 };
+
+// Where githubIssue numbers live: the sprint board's issues repo.
+export const ISSUE_URL = 'https://github.com/smokeringsteam-oss/knowledge-base/issues/';
 
 export const MARKETING_CATEGORY = 'Marketing';
 
@@ -301,7 +308,7 @@ export const createScheduleTask = (task: NewRecurringTask): Promise<RecurringDay
 // task can't quietly blank the time it said nothing about.
 export const updateScheduleTask = (
   taskId: string,
-  patch: { label?: string; time?: string; assignedTo?: string; category?: string },
+  patch: { label?: string; time?: string; assignedTo?: string; category?: string; alarm?: boolean },
 ): Promise<RecurringDay[]> =>
   scheduleWrite(`/api/recurring-schedule/tasks/${encodeURIComponent(taskId)}`, asJson('PATCH', patch));
 

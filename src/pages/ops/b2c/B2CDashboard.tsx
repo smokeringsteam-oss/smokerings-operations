@@ -9,38 +9,32 @@ import ServiceWeeks from './ServiceWeeks';
 import MenuItems from '../menu/MenuItems';
 
 // One of the two dashboards under Ops (see OpsDashboard.tsx, which owns the
-// sidebar ids). Opens onto a landing page of three choices — Service Weeks,
-// Edit Menu, Start Prep — each of which swaps in its own view below.
+// sidebar ids). Opens onto a landing page of two choices — Service Weeks &
+// Menu, and Start Prep — each of which swaps in its own view below.
 // Sub-navigation between all of them lives entirely inside this component.
 //
 // The landing page used to render Service Weeks and the menu editor inline
 // above the flow, which meant every visit scrolled past a month grid and a
 // menu panel to reach the weekend flow. They're choices now, combined into
-// the same box grid the flow steps use, so the three things you can start
-// from the B2C dashboard read as one set.
-type SetupView = 'serviceWeeks' | 'menu';
+// the same box grid the flow steps use, so the things you can start from the
+// B2C dashboard read as one set. Service Weeks and Edit Menu used to be
+// separate tiles; they share one now, since deciding which weekends are open
+// and what they sell is done in one sitting.
+type SetupView = 'weekMenu';
 type FlowModule = 'weekendPrep' | 'weeklyPurchasing' | 'smoking' | 'smokerStatus' | 'orderManagement';
 type B2CView = 'home' | SetupView | 'prep' | FlowModule;
 
-// The three ways into the B2C dashboard. The first two are setup — which
-// weekends are open, and what the dishes are — and the third opens the
-// weekend flow itself (MODULES below).
+// The ways into the B2C dashboard. The first is setup — which weekends are
+// open, and what the dishes are — and the second opens the weekend flow
+// itself (MODULES below).
 const OPTIONS: { id: SetupView | 'prep'; label: string; icon: string; tag: string; description: string }[] = [
   {
-    id: 'serviceWeeks',
-    label: 'Service Weeks',
+    id: 'weekMenu',
+    label: 'Service Weeks & Menu',
     icon: '🗓',
     tag: 'Setup',
     description:
-      'Which weekends the kitchen is open for, and the menu each one sells. Gates everything below it — a closed week has no orders to plan for.',
-  },
-  {
-    id: 'menu',
-    label: 'Edit Menu',
-    icon: '🍽',
-    tag: 'Setup',
-    description:
-      'The dishes themselves — name, price, description, picture and availability — written straight to the Odoo product. B2C only; bulk wholesale lives on the B2B dashboard.',
+      'Which weekends the kitchen is open for and the menu each one sells, plus the dishes themselves — name, price, description, picture and availability — written straight to Odoo. B2C only; bulk wholesale lives on the B2B dashboard.',
   },
   {
     id: 'prep',
@@ -99,8 +93,7 @@ const MODULES: { id: FlowModule; label: string; icon: string; day: string; descr
 // back to the flow it was opened from rather than all the way home, so
 // leaving Smoking Session doesn't cost a second click to get to Purchasing.
 const BACK_TO: Record<Exclude<B2CView, 'home'>, { view: B2CView; label: string }> = {
-  serviceWeeks: { view: 'home', label: '← Back to B2C Dashboard' },
-  menu: { view: 'home', label: '← Back to B2C Dashboard' },
+  weekMenu: { view: 'home', label: '← Back to B2C Dashboard' },
   prep: { view: 'home', label: '← Back to B2C Dashboard' },
   weekendPrep: { view: 'prep', label: '← Back to Prep steps' },
   weeklyPurchasing: { view: 'prep', label: '← Back to Prep steps' },
@@ -148,10 +141,13 @@ const B2CDashboard = () => {
 
   const renderView = () => {
     switch (view) {
-      case 'serviceWeeks':
-        return <ServiceWeeks />;
-      case 'menu':
-        return <MenuItems channel="b2c" />;
+      case 'weekMenu':
+        return (
+          <div className="b2c-setup-stack">
+            <ServiceWeeks />
+            <MenuItems channel="b2c" />
+          </div>
+        );
       case 'prep':
         return renderFlowGrid();
       case 'weekendPrep':
@@ -173,7 +169,7 @@ const B2CDashboard = () => {
 
   return (
     <div className="marketing-dashboard">
-      <header>
+      <header className="b2c-dashboard-header">
         <h2>B2C Dashboard</h2>
         <p>The B2C weekend flow, start to finish: plan orders, buy against them, smoke, then pack and serve.</p>
       </header>

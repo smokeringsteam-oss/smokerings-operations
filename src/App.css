@@ -1099,6 +1099,60 @@ button.wizard-step:hover:not(.active) {
   font-weight: 800;
 }
 
+/* Weekend planner: a meat tile's number split by where it goes — sold on
+   its own (prime cuts) or on a platter — with the platter side in ember so
+   it reads apart at a glance. */
+.prep-summary-origin {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--color-border);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.78rem;
+  color: var(--color-text-muted);
+}
+
+/* One line per side: "Prime cuts 6 | 250 g 1 · 500 g 5". */
+.prep-summary-origin-row {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: baseline;
+  gap: 2px 10px;
+}
+
+.prep-summary-origin-head {
+  font-weight: 700;
+}
+
+.prep-summary-origin-head:not(:last-child) {
+  padding-right: 10px;
+  border-right: 1px solid var(--color-border);
+}
+
+.prep-summary-origin strong {
+  color: var(--color-charcoal);
+  font-weight: 800;
+}
+
+.prep-summary-origin-platter,
+.prep-summary-origin-platter strong {
+  color: var(--color-ember-dark);
+}
+
+.prep-platter-heading {
+  margin: 24px 0 4px;
+}
+
+.prep-platter-grid {
+  margin-top: 8px;
+}
+
+.prep-platter-card {
+  border-color: var(--color-ember-dark);
+}
+
 /* Order Management (B2C and B2B Dashboards) */
 
 /* The weekend's four delivery slots as a horizontal picker — Sat Lunch, Sat
@@ -1248,6 +1302,62 @@ button.wizard-step:hover:not(.active) {
   margin: 0;
   font-size: 0.8rem;
   color: var(--color-text-muted);
+}
+
+/* "⏳ 4 pending · 🛵 2 on the way · ✅ 1 delivered" — picked-up orders fold
+   away into these counts; tapping one opens just those cards. */
+.pack-bucket-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.pack-bucket-btn {
+  padding: 6px 14px;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  background: var(--color-surface);
+  color: var(--color-text);
+  font: inherit;
+  font-size: 0.85rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.pack-bucket-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.pack-bucket-btn.active {
+  border-color: var(--color-ember);
+  background: var(--color-ember-light);
+  color: var(--color-ember-dark);
+}
+
+.pack-bucket-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 12px;
+  margin-bottom: 12px;
+  border-radius: var(--radius-md);
+  background: var(--color-surface-alt);
+  font-weight: 700;
+}
+
+.pack-bucket-close {
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-size: 1rem;
+  line-height: 1;
+  cursor: pointer;
 }
 
 .pack-slot-empty {
@@ -2633,6 +2743,32 @@ button.wizard-step:hover:not(.active) {
   flex: 1 1 auto;
 }
 
+/* The to-do add row carries a date and a name as well as the text, which is
+   too much for one line at phone width — let it wrap rather than squeeze. */
+.daily-view-add-row {
+  flex-wrap: wrap;
+}
+
+.daily-view-input-date {
+  flex: 0 0 auto;
+  min-width: 140px;
+}
+
+/* Same shape as the time badge, in the error red the page already uses: an
+   open job from a day that has passed. */
+.daily-view-badge-overdue {
+  color: #b83a24;
+  background: #fff1ee;
+}
+
+/* What a row in Daily View's one list is — a to-do, a sprint card, a
+   marketing post — outlined so it reads as a label, not a value. */
+.daily-view-badge-kind {
+  background: transparent;
+  border: 1px solid var(--color-border-strong);
+  padding: 3px 9px;
+}
+
 .inv-section-title {
   margin: 28px 0 4px;
   color: var(--color-charcoal);
@@ -3641,6 +3777,14 @@ button.wizard-step:hover:not(.active) {
   transform: translateX(-2px);
 }
 
+/* ---- B2C Dashboard > Service Weeks & Menu ------------------------------ */
+/* One setup tile opens both panels, Service Weeks above the menu editor. */
+.b2c-setup-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
 /* ---- B2C Dashboard > Service Weeks strip ------------------------------- */
 /* Sits above the module flow on the landing page: whether a week is
    serviceable at all gates every step below it. Open/closed reads from the
@@ -4317,6 +4461,112 @@ button.wizard-step:hover:not(.active) {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+/* The row button and the POS switch sit side by side; the switch is outside
+   the button so tapping it doesn't open the card. */
+.menu-item-head {
+  display: flex;
+  align-items: center;
+}
+
+.menu-item-head .menu-item-open {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.menu-item-pos {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  width: 84px;
+  padding: 10px 12px 10px 4px;
+  cursor: pointer;
+}
+
+.menu-item-pos input {
+  position: absolute;
+  opacity: 0;
+  width: 1px;
+  height: 1px;
+}
+
+.menu-item-pos-track {
+  position: relative;
+  width: 40px;
+  height: 22px;
+  border-radius: 999px;
+  background: var(--color-border-strong);
+  transition: background 150ms;
+}
+
+.menu-item-pos-track::after {
+  content: '';
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+  transition: transform 150ms;
+}
+
+.menu-item-pos input:checked + .menu-item-pos-track {
+  background: #2e8b57;
+}
+
+.menu-item-pos input:checked + .menu-item-pos-track::after {
+  transform: translateX(18px);
+}
+
+.menu-item-pos input:focus-visible + .menu-item-pos-track {
+  outline: 2px solid var(--color-ember);
+  outline-offset: 2px;
+}
+
+.menu-item-pos input:disabled + .menu-item-pos-track {
+  opacity: 0.6;
+}
+
+.menu-item-pos-label {
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--color-text-muted);
+  white-space: nowrap;
+}
+
+.menu-item-row.is-pos-closed .menu-item-pos-label {
+  color: #b23b3b;
+}
+
+/* Closed on the till or off the menu: still editable, but visibly not selling. */
+.menu-item-row.is-pos-closed:not(.is-open) .menu-item-open,
+.menu-item-row.is-off-menu:not(.is-open) .menu-item-open {
+  opacity: 0.6;
+}
+
+.menu-item-tag.is-site-off {
+  color: #b23b3b;
+}
+
+.menu-item-tag.is-site-on {
+  color: #2e8b57;
+}
+
+.menu-items-offmenu-toggle {
+  margin-top: 4px;
+  padding: 0;
+  background: none;
+  border: 0;
+  font: inherit;
+  font-size: 0.82rem;
+  color: var(--color-ember-dark);
+  text-decoration: underline;
+  cursor: pointer;
 }
 
 .menu-item-chevron {
@@ -5390,6 +5640,16 @@ button.wizard-step:hover:not(.active) {
   align-items: center;
   gap: 8px;
   margin-top: 12px;
+}
+
+/* Create Invoice's result, in place of the form: green for posted, the
+   overdue red for a sale logged whose invoice Odoo refused. */
+.b2b-invoice-done {
+  border-left: 4px solid #6f9b57;
+}
+
+.b2b-invoice-done.is-failed {
+  border-left-color: #c0504d;
 }
 
 .b2b-empty-line {
@@ -12281,6 +12541,21 @@ span.purch-purpose-pill {
   color: var(--color-text-soft);
 }
 
+.notes-item-due {
+  font-size: 0.68rem;
+  font-weight: 700;
+  color: var(--color-ember-dark);
+}
+
+.notes-item-due.is-overdue {
+  color: #b83a24;
+}
+
+.notes-item.is-done .notes-item-due {
+  color: var(--color-text-soft);
+  font-weight: 400;
+}
+
 /* The name on a row is also where it is changed. Looks like plain text; tap it
    and it becomes .notes-name-input in the same spot. */
 .notes-reassign {
@@ -12587,20 +12862,6 @@ span.purch-purpose-pill {
   background: linear-gradient(180deg, #d64545 0%, #a52a2a 100%);
   border-color: rgba(255, 255, 255, 0.3);
   animation: voice-pulse 1.4s ease-out infinite;
-}
-
-/* Waiting for "Hey Smokey": a small steady dot, so an open ear is never
-   invisible, without the alarm of the recording red. */
-.voice-toggle.is-listening::after {
-  content: '';
-  position: absolute;
-  top: -2px;
-  right: -2px;
-  width: 11px;
-  height: 11px;
-  border-radius: 50%;
-  background: var(--color-ember);
-  border: 2px solid var(--color-charcoal);
 }
 
 @keyframes voice-pulse {
@@ -13415,4 +13676,1648 @@ body.wa-alarm-open .app-shell {
 
 @media (max-width: 560px) {
   body.wa-alarm-open .app-shell { padding-top: 56px; }
+}
+
+/* ---- Overview ------------------------------------------------------------
+   The landing screen. Built out of the mkt-* panels and tiles the finance and
+   marketing screens use; what is here is only the page grid, the per-person
+   cards and the bar rows. Bars are one series each and carry their own value,
+   so the fill colour never has to be read on its own. */
+.ov-page {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.ov-toolbar {
+  align-items: center;
+}
+
+.ov-stepper {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.ov-period-label {
+  min-width: 150px;
+  text-align: center;
+  font-family: var(--font-display);
+}
+
+.ov-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+  transition: opacity 0.15s;
+}
+
+.ov-grid.is-loading {
+  opacity: 0.6;
+}
+
+.ov-section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.ov-section h3 {
+  margin: 0;
+  font-size: 1.1rem;
+}
+
+.ov-span-2 {
+  grid-column: 1 / -1;
+}
+
+.ov-note {
+  margin: 0;
+  font-size: 0.78rem;
+}
+
+.ov-empty {
+  margin: 4px 0;
+  font-size: 0.85rem;
+}
+
+.ov-inner h4 {
+  margin-bottom: 10px;
+}
+
+.ov-subhead {
+  margin: 6px 0 2px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--color-text-soft);
+}
+
+/* People */
+.ov-people {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.ov-person {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ov-person-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+/* A button so a phone can fold the card; on a desktop it is inert. */
+.ov-person-head {
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: default;
+  pointer-events: none;
+}
+
+.ov-person-name {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.ov-person-title {
+  font-family: var(--font-display);
+  font-size: 0.98rem;
+}
+
+.ov-person-badges {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.ov-badge {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--color-bg-alt);
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: var(--color-text-muted);
+  white-space: nowrap;
+}
+
+.ov-badge.is-bad {
+  background: #fde6e3;
+  color: #9b2c1f;
+}
+
+.ov-badge.is-good {
+  background: #e3f1e6;
+  color: #1e6b32;
+}
+
+.ov-chevron {
+  display: none;
+}
+
+.ov-person-body {
+  display: contents;
+}
+
+/* All-time figures after this period's, which is what the page opens for. */
+.ov-launch {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  order: 10;
+}
+
+/* One figure per tile, no breakdowns — those live on the linked screens. */
+.ov-section .mkt-tile-sub:not(.ov-person-sub),
+.ov-note,
+.ov-phone-hide,
+.ov-person-week,
+.ov-person .ov-progress,
+.ov-cadence-head,
+.ov-badge:not(.is-bad):not(.is-good),
+#ov-money .ov-inner,
+#ov-traffic .mkt-tile:nth-child(n + 3) {
+  display: none;
+}
+
+/* Secondary detail folds behind one button. Opened, its children join the
+   surrounding layout (the traffic grid lays its panels out as its own). */
+.ov-more-toggle {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  padding: 9px;
+  border: 1px dashed var(--color-border-strong);
+  border-radius: var(--radius-md);
+  background: transparent;
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--color-text-muted);
+  cursor: pointer;
+}
+
+.ov-inner .ov-more-toggle {
+  margin-top: 12px;
+}
+
+/* The banner keeps its title; the tagline was one more line to read. */
+.ov-page > header p {
+  display: none;
+}
+
+.ov-more-toggle:hover {
+  border-color: var(--color-text-soft);
+  color: var(--color-text);
+}
+
+.ov-more:not(.is-open) {
+  display: none;
+}
+
+.ov-more.is-open {
+  display: contents;
+}
+
+.ov-avatar {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  background: var(--color-charcoal);
+  color: var(--color-ember);
+  font-family: var(--font-display);
+  font-weight: 700;
+}
+
+.ov-progress {
+  height: 6px;
+  border-radius: 999px;
+  background: var(--color-bg-alt);
+  overflow: hidden;
+}
+
+.ov-progress span {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: #1e6b32;
+}
+
+.ov-checklist {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 0.87rem;
+}
+
+.ov-checklist li {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+}
+
+.ov-assign {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.ov-tick {
+  flex: none;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  line-height: 1.2;
+  cursor: pointer;
+}
+
+.ov-tick:focus-visible {
+  outline: 2px solid var(--color-text-muted);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+.ov-checklist li.is-done .ov-check-text {
+  color: var(--color-text-soft);
+  text-decoration: line-through;
+}
+
+.ov-check-meta {
+  color: var(--color-text-soft);
+}
+
+.ov-due {
+  margin-left: 6px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--color-bg-alt);
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--color-text-muted);
+  white-space: nowrap;
+}
+
+.ov-due.is-overdue {
+  background: #fde6e3;
+  color: #9b2c1f;
+}
+
+/* Bars */
+.ov-bars {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.ov-bars li {
+  display: grid;
+  grid-template-columns: minmax(90px, 38%) 1fr auto;
+  align-items: center;
+  gap: 10px;
+  font-size: 0.84rem;
+}
+
+.ov-bar-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ov-bar-track {
+  display: block;
+  height: 10px;
+  background: var(--color-bg-alt);
+  border-radius: 0 4px 4px 0;
+}
+
+.ov-bar-fill {
+  display: block;
+  height: 100%;
+  min-width: 2px;
+  border-radius: 0 4px 4px 0;
+  background: #c98a12;
+}
+
+.ov-bar-value {
+  min-width: 2.5em;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.ov-meat-detail {
+  margin: 12px 0 8px;
+  padding-left: 18px;
+  font-size: 0.82rem;
+  color: var(--color-text-muted);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* Spend vs sales, week by week */
+.ov-legend {
+  display: flex;
+  gap: 14px;
+  margin-bottom: 8px;
+  font-size: 0.78rem;
+  color: var(--color-text-muted);
+}
+
+.ov-legend i {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  margin-right: 5px;
+  border-radius: 2px;
+  vertical-align: -1px;
+}
+
+.ov-weekrow {
+  display: grid;
+  grid-template-columns: 110px 1fr;
+  gap: 10px;
+  align-items: center;
+  padding: 5px 0;
+  border-top: 1px solid var(--color-border);
+  font-size: 0.8rem;
+}
+
+.ov-weekrow-label {
+  color: var(--color-text-muted);
+}
+
+.ov-weekrow-bars {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.ov-pair {
+  display: grid;
+  grid-template-columns: 1fr 76px;
+  gap: 8px;
+  align-items: center;
+}
+
+.ov-pair .ov-bar-track {
+  height: 8px;
+}
+
+/* Traffic */
+.ov-traffic {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.ov-traffic-wide {
+  grid-column: 1 / -1;
+}
+
+.ov-daily-readout {
+  min-height: 1.4em;
+  margin-bottom: 6px;
+  font-size: 0.85rem;
+}
+
+.ov-daily-plot {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 96px;
+  border-bottom: 1px solid var(--color-border-strong);
+}
+
+.ov-daily-col {
+  flex: 1;
+  display: flex;
+  align-items: flex-end;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.ov-daily-col span {
+  display: block;
+  width: 100%;
+  max-width: 40px;
+  margin: 0 auto;
+  border-radius: 4px 4px 0 0;
+  background: #c98a12;
+}
+
+.ov-daily-col.is-hover {
+  background: var(--color-bg-alt);
+}
+
+.ov-daily-col.is-hover span {
+  background: var(--color-ember-dark);
+}
+
+.ov-daily-axis {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 4px;
+  font-size: 0.72rem;
+  color: var(--color-text-soft);
+}
+
+@media (max-width: 1100px) {
+  .ov-traffic {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 900px) {
+  .ov-grid,
+  .ov-people,
+  .ov-traffic {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .ov-traffic-wide {
+    grid-column: auto;
+  }
+}
+
+/* Three tiles to a half-width column rather than two and an orphan. */
+.ov-section .mkt-tiles {
+  grid-template-columns: repeat(auto-fit, minmax(135px, 1fr));
+}
+
+/* The period controls and (on a phone) the section chips, held together so
+   they can stick as one bar. */
+.ov-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* The section tabs: four across, each led by its headline figure, so the bar
+   alone answers "how are we doing". Below them, one section at a time. */
+/* Above the period row, so the tabs stay put when Today hides it. */
+.ov-tabs {
+  order: -1;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+/* Each person's card as tall as its own list. */
+.ov-people {
+  align-items: start;
+}
+
+.ov-tabbtn {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  min-width: 0;
+  padding: 16px 18px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-sm);
+  font: inherit;
+  text-align: left;
+  color: var(--color-text);
+  cursor: pointer;
+  transition:
+    border-color 0.15s,
+    transform 0.15s;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.ov-tabbtn:hover:not(.is-active) {
+  border-color: var(--color-border-strong);
+  transform: translateY(-1px);
+}
+
+.ov-tabbtn.is-active {
+  background: var(--color-charcoal);
+  border-color: var(--color-charcoal);
+  color: #fff;
+}
+
+.ov-tabbtn-figure {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-display);
+  font-size: 1.9rem;
+  font-weight: 700;
+  line-height: 1.1;
+}
+
+.ov-tabbtn-label {
+  order: -1;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--color-text-soft);
+  white-space: nowrap;
+}
+
+.ov-tabbtn.is-active .ov-tabbtn-label {
+  color: rgba(255, 255, 255, 0.75);
+}
+
+.ov-grid {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.ov-section:not(.is-shown) {
+  display: none;
+}
+
+/* Tasks are always today, so the period picker has nothing to say there. */
+.ov-controls.is-tasks .ov-toolbar {
+  display: none;
+}
+
+/* The tab names the section, so its title goes; the link to the full screen
+   moves to the foot. */
+.ov-section > .mkt-panel-head {
+  order: 20;
+  justify-content: flex-end;
+}
+
+.ov-section > .mkt-panel-head h3 {
+  display: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ov-tabbtn {
+    transition: none;
+  }
+
+  .ov-tabbtn:hover:not(.is-active) {
+    transform: none;
+  }
+}
+
+@media (max-width: 720px) {
+  /* The topbar already says "Overview"; the banner was the whole first
+     screen on a phone. */
+  .ov-page > header {
+    display: none;
+  }
+
+  .ov-page {
+    gap: 14px;
+  }
+
+  /* Pinned under the 62px topbar, so the period and the section chips are
+     always in reach however far down the page you are. */
+  .ov-controls {
+    position: sticky;
+    top: 62px;
+    z-index: 30;
+    margin: -18px -12px 0;
+    padding: 8px 12px;
+    background: rgba(247, 245, 240, 0.96);
+    backdrop-filter: blur(6px);
+    border-bottom: 1px solid var(--color-border);
+  }
+
+  .ov-toolbar {
+    flex-direction: row;
+    flex-wrap: nowrap;
+    align-items: center;
+    gap: 6px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    box-shadow: none;
+  }
+
+  .ov-toolbar .mkt-tab {
+    padding: 6px 11px;
+    font-size: 0.8rem;
+  }
+
+  .ov-stepper {
+    flex-wrap: nowrap;
+    gap: 4px;
+    margin-left: auto;
+  }
+
+  .ov-stepper .mkt-chip {
+    padding: 6px 10px;
+  }
+
+  .ov-period-label {
+    min-width: 0;
+    font-size: 0.76rem;
+    white-space: nowrap;
+  }
+
+  .ov-refresh-word {
+    display: none;
+  }
+
+  /* Smaller tabs, centred, figure on top. */
+  .ov-tabs {
+    gap: 6px;
+  }
+
+  .ov-tabbtn {
+    align-items: center;
+    gap: 1px;
+    padding: 7px 4px 6px;
+    box-shadow: none;
+    text-align: center;
+  }
+
+  .ov-tabbtn-figure {
+    font-size: 1.05rem;
+    line-height: 1.2;
+  }
+
+  .ov-tabbtn-label {
+    order: 0;
+    font-size: 0.66rem;
+  }
+
+  /* A tap on a tab scrolls the page back to its top, clear of the topbar. */
+  .ov-page {
+    scroll-margin-top: 80px;
+  }
+
+  .ov-section {
+    gap: 10px;
+  }
+
+  /* The link to the full screen as a plain full-width button. */
+  .ov-section > .mkt-panel-head .mkt-chip {
+    flex: 1;
+    justify-content: center;
+    padding: 10px;
+    font-size: 0.82rem;
+  }
+
+  .ov-more.is-open {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .ov-section h3 {
+    font-size: 1rem;
+  }
+
+  .ov-section .mkt-panel-head .mkt-chip {
+    padding: 5px 10px;
+    font-size: 0.74rem;
+  }
+
+  .ov-grid {
+    gap: 22px;
+  }
+
+  /* Tiles become one card of rows — the name and its breakdown on the left,
+     the figure on the right — rather than three squeezed boxes whose
+     breakdowns wrap to five lines. */
+  .ov-section .mkt-tiles {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    background: var(--color-surface);
+    box-shadow: var(--shadow-sm);
+  }
+
+  .ov-section .mkt-tile {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 10px 14px;
+    border: 0;
+    border-top: 1px solid var(--color-border);
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+  }
+
+  .ov-section .mkt-tile:first-child {
+    border-top: 0;
+  }
+
+  .ov-section .mkt-tile-label {
+    font-size: 0.86rem;
+    font-weight: 600;
+    text-transform: none;
+    letter-spacing: 0;
+    color: var(--color-text);
+  }
+
+  .ov-section .mkt-tile-value {
+    font-size: 1.15rem;
+  }
+
+  .ov-check-meta {
+    font-size: 0.76rem;
+  }
+
+  .ov-section .mkt-panel {
+    padding: 12px;
+  }
+
+  /* People fold to their header; the one unfolded shows its lists. */
+  .ov-person {
+    gap: 8px;
+  }
+
+  .ov-person-head {
+    display: flex;
+    pointer-events: auto;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  .ov-chevron {
+    display: inline-block;
+    color: var(--color-text-soft);
+    transition: transform 0.15s;
+  }
+
+  .ov-person.is-open .ov-chevron {
+    transform: rotate(180deg);
+  }
+
+  .ov-person-body {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .ov-person:not(.is-open) .ov-person-body {
+    display: none;
+  }
+
+  .ov-avatar {
+    flex: none;
+    width: 34px;
+    height: 34px;
+  }
+
+  /* Rows a thumb can hit: the whole tick column is the target. */
+  .ov-checklist {
+    gap: 0;
+    font-size: 0.9rem;
+  }
+
+  .ov-checklist li {
+    align-items: center;
+    padding: 4px 0;
+    border-top: 1px solid var(--color-border);
+  }
+
+  .ov-checklist li:first-child {
+    border-top: 0;
+  }
+
+  .ov-tick {
+    display: grid;
+    place-items: center;
+    width: 36px;
+    height: 36px;
+    font-size: 1.05rem;
+  }
+
+  .ov-assign .mkt-chip {
+    padding: 6px 12px;
+  }
+
+  /* Bars: the name on its own line above the bar, so a dish is never cut
+     down to "Smoke and Glaze …". */
+  .ov-bars li {
+    grid-template-columns: 1fr auto;
+    grid-template-areas:
+      'label value'
+      'track track';
+    row-gap: 3px;
+  }
+
+  .ov-bars .ov-bar-label {
+    grid-area: label;
+    white-space: normal;
+  }
+
+  .ov-bars .ov-bar-value {
+    grid-area: value;
+  }
+
+  .ov-bars .ov-bar-track {
+    grid-area: track;
+    height: 8px;
+  }
+
+  .ov-weekrow {
+    grid-template-columns: 82px 1fr;
+    font-size: 0.74rem;
+  }
+
+  .ov-pair {
+    grid-template-columns: 1fr 64px;
+  }
+
+  .ov-daily-plot {
+    height: 96px;
+  }
+}
+
+/* ---- Idea Board (Overview > Idea Board) ---------------------------------
+   Each category has its own paper colour; a card is a note on that paper. */
+
+.idea-board {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding-bottom: 96px;
+}
+
+/* The papers a category can be — the list in server/overview/ideas.js. Each
+   pairs a pale paper with a dark ink so labels stay readable on it. */
+.idea-color-peach { --idea-paper: #ffe2c6; --idea-ink: #8a3b00; }
+.idea-color-pink { --idea-paper: #ffd6e7; --idea-ink: #8c1d4f; }
+.idea-color-blue { --idea-paper: #d7ecff; --idea-ink: #0f4c81; }
+.idea-color-green { --idea-paper: #e4f7d2; --idea-ink: #2f6a10; }
+.idea-color-lilac { --idea-paper: #ece0ff; --idea-ink: #50248f; }
+.idea-color-yellow { --idea-paper: #fff3b8; --idea-ink: #735600; }
+.idea-color-mint { --idea-paper: #d2f5ec; --idea-ink: #0d5e4c; }
+.idea-color-coral { --idea-paper: #ffd9d2; --idea-ink: #942a17; }
+
+.idea-title {
+  margin: 0;
+  font-size: 1.25rem;
+  font-weight: 600;
+}
+
+/* The one category row */
+.idea-cat-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.idea-chip-row {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  padding: 2px 0;
+}
+
+.idea-chip-row::-webkit-scrollbar {
+  display: none;
+}
+
+.idea-chip {
+  flex-shrink: 0;
+  min-height: 34px;
+  padding: 5px 11px;
+  border-radius: 999px;
+  border: 1.5px solid transparent;
+  background: var(--idea-paper, var(--color-bg-alt));
+  color: var(--idea-ink, var(--color-text));
+  font: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+  opacity: 0.8;
+}
+
+.idea-chip.is-on {
+  opacity: 1;
+  border-color: currentColor;
+  font-weight: 500;
+}
+
+.idea-chip-all,
+.idea-chip-new {
+  opacity: 1;
+  background: var(--color-surface);
+  border-color: var(--color-border-strong);
+  color: var(--color-text-muted);
+  font-weight: 500;
+}
+
+.idea-chip-new {
+  min-width: 38px;
+}
+
+.idea-chip-all.is-on {
+  border-color: var(--color-text);
+  color: var(--color-text);
+}
+
+.idea-chip-count {
+  display: inline-block;
+  min-width: 18px;
+  margin-left: 2px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.7);
+  font-size: 0.72rem;
+  line-height: 18px;
+  text-align: center;
+}
+
+.idea-chip-all .idea-chip-count {
+  background: var(--color-bg-alt);
+}
+
+/* Composer — tinted with the category new ideas will land in */
+.idea-composer {
+  margin-top: 12px;
+  padding: 10px;
+  border-radius: var(--radius-lg);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-strong);
+}
+
+.idea-composer.is-tinted {
+  background: var(--idea-paper);
+  border-color: var(--idea-ink);
+}
+
+.idea-composer-row {
+  display: flex;
+  gap: 8px;
+}
+
+.idea-composer-input,
+.idea-composer-details,
+.idea-search,
+.idea-select {
+  font: inherit;
+  font-size: 16px;
+  color: var(--color-text);
+  background: var(--color-surface-alt);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+}
+
+.idea-composer.is-tinted .idea-composer-input,
+.idea-composer.is-tinted .idea-composer-details {
+  background: rgba(255, 255, 255, 0.85);
+}
+
+.idea-composer-input {
+  flex: 1;
+  min-width: 0;
+  padding: 10px 12px;
+}
+
+.idea-composer-details {
+  width: 100%;
+  margin-top: 8px;
+  padding: 10px 12px;
+  resize: vertical;
+}
+
+.idea-search,
+.idea-select {
+  padding: 10px 12px;
+}
+
+.idea-composer-input:focus,
+.idea-composer-details:focus,
+.idea-search:focus,
+.idea-select:focus {
+  outline: 2px solid var(--color-ember);
+  outline-offset: 1px;
+}
+
+.idea-drop {
+  flex-shrink: 0;
+  min-height: 44px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: var(--color-ember);
+  color: #1c1300;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.idea-drop:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* What flies out of Add on a phone — see the phone rules at the end */
+.idea-burst {
+  display: none;
+}
+
+.idea-link {
+  padding: 4px 0;
+  border: 0;
+  background: none;
+  color: var(--color-ember-dark);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+/* Stage tabs and search */
+.idea-toolbar {
+  margin-top: 12px;
+  display: grid;
+  gap: 8px;
+}
+
+.idea-tabs {
+  display: flex;
+  gap: 4px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  padding: 4px;
+  border-radius: 999px;
+  background: var(--color-bg-alt);
+}
+
+.idea-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.idea-tab {
+  flex: 1 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--color-text-muted);
+  font: inherit;
+  font-size: 0.82rem;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.idea-tab.is-on {
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-weight: 500;
+  box-shadow: var(--shadow-sm);
+}
+
+.idea-tab-count {
+  min-width: 20px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--color-border);
+  font-size: 0.72rem;
+  line-height: 20px;
+}
+
+.idea-tab.is-on .idea-tab-count {
+  background: var(--color-ember-light);
+  color: var(--color-ember-dark);
+}
+
+.idea-tool-btn {
+  padding: 10px 14px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font: inherit;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.idea-tool-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* The board */
+.idea-grid {
+  margin-top: 16px;
+  columns: 4 240px;
+  column-gap: 12px;
+}
+
+.idea-card {
+  break-inside: avoid;
+  margin-bottom: 12px;
+  padding: 12px 12px 8px;
+  border-radius: var(--radius-md);
+  background: var(--idea-paper);
+  color: #2a2620;
+  box-shadow: var(--shadow-sm);
+}
+
+.idea-stage-served .idea-card-title {
+  text-decoration: line-through;
+  text-decoration-color: rgba(0, 0, 0, 0.35);
+  text-decoration-thickness: 2px;
+}
+
+.idea-stage-parked {
+  opacity: 0.65;
+}
+
+/* The whole card body is the edit button */
+.idea-card-body {
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.idea-card-cat {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 0.68rem;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--idea-ink);
+}
+
+.idea-card-title {
+  display: block;
+  font-family: inherit;
+  font-weight: 500;
+  font-size: 1rem;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.idea-card-details {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  margin-top: 4px;
+  color: #4a443a;
+  font-size: 0.88rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.idea-card-meta {
+  display: block;
+  margin-top: 6px;
+  font-size: 0.72rem;
+  color: rgba(42, 38, 32, 0.6);
+}
+
+.idea-card-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.idea-fire,
+.idea-stage-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 32px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.7);
+  color: #2a2620;
+  font: inherit;
+  font-weight: 500;
+  font-size: 0.82rem;
+  cursor: pointer;
+}
+
+.idea-stage-btn {
+  font-weight: 500;
+  font-size: 0.82rem;
+}
+
+.idea-icon-btn {
+  width: 36px;
+  height: 36px;
+  flex-shrink: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  font-size: 1rem;
+  cursor: pointer;
+}
+
+.idea-icon-btn:hover,
+.idea-icon-btn:focus-visible {
+  background: rgba(255, 255, 255, 0.7);
+}
+
+.idea-editor {
+  display: grid;
+  gap: 8px;
+}
+
+.idea-editor .idea-composer-details {
+  margin-top: 0;
+}
+
+.idea-editor-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.idea-editor-spacer {
+  flex: 1;
+}
+
+.idea-editor .idea-drop {
+  min-height: 40px;
+}
+
+.idea-empty {
+  margin: 24px 0 0;
+  padding: 32px 20px;
+  text-align: center;
+  color: var(--color-text-muted);
+}
+
+.idea-error {
+  margin-top: 16px;
+  padding: 12px 14px;
+  border-radius: var(--radius-md);
+  background: #fde8e6;
+  color: #8a1f12;
+}
+
+.idea-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 28px;
+  z-index: 80;
+  max-width: calc(100vw - 32px);
+  padding: 12px 18px;
+  border-radius: 999px;
+  background: var(--color-charcoal);
+  color: #fff7e6;
+  font-weight: 500;
+  font-size: 0.9rem;
+  box-shadow: var(--shadow-lg);
+  transform: translateX(-50%);
+}
+
+/* Categories list — a bottom sheet on a phone, a centred card on a desktop */
+.idea-sheet-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgba(20, 16, 10, 0.45);
+}
+
+.idea-sheet {
+  width: min(460px, 100%);
+  max-height: min(680px, calc(100vh - 32px));
+  overflow-y: auto;
+  padding: 16px;
+  border-radius: var(--radius-lg);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-lg);
+}
+
+.idea-sheet-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.idea-sheet-head h3 {
+  margin: 0;
+  font-size: 1.2rem;
+}
+
+.idea-sheet-list {
+  display: grid;
+  gap: 8px;
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.idea-sheet-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 6px 6px 10px;
+  border-radius: var(--radius-md);
+  background: var(--idea-paper);
+  color: var(--idea-ink);
+}
+
+.idea-swatch {
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  border: 2px solid var(--idea-ink);
+  background: var(--idea-paper);
+  cursor: pointer;
+}
+
+.idea-sheet-input {
+  flex: 1;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.55);
+  color: inherit;
+  font: inherit;
+  font-size: 16px;
+  font-weight: 500;
+}
+
+.idea-sheet-input:focus {
+  outline: none;
+  border-color: var(--idea-ink, var(--color-ember));
+  background: #fff;
+}
+
+.idea-sheet-count {
+  min-width: 24px;
+  text-align: center;
+  font-size: 0.8rem;
+  opacity: 0.75;
+}
+
+.idea-sheet-lock {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* The new-category row under the list */
+.idea-sheet-add {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.idea-sheet-add .idea-sheet-input {
+  border-color: var(--color-border-strong);
+  background: var(--color-surface-alt);
+  color: var(--color-text);
+}
+
+@media (max-width: 720px) {
+  .idea-tab {
+    flex: 0 0 auto;
+  }
+
+  .idea-grid {
+    columns: 1;
+  }
+
+  .idea-sheet-backdrop {
+    align-items: flex-end;
+    padding: 0;
+  }
+
+  .idea-sheet {
+    width: 100%;
+    max-height: 85vh;
+    border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+    padding-bottom: calc(16px + env(safe-area-inset-bottom));
+  }
+
+  /* The fun is on the phone: the desktop board stays plain. */
+  .idea-title-bulb {
+    display: inline-block;
+    animation: idea-bulb 2.8s ease-in-out infinite;
+  }
+
+  .idea-chip-row {
+    scroll-snap-type: x proximity;
+  }
+
+  .idea-chip {
+    scroll-snap-align: start;
+    transition: transform 0.15s ease;
+  }
+
+  .idea-chip.is-on {
+    transform: scale(1.06);
+  }
+
+  .idea-composer-row {
+    position: relative;
+  }
+
+  .idea-drop:active:not(:disabled) {
+    transform: scale(0.9);
+  }
+
+  .idea-burst {
+    display: block;
+    position: absolute;
+    top: 50%;
+    right: 28px;
+    pointer-events: none;
+    z-index: 2;
+  }
+
+  .idea-burst span {
+    position: absolute;
+    font-size: 1.3rem;
+    --angle: calc(var(--n) * 36deg - 72deg);
+    animation: idea-burst 0.8s ease-out forwards;
+  }
+
+  /* Sticky notes: a strip of tape, a slight tilt, and they drop in. */
+  .idea-card {
+    position: relative;
+    margin-bottom: 18px;
+    border-radius: 3px 3px var(--radius-md) var(--radius-md);
+    box-shadow: 0 1px 1px rgba(0, 0, 0, 0.06), 0 8px 18px rgba(40, 30, 10, 0.14);
+    transform: rotate(var(--tilt, -0.8deg));
+    transition: transform 0.12s ease;
+    animation: idea-drop-in 0.45s cubic-bezier(0.2, 1.4, 0.4, 1) backwards;
+    animation-delay: calc(var(--i, 0) * 50ms);
+  }
+
+  .idea-card:nth-child(even) {
+    --tilt: 0.8deg;
+  }
+
+  .idea-card::before {
+    content: '';
+    position: absolute;
+    top: -8px;
+    left: 50%;
+    width: 64px;
+    height: 16px;
+    transform: translateX(-50%) rotate(-3deg);
+    background: rgba(255, 255, 255, 0.6);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+  }
+
+  .idea-card:active:not(:focus-within) {
+    transform: rotate(0deg) scale(0.98);
+  }
+
+  /* Editing straightens the note so the fields are easy to type in. */
+  .idea-card:focus-within {
+    transform: none;
+  }
+
+  .idea-stage-served::after {
+    content: 'SERVED';
+    position: absolute;
+    bottom: 18px;
+    left: 50%;
+    margin-left: -36px;
+    padding: 2px 8px;
+    border: 2px solid #2f6a10;
+    border-radius: 4px;
+    color: #2f6a10;
+    font-size: 0.7rem;
+    font-weight: 600;
+    letter-spacing: 0.12em;
+    transform: rotate(-8deg);
+    opacity: 0.75;
+    pointer-events: none;
+  }
+
+  .idea-stage-served:focus-within::after {
+    display: none;
+  }
+
+  .idea-fire:active,
+  .idea-stage-btn:active {
+    transform: scale(0.92);
+  }
+
+  .idea-fire-count {
+    display: inline-block;
+    animation: idea-bump 0.35s ease;
+  }
+
+  .idea-empty::before {
+    content: '💡';
+    display: block;
+    margin-bottom: 8px;
+    font-size: 2.6rem;
+    animation: idea-bulb 2.8s ease-in-out infinite;
+  }
+}
+
+@keyframes idea-bulb {
+  0%, 100% { transform: rotate(-8deg); filter: drop-shadow(0 0 0 rgba(255, 210, 80, 0)); }
+  50% { transform: rotate(8deg) scale(1.1); filter: drop-shadow(0 0 8px rgba(255, 210, 80, 0.9)); }
+}
+
+@keyframes idea-burst {
+  0% { transform: rotate(var(--angle)) translateY(0) rotate(calc(-1 * var(--angle))) scale(0.4); opacity: 1; }
+  100% { transform: rotate(var(--angle)) translateY(-70px) rotate(calc(-1 * var(--angle))) scale(1.1); opacity: 0; }
+}
+
+@keyframes idea-drop-in {
+  from { transform: translateY(-14px) rotate(-6deg) scale(0.9); opacity: 0; }
+}
+
+@keyframes idea-bump {
+  40% { transform: scale(1.5); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .idea-board *,
+  .idea-board *::before {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+
+/* "New orders are in" on the order board — held back from a background
+   re-read so the board never reshuffles under someone mid-scroll. Sticky, so
+   it is in view wherever on the board they are. */
+.pack-new-orders-banner {
+  position: sticky;
+  top: 8px;
+  z-index: 20;
+  display: block;
+  width: 100%;
+  margin-top: 12px;
+  padding: 12px 14px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: var(--color-ember-dark);
+  color: #fff;
+  font: inherit;
+  font-weight: 700;
+  text-align: left;
+  cursor: pointer;
+  box-shadow: var(--shadow-sm);
+}
+
+/* On a phone the top bar already names the page, and the one-line summary of
+   the weekend flow just pushes the boards down below the fold. */
+@media (max-width: 720px) {
+  .marketing-dashboard header.b2c-dashboard-header {
+    display: none;
+  }
 }

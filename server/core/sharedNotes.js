@@ -45,6 +45,8 @@ function toNote(row) {
     doneAt: row.done_at || null,
     doneBy: row.done_by || '',
     assignedTo: row.assigned_to || '',
+    // '' rather than null, like every other string here: "for whenever".
+    dueDate: row.due_date || '',
   };
 }
 
@@ -61,6 +63,20 @@ function clean(value, max) {
   const text = typeof value === 'string' ? value.trim() : '';
   if (!text) return null;
   return text.slice(0, max);
+}
+
+// A due date as the browser sent it: YYYY-MM-DD and a real day, or nothing.
+// Blank is a perfectly good answer — most notes are for whenever — but a
+// malformed one is refused rather than stored, because a "2026-02-30" would
+// never match any day Daily View asks for and the note would simply vanish.
+function cleanDueDate(value) {
+  if (value === undefined || value === null) return null;
+  const text = typeof value === 'string' ? value.trim() : '';
+  if (!text) return null;
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text);
+  const day = match ? new Date(Date.UTC(+match[1], +match[2] - 1, +match[3])) : null;
+  if (!day || day.toISOString().slice(0, 10) !== text) throw bad('A due date has to be a real day, as YYYY-MM-DD.');
+  return text;
 }
 
 // A search term as a LIKE pattern. The three characters LIKE treats specially
@@ -91,7 +107,10 @@ function likePattern(term) {
 // people on it actually gets asked. Filtered here for the same reason the
 // search is — the browser only holds the newest PAGE_SIZE notes, so filtering
 // that window would confidently report that someone had written nothing.
-function listNotes({ q, author } = {}) {
+// `pending` drops ticked notes, for the bubble, which shows only what is still
+// to do. Here rather than in the browser for the same reason again: filtering
+// the newest PAGE_SIZE would lose an old open note behind a run of done ones.
+function listNotes({ q, author, pending } = {}) {
   const term = typeof q === 'string' ? q.trim() : '';
   const who = clean(author, MAX_AUTHOR);
   const clauses = [];
@@ -116,10 +135,11 @@ function listNotes({ q, author } = {}) {
     clauses.push(`(lower(ifnull(author, '')) = lower(?) OR lower(ifnull(assigned_to, '')) = lower(?))`);
     filter.push(who, who);
   }
+  if (pending) clauses.push('done = 0');
   const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
   const rows = all(
     `SELECT * FROM (
-       SELECT note_id, author, body, created_at, done, done_at, done_by, assigned_to FROM shared_note
+       SELECT note_id, author, body, created_at, done, done_at, done_by, assigned_to, due_date FROM shared_note
         ${where}
         ORDER BY note_id DESC LIMIT ?
      ) ORDER BY note_id ASC`,
@@ -170,13 +190,16 @@ function listNotes({ q, author } = {}) {
 }
 
 // Posts one note. The author is whatever the browser claims — see the note on
-// the column in schema.sql — and is optional; the body is not.
-function addNote({ body, author } = {}) {
+// the column in schema.sql — and is optional; the body is not. So is the due
+// date: a note with one is a to-do for that day, today or months out.
+function addNote({ body, author, dueDate } = {}) {
   const text = clean(body, MAX_BODY);
   if (!text) throw bad('A note needs something in it.');
+  const due = cleanDueDate(dueDate);
   const result = insert('shared_note', {
     author: clean(author, MAX_AUTHOR),
     body: text,
+    due_date: due,
     // Written here rather than left to the column default: datetime('now')
     // stores "2026-09-08 07:14:22", which Date() in Safari refuses outright
     // and other browsers read as local time. A full ISO-8601 UTC string is
@@ -238,6 +261,43 @@ function assignNote({ id, assignedTo } = {}) {
   return toNote(select('shared_note', { note_id: noteId })[0]);
 }
 
+// Moves a note to another day, or back to "whenever" with a blank date. A
+// column update like the assignee — the body is still never edited.
+function setNoteDueDate({ id, dueDate } = {}) {
+  const noteId = Number(id);
+  if (!Number.isInteger(noteId) || noteId <= 0) throw bad('A note id is required.');
+  const due = cleanDueDate(dueDate);
+  const existing = select('shared_note', { note_id: noteId })[0];
+  if (!existing) {
+    const err = new Error('That note no longer exists.');
+    err.status = 404;
+    throw err;
+  }
+  update('shared_note', { note_id: noteId }, { due_date: due });
+  return toNote(select('shared_note', { note_id: noteId })[0]);
+}
+
+// Every dated note Daily View could need, in date order: everything due on or
+// after `from` (ticked ones included, so a day's list does not empty itself as
+// the work gets done), plus anything due before it that is still open —
+// yesterday's "call the vendor" is still today's problem until it is ticked.
+//
+// Separate from listNotes rather than a filter on it, because that one returns
+// the newest PAGE_SIZE notes by when they were typed, and a task filed in
+// August for December would have scrolled out of that window long before its
+// day came round.
+function listDatedNotes({ from } = {}) {
+  const start = cleanDueDate(from);
+  if (!start) throw bad('from is required, as YYYY-MM-DD.');
+  const rows = all(
+    `SELECT note_id, author, body, created_at, done, done_at, done_by, assigned_to, due_date FROM shared_note
+      WHERE due_date IS NOT NULL AND (due_date >= ? OR done = 0)
+      ORDER BY due_date ASC, note_id ASC`,
+    start,
+  );
+  return { from: start, notes: rows.map(toNote), fetchedAt: new Date().toISOString() };
+}
+
 // Deletes one. A note that is already gone is not an error worth surfacing —
 // two devices tapping the same ✕ within a second of each other is an ordinary
 // thing to happen, and the second one should see the note gone, which it
@@ -249,4 +309,15 @@ function deleteNote({ id } = {}) {
   return { deleted: changes > 0, id: noteId };
 }
 
-export { listNotes, addNote, setNoteDone, assignNote, deleteNote, MAX_BODY, MAX_AUTHOR, PAGE_SIZE };
+export {
+  listNotes,
+  listDatedNotes,
+  addNote,
+  setNoteDone,
+  assignNote,
+  setNoteDueDate,
+  deleteNote,
+  MAX_BODY,
+  MAX_AUTHOR,
+  PAGE_SIZE,
+};

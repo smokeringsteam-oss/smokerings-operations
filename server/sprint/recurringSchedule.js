@@ -52,6 +52,10 @@ function getRecurringSchedule() {
       // Daily View gives the Marketing rows their own card, so the category
       // has to travel with the task rather than stay behind in the table.
       category: (row.category || '').trim(),
+      // Sounds the alarm at its time rather than sending a quiet nudge.
+      alarm: !!row.alarm,
+      // Its standing sub-issue on the sprint board, when it has one.
+      githubIssue: row.github_issue ?? null,
     });
   });
 
@@ -124,7 +128,7 @@ function nextRank(day) {
   return select('scheduled_task', { day }).reduce((max, row) => Math.max(max, Number(row.sort_order) || 0), 0) + 1;
 }
 
-function createTask({ day, label, time, assignedTo, category }) {
+function createTask({ day, label, time, assignedTo, category, alarm }) {
   const text = String(label || '').trim();
   if (!text) throw badRequest('A task needs a name.');
   const targetDay = normaliseDay(day);
@@ -140,6 +144,7 @@ function createTask({ day, label, time, assignedTo, category }) {
     assigned_to: String(assignedTo || '').trim() || 'Adarsh',
     category: String(category || '').trim() || null,
     sort_order: nextRank(targetDay),
+    alarm: alarm ? 1 : 0,
   });
   return { taskId, csv: mirrorScheduleCsv() };
 }
@@ -148,7 +153,7 @@ function createTask({ day, label, time, assignedTo, category }) {
 // touched, so a rename doesn't blank the time it said nothing about. Moving
 // between days goes through moveTask() instead, which has the day's ordering to
 // keep straight as well.
-function updateTask({ taskId, label, time, assignedTo, category }) {
+function updateTask({ taskId, label, time, assignedTo, category, alarm, githubIssue }) {
   const row = requireTask(taskId);
   const patch = {};
   if (label !== undefined) {
@@ -159,6 +164,12 @@ function updateTask({ taskId, label, time, assignedTo, category }) {
   if (time !== undefined) patch.time_of_day = storeTime(time);
   if (assignedTo !== undefined) patch.assigned_to = String(assignedTo).trim() || null;
   if (category !== undefined) patch.category = String(category).trim() || null;
+  if (alarm !== undefined) patch.alarm = alarm ? 1 : 0;
+  if (githubIssue !== undefined) {
+    const number = githubIssue === null || githubIssue === '' ? null : Number(githubIssue);
+    if (number !== null && !(Number.isInteger(number) && number > 0)) throw badRequest('githubIssue must be an issue number.');
+    patch.github_issue = number;
+  }
   if (!Object.keys(patch).length) throw badRequest('Nothing to change.');
   update('scheduled_task', { task_id: row.task_id }, patch);
   return { taskId: row.task_id, csv: mirrorScheduleCsv() };

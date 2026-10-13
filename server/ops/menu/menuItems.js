@@ -151,6 +151,10 @@ function toMenuItem(record) {
     // (see updateMenuItem), and sale_ok is what's reported back, so the pair
     // never presents as a third, half-on state.
     isAvailable: Boolean(record.sale_ok),
+    // The till's own switch, read on its own: a dish can stay on the menu
+    // (sale_ok) while the POS stops taking orders for it because it has sold
+    // out for the day. See updateMenuItem's isInPos.
+    isInPos: Boolean(record.available_in_pos),
     // Odoo hands binaries over as bare base64; the browser needs a data URI to
     // put it in an <img src>. Odoo returns `false`, not null, when unset.
     image: record.image_128 ? `data:${sniffImageMime(record.image_128)};base64,${record.image_128}` : null,
@@ -199,12 +203,48 @@ async function assertMenuItem(id) {
   return numericId;
 }
 
+// The website (smokerings.in) keeps its own sold-out state — a
+// soldOutThrough date per dish, set on the site's side — and ignores Odoo's
+// available_in_pos. Without this the editor's POS switch read "on" for dishes
+// the website wasn't selling. Read-only: nothing here can change the site.
+// Matched on default_code, which the feed's `code` carries. Best-effort: a
+// broken feed falls back to the last good read, then to null, instead of
+// failing the menu load.
+//
+// The feed routinely takes 4-8s, so it's started alongside the Odoo read
+// rather than after it, and a good read is reused for a minute so flipping
+// between screens doesn't pay that wait every time.
+const SITE_MENU_FEED = (process.env.SITE_MENU_FEED_URL || 'https://smokerings.in/api/menu-items.php').trim();
+const SITE_FEED_TIMEOUT_MS = 15000;
+const SITE_FEED_FRESH_MS = 60 * 1000;
+let siteStatusCache = null; // { at, byCode }
+
+async function fetchSiteStatus() {
+  if (siteStatusCache && Date.now() - siteStatusCache.at < SITE_FEED_FRESH_MS) return siteStatusCache.byCode;
+  try {
+    const resp = await fetch(SITE_MENU_FEED, { signal: AbortSignal.timeout(SITE_FEED_TIMEOUT_MS) });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const json = await resp.json();
+    const byCode = new Map();
+    (json.items || []).forEach((row) => {
+      if (row.code) byCode.set(row.code, { listed: true, soldOutThrough: row.soldOutThrough || null });
+    });
+    siteStatusCache = { at: Date.now(), byCode };
+    return byCode;
+  } catch (err) {
+    console.warn(`Couldn't read the website menu feed (${SITE_MENU_FEED}): ${err.message || err}`);
+    return siteStatusCache ? siteStatusCache.byCode : null;
+  }
+}
+
 // `channel` is 'b2c' (the weekend consumer menu, the default), 'b2b' (the
 // bulk wholesale products) or 'all'. B2C is expressed as "in the menu subtree
 // but not in the wholesale one" rather than an allow-list of categories, so a
 // new dish in a brand-new category still shows up on the B2C editor instead of
 // quietly going missing.
 async function fetchMenuItems({ includeArchived = false, channel = 'b2c' } = {}) {
+  // Started first so its wait overlaps Odoo's; never rejects.
+  const sitePromise = channel === 'b2b' ? Promise.resolve(null) : fetchSiteStatus();
   const categoryId = await resolveMenuCategoryId();
   const domain = categoryId ? [['categ_id', 'child_of', categoryId]] : [['sale_ok', '=', true]];
 
@@ -231,8 +271,12 @@ async function fetchMenuItems({ includeArchived = false, channel = 'b2c' } = {})
   // showing an empty recipe that looks like "this dish has no ingredients".
   const items = records.map(toMenuItem);
   const menuIds = resolveMenuIds(items);
+  const site = await sitePromise;
   items.forEach((item) => {
     item.menuId = menuIds.get(item.id) || null;
+    // null = the site couldn't be read, so the editor shows nothing rather
+    // than a guess. See fetchSiteStatus.
+    item.site = site ? site.get(item.code) || { listed: false, soldOutThrough: null } : null;
   });
 
   return {
@@ -243,7 +287,7 @@ async function fetchMenuItems({ includeArchived = false, channel = 'b2c' } = {})
   };
 }
 
-async function updateMenuItem({ id, name, price, description, isAvailable }) {
+async function updateMenuItem({ id, name, price, description, isAvailable, isInPos }) {
   const numericId = await assertMenuItem(id);
 
   // Only fields actually supplied are written — the editor can send a single
@@ -278,6 +322,13 @@ async function updateMenuItem({ id, name, price, description, isAvailable }) {
     values.sale_ok = Boolean(isAvailable);
     values.available_in_pos = Boolean(isAvailable);
   }
+
+  // Closing a dish on the till without taking it off the menu — "sold out,
+  // stop taking orders". Only available_in_pos moves, so the dish keeps its
+  // place on the menu and in menu.csv, and reopening it is the same switch.
+  // Applied after isAvailable so a call sending both gets this value on the
+  // till.
+  if (isInPos !== undefined) values.available_in_pos = Boolean(isInPos);
 
   if (!Object.keys(values).length) {
     const err = new Error('Nothing to update.');

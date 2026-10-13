@@ -8,13 +8,19 @@ export const weeklySprintTools: { id: WeeklySprintSub; label: string; icon: stri
   { id: 'dailyView', label: 'Daily View', icon: '📆' },
 ];
 
-const WeeklySprintDashboard = ({ activeTool }: { activeTool: WeeklySprintSub }) => {
+const WeeklySprintDashboard = ({
+  activeTool,
+  dailyFocus,
+}: {
+  activeTool: WeeklySprintSub;
+  dailyFocus?: { date: string; at: number } | null;
+}) => {
   const renderTool = () => {
     switch (activeTool) {
       case 'sprintBoard':
         return <SprintDashboard />;
       case 'dailyView':
-        return <DailyView />;
+        return <DailyView focus={dailyFocus} />;
       default:
         return null;
     }

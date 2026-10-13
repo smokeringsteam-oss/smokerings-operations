@@ -499,6 +499,18 @@ CREATE TABLE shared_note (
   github_issue    INTEGER,
   github_category INTEGER
 );
+
+CREATE TABLE idea (
+  idea_id    INTEGER PRIMARY KEY,
+  title      TEXT NOT NULL CHECK (trim(title) <> ''),
+  details    TEXT,
+  category   TEXT NOT NULL DEFAULT 'wild',
+  stage      TEXT NOT NULL DEFAULT 'spark',
+  author     TEXT,
+  fire       INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT
+);
 `;
 
 // Creates the database and points the server at it. Returns the path so the

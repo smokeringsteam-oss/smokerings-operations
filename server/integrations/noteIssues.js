@@ -166,7 +166,7 @@ export function fileUnfiledNotes() {
   running = (async () => {
     const results = [];
     const pending = all(
-      'SELECT note_id, author, assigned_to, body, done, created_at FROM shared_note WHERE github_issue IS NULL ORDER BY note_id',
+      'SELECT note_id, author, assigned_to, body, done, created_at FROM shared_note WHERE github_issue IS NULL AND source IS NULL ORDER BY note_id',
     );
     let categories;
     try {

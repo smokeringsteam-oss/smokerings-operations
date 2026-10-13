@@ -72,13 +72,44 @@ import { getSideContainer, containersNeeded } from '../../core/packagingConfig.j
 // Menu items don't carry a "dish type" field in menu.csv — this grouping
 // mirrors the collections on the real menu (smokerings.in) and is the same
 // split the old Weekend Prep Planner recipe model used.
+//
+// 2026-10-05: the glaze burgers, tacos and quesadillas came off the menu, and
+// wings, Cajun chicken, brisket, platters, meat packs and burger add-ons went
+// on. Platter picks (platter-*) are deliberately in no group: they are the
+// insides of a platter already counted under Platters.
 const DISH_TYPES = [
-  { id: 'burger', label: 'Burgers', itemIds: ['chicken-bbq-burger', 'chicken-glaze-burger', 'pork-bbq-burger', 'pork-glaze-burger'] },
-  // jackfruit-tacos added 2026-08-17 (new meat category).
-  { id: 'taco', label: 'Tacos', itemIds: ['chicken-tacos', 'pork-tacos', 'jackfruit-tacos'] },
-  { id: 'quesadilla', label: 'Quesadillas', itemIds: ['chicken-quesadilla', 'pork-quesadilla'] },
-  // beef-ribs-250g added 2026-08-17 (new meat category).
-  { id: 'primeCut', label: 'Prime Cuts', itemIds: ['pork-burnt-ends', 'bbq-ribs-250g', 'bbq-ribs-half-rack', 'beef-ribs-250g'] },
+  { id: 'burger', label: 'Burgers', itemIds: ['chicken-bbq-burger', 'pork-bbq-burger', 'brisket-bbq-burger'] },
+  {
+    id: 'primeCut',
+    label: 'Prime Cuts',
+    itemIds: [
+      'pork-burnt-ends',
+      'teriyaki-burnt-ends',
+      'bbq-ribs-250g',
+      'bbq-ribs-half-rack',
+      'brisket-slices-250g',
+      'brisket-slices-500g',
+      'chicken-wings-500g',
+      'cajun-chicken-quarter',
+      'cajun-chicken-half',
+      'cajun-chicken-whole',
+    ],
+  },
+  { id: 'platter', label: 'Platters', itemIds: ['any-3-platter', 'any-6-platter'] },
+  { id: 'meatPack', label: 'Meat packs', itemIds: ['pulled-chicken-150g', 'pulled-pork-150g'] },
+  { id: 'seasoning', label: 'Seasoning add-ons', itemIds: ['add-seasoning'] },
+  {
+    id: 'extraMeat',
+    label: 'Extra meat (burger add-ons)',
+    itemIds: [
+      'extra-chicken-50g',
+      'extra-chicken-100g',
+      'extra-pork-50g',
+      'extra-pork-100g',
+      'extra-brisket-50g',
+      'extra-brisket-100g',
+    ],
+  },
 ];
 
 // materials.csv categories that this module's "buy from Swiggy" list
@@ -145,6 +176,11 @@ const SIDE_PREP_TIER = {
   'SR-015': 1, // BBQ sauce
   'SR-014': 2, // Salsa verde
   'SR-012': 2, // Caramelised onions
+  // Rubs go on before the meat goes on the smoker, so they lead too.
+  'SR-021': 1, // Wing rub
+  'SR-024': 1, // Cajun rub
+  'SR-026': 1, // Teriyaki rub
+  'SR-028': 1, // Brisket rub
 };
 
 function getMenu() {

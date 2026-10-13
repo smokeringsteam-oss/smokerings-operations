@@ -45,6 +45,7 @@
 import { all, get } from '../../core/db.js';
 import { selectOne, update, upsert } from '../../core/repo.js';
 import { sendToAll } from '../../core/pushNotify.js';
+import { fileAlertTask } from '../../core/alertTasks.js';
 import { isPorterLink, readPorterOrderWithEta } from './porterTracking.js';
 
 // Never poll the same order more often than the floor, nor leave a gap bigger
@@ -134,7 +135,12 @@ function closeWatch(orderId, state, reason, extra = {}) {
 // Notifications are best-effort in both directions: a push that fails must
 // not fail the tick (the status change has already been made), and a machine
 // with no subscriptions registered gets a console line instead of nothing.
-async function notify({ title, body, tag }) {
+//
+// `task` is for the alerts that leave a job for a person — those are also
+// filed as a to-do (see core/alertTasks.js). A plain "delivered and invoiced"
+// leaves nothing to do, so it stays a notification only.
+async function notify({ title, body, tag, task = false, orderId }) {
+  if (task) fileAlertTask({ source: `delivery:${orderId}`, body: `${title} — ${body}` });
   try {
     // '/' rather than a path for the board: the dashboard has no router, so
     // any other path would have the service worker navigate an already-open
@@ -294,6 +300,8 @@ async function checkOne(row, now, deps) {
       title: `${row.order_name}: still not delivered`,
       body: `Porter has had this trip for over ${MAX_WATCH_HOURS} hours (${row.porter_status || 'unknown'}). Check it and set the status by hand.`,
       tag: `delivery-watch-${orderId}`,
+      task: true,
+      orderId,
     });
     return { orderId, outcome: 'given_up' };
   }
@@ -313,6 +321,8 @@ async function checkOne(row, now, deps) {
         title: `${row.order_name}: tracking link can't be read`,
         body: `${message} Set this order's status by hand.`,
         tag: `delivery-watch-${orderId}`,
+        task: true,
+        orderId,
       });
       return { orderId, outcome: 'given_up', error: message };
     }
@@ -347,6 +357,8 @@ async function checkOne(row, now, deps) {
       title: `${row.order_name}: Porter trip cancelled`,
       body: 'The trip was cancelled, so the order has NOT been marked delivered. It needs a new rider.',
       tag: `delivery-watch-${orderId}`,
+      task: true,
+      orderId,
     });
     return { orderId, outcome: 'cancelled' };
   }
@@ -423,6 +435,8 @@ async function checkOne(row, now, deps) {
       title: `${row.order_name}: delivered, but Odoo didn't take it`,
       body: `Porter delivered this order. Odoo refused the status: ${result.odooError}`,
       tag: `delivery-watch-${orderId}`,
+      task: true,
+      orderId,
     });
     return { orderId, outcome: 'given_up', error: result.odooError };
   }
@@ -437,6 +451,8 @@ async function checkOne(row, now, deps) {
       ? `Porter delivered it and Odoo is updated, but the invoice failed: ${result.invoiceError}`
       : `Porter delivered it${porter.partner?.name ? ` (${porter.partner.name})` : ''}. Odoo is updated and invoiced.`,
     tag: `delivery-watch-${orderId}`,
+    task: Boolean(result?.invoiceError),
+    orderId,
   });
   return { orderId, outcome: 'delivered', invoiceError: result?.invoiceError || null };
 }

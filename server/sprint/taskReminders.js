@@ -19,6 +19,7 @@
 // copies of the same reminder.
 import { select } from '../core/repo.js';
 import { claimDelivery, sendToAll, subscriptionCount } from '../core/pushNotify.js';
+import { startLocalAlarm } from '../integrations/localAlarm.js';
 
 const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
@@ -108,6 +109,7 @@ function getTodayPending(now = new Date()) {
         assignedTo: (logged?.assigned_to ?? row.assigned_to) || '',
         time,
         dueMinutes: parseClockMinutes(time),
+        alarm: !!row.alarm,
         done: !!logged?.done,
       };
     })
@@ -148,12 +150,28 @@ function digestPayload({ weekday, tasks }) {
 // else is still open listed under it, so a single glance covers the rest of the
 // day rather than only the one thing that happened to be due.
 function taskPayload(task, others = []) {
-  return {
+  const payload = {
     title: task.label,
     body: others.length ? `Also still open:\n${bulletList(others.map((t) => t.label))}` : 'Nothing else left today.',
     // Tagged per task, so a nudge for one task never overwrites another's.
     tag: `task-${task.id}`,
     url: '/sprint/daily',
+  };
+  if (!task.alarm) return payload;
+  return {
+    ...payload,
+    // The same flag the WhatsApp alarm sets: sw.js gives it the long buzz and
+    // tells any open page to loop the clip until Stop (see whatsappAlarm.ts).
+    alarm: 'task',
+    taskId: task.id,
+    // The Android app picks its Alarms channel -- the one with the clip as its
+    // sound, which plays with the app closed -- by "whatsapp-" appearing in the
+    // tag (the APK's alarm_tag build input). Carrying it here gets a task alarm
+    // onto that channel without rebuilding the app.
+    // The url stays the plain one: unlike ?alarm=whatsapp, a tap that has to
+    // cold-start the app should not start the clip over -- the tap was the
+    // acknowledgement.
+    tag: `whatsapp-task-${task.id}`,
   };
 }
 
@@ -210,6 +228,9 @@ async function runReminderTick(now = new Date(), options = {}) {
     if (!claimed.length) return { considered: due.length, sent: 0 };
     let sent = 0;
     for (const item of claimed) {
+      // An alarm task sounds on legion's own speakers too, exactly as a
+      // WhatsApp message does -- the half that needs no browser running.
+      if (item.payload.alarm) startLocalAlarm({ customer: item.payload.title, body: 'Task reminder' });
       const result = await sendToAll(item.payload);
       sent += result.sent || 0;
     }
